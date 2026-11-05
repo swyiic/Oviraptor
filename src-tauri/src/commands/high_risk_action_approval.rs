@@ -169,6 +169,7 @@ fn high_risk_action_gate_on(
     action_summary: &str,
     target: &str,
     reversible: bool,
+    enforcing_tool: Option<&str>,
 ) -> Result<HighRiskGate, String> {
     if consume_high_risk_approval_on(connection, scan_id, attempt_number, fencing_token, action_fingerprint)? {
         return Ok(HighRiskGate::Allow);
@@ -185,12 +186,31 @@ fn high_risk_action_gate_on(
     // below. The decision is recorded as auto-approved+consumed for the audit
     // trail; unlike a manual approval it is not single-use, so the executor may
     // repeat a reversible probe across injection points without re-asking.
-    if reversible
-        && matches!(
-            scan_capability_class_authorized(connection, scan_id, attempt_number, capability_class),
-            Ok(true)
-        )
-    {
+    // Axis 2 stays in front of the picker: a tier never authorizes a class the
+    // operator has not attested. `ask` always waits. `auto` (the default, and
+    // what tests hit when no tier is stored) auto-allows only reversible work.
+    // `full` auto-allows irreversible work on an already-authorized class.
+    // SSRF and scope checks are not in this function and are not affected.
+    let tier = operator_permission_tier(connection);
+    let class_authorized = matches!(
+        scan_capability_class_authorized(connection, scan_id, attempt_number, capability_class),
+        Ok(true)
+    );
+    let mut tier_allows = match tier.as_str() {
+        "ask" => false,
+        "full" => true,
+        _ => reversible,
+    };
+    if let Some(tool) = enforcing_tool.filter(|name| !name.is_empty()) {
+        match tool_permission_decision(connection, tool) {
+            ToolPermissionDecision::Deny => {
+                return Ok(HighRiskGate::Denied("工具已被权限规则拒绝".into()));
+            }
+            ToolPermissionDecision::Ask => tier_allows = false,
+            ToolPermissionDecision::Allow | ToolPermissionDecision::Default => {}
+        }
+    }
+    if class_authorized && tier_allows {
         // An explicit operator rejection of this exact action is more specific
         // than the class-level authorization and must win over the auto-allow, so
         // a "no" the operator already gave is never silently overridden.
@@ -228,6 +248,39 @@ fn high_risk_action_gate_on(
         "consumed" => Ok(HighRiskGate::Denied("该动作的批准已被使用，需重新批准".into())),
         _ => Ok(HighRiskGate::Pending(request_id)),
     }
+}
+
+fn operator_permission_tier(connection: &rusqlite::Connection) -> String {
+    connection
+        .query_row(
+            "SELECT value FROM app_settings WHERE key='agent_permission_tier'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .ok()
+        .filter(|value| matches!(value.as_str(), "ask" | "auto" | "full"))
+        .unwrap_or_else(|| "auto".to_string())
+}
+
+#[tauri::command]
+pub fn get_operator_permission_tier(state: State<AppState>) -> Result<String, String> {
+    let connection = db::open(&state.db_path)?;
+    Ok(operator_permission_tier(&connection))
+}
+
+#[tauri::command]
+pub fn set_operator_permission_tier(state: State<AppState>, tier: String) -> Result<(), String> {
+    if !matches!(tier.as_str(), "ask" | "auto" | "full") {
+        return Err("permission_tier_invalid".into());
+    }
+    let connection = db::open(&state.db_path)?;
+    connection
+        .execute(
+            "INSERT INTO app_settings(key,value) VALUES('agent_permission_tier',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            [&tier],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 fn list_pending_high_risk_actions_in(
@@ -344,7 +397,7 @@ mod high_risk_approval_tests {
     fn gate_pending_then_allow_once_after_approval() {
         let c = db();
         // First encounter → pending (agent waits), one pending row listed.
-        let gate = high_risk_action_gate_on(&c, "s", 1, "ftok", "code_exec", "fp", "run id", "host", false).unwrap();
+        let gate = high_risk_action_gate_on(&c, "s", 1, "ftok", "code_exec", "fp", "run id", "host", false, None).unwrap();
         let request_id = match gate {
             HighRiskGate::Pending(id) => id,
             other => panic!("expected pending, got {other:?}"),
@@ -352,10 +405,10 @@ mod high_risk_approval_tests {
         assert_eq!(list_pending_high_risk_actions_in(&c, "s").unwrap().len(), 1);
         // Operator approves → next gate consumes it exactly once.
         decide_high_risk_action_on(&c, &request_id, true, "op").unwrap();
-        assert_eq!(high_risk_action_gate_on(&c, "s", 1, "ftok", "code_exec", "fp", "run id", "host", false).unwrap(), HighRiskGate::Allow);
+        assert_eq!(high_risk_action_gate_on(&c, "s", 1, "ftok", "code_exec", "fp", "run id", "host", false, None).unwrap(), HighRiskGate::Allow);
         // Single-use: a second attempt at the same action is denied.
         assert!(matches!(
-            high_risk_action_gate_on(&c, "s", 1, "ftok", "code_exec", "fp", "run id", "host", false).unwrap(),
+            high_risk_action_gate_on(&c, "s", 1, "ftok", "code_exec", "fp", "run id", "host", false, None).unwrap(),
             HighRiskGate::Denied(_)
         ));
     }
@@ -366,7 +419,7 @@ mod high_risk_approval_tests {
         let (request_id, _) = request_high_risk_action_on(&c, "s", 1, "ftok", "exfil", "fp", "sum", "t", false).unwrap();
         decide_high_risk_action_on(&c, &request_id, false, "op").unwrap();
         assert!(matches!(
-            high_risk_action_gate_on(&c, "s", 1, "ftok", "exfil", "fp", "sum", "t", false).unwrap(),
+            high_risk_action_gate_on(&c, "s", 1, "ftok", "exfil", "fp", "sum", "t", false, None).unwrap(),
             HighRiskGate::Denied(_)
         ));
         // A decided request can't be re-decided.
@@ -408,14 +461,14 @@ mod high_risk_approval_tests {
         authorize(&c, "target_write");
         // Reversible + class authorized → runs with no per-point operator approval.
         assert_eq!(
-            high_risk_action_gate_on(&c, "s", 1, "ftok", "target_write", "fp", "sum", "t", true).unwrap(),
+            high_risk_action_gate_on(&c, "s", 1, "ftok", "target_write", "fp", "sum", "t", true, None).unwrap(),
             HighRiskGate::Allow
         );
         // Nothing is left waiting in the operator's inbox.
         assert_eq!(list_pending_high_risk_actions_in(&c, "s").unwrap().len(), 0);
         // Not single-use: another injection point under the same class also runs.
         assert_eq!(
-            high_risk_action_gate_on(&c, "s", 1, "ftok", "target_write", "fp2", "sum", "t", true).unwrap(),
+            high_risk_action_gate_on(&c, "s", 1, "ftok", "target_write", "fp2", "sum", "t", true, None).unwrap(),
             HighRiskGate::Allow
         );
     }
@@ -427,7 +480,7 @@ mod high_risk_approval_tests {
         // Irreversible (reversible=false) is never auto-allowed by class authorization
         // alone; the operator still decides it per action.
         assert!(matches!(
-            high_risk_action_gate_on(&c, "s", 1, "ftok", "egress", "fp", "sum", "t", false).unwrap(),
+            high_risk_action_gate_on(&c, "s", 1, "ftok", "egress", "fp", "sum", "t", false, None).unwrap(),
             HighRiskGate::Pending(_)
         ));
         assert_eq!(list_pending_high_risk_actions_in(&c, "s").unwrap().len(), 1);
@@ -443,7 +496,7 @@ mod high_risk_approval_tests {
         decide_high_risk_action_on(&c, &request_id, false, "op").unwrap();
         // A per-point "no" wins over the class-level auto-allow.
         assert!(matches!(
-            high_risk_action_gate_on(&c, "s", 1, "ftok", "target_write", "fp", "sum", "t", true).unwrap(),
+            high_risk_action_gate_on(&c, "s", 1, "ftok", "target_write", "fp", "sum", "t", true, None).unwrap(),
             HighRiskGate::Denied(_)
         ));
     }
@@ -453,7 +506,7 @@ mod high_risk_approval_tests {
         let c = db();
         // No authorization row at all → reversible action is not auto-allowed.
         assert!(matches!(
-            high_risk_action_gate_on(&c, "s", 1, "ftok", "target_write", "fp", "sum", "t", true).unwrap(),
+            high_risk_action_gate_on(&c, "s", 1, "ftok", "target_write", "fp", "sum", "t", true, None).unwrap(),
             HighRiskGate::Pending(_)
         ));
     }

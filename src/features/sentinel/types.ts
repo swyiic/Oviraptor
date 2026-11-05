@@ -1327,6 +1327,61 @@ export interface AgentAttemptToolCounts {
   total: number;
 }
 
+export interface ScanAgentToolStat {
+  toolName: string;
+  calls: number;
+  completed: number;
+  failed: number;
+  running: number;
+  errorClasses: Record<string, number>;
+}
+
+export interface ScanAgentFindingRollup {
+  findingId: number;
+  title: string;
+  severity: string;
+  recordKey: string;
+  targetUrl: string;
+  deepStatus: string;
+  requestsUsed: number;
+  iterationsUsed: number;
+  contractToolCalls: number;
+  toolsByName: Record<string, number>;
+}
+
+export interface ScanAgentStats {
+  schemaVersion: number;
+  scanId: string;
+  attemptNumber?: number | null;
+  recordedAt: string;
+  tokens: {
+    ledgerTotal: number;
+    ledgerInput: number;
+    ledgerOutput: number;
+    ledgerCached: number;
+    ledgerModelRequests: number;
+    runSummedTokens: number;
+    runSummedCached: number;
+    runSummedRequests: number;
+  };
+  agents: { coordinatorRuns: number; nativeRuns: number };
+  tools: ScanAgentToolStat[];
+  toolInvocationsTotal: number;
+  findingsBySeverity: Array<{ severity: string; count: number }>;
+  findingRollup?: ScanAgentFindingRollup[];
+  exploitStatus: Array<{ status: string; count: number }>;
+  operator: { pendingQuestions: number; pendingHighRiskActions: number };
+  attempts: Array<{
+    attemptNumber: number;
+    status: string;
+    totalTokens: number;
+    modelRequests: number;
+    inputTokens: number;
+    outputTokens: number;
+    cachedTokens: number;
+  }>;
+}
+
 export interface OrderedAssessmentAction {
   actionId: string; order: number; role: "spa_api_mapper" | "deep_investigator";
   tokenCeiling: 4000; modelRequests: 1; maxOutputTokens: 512; targetRequests: 0;

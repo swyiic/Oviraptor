@@ -255,10 +255,226 @@ fn resolve_pinned_address(
     Ok(Some((host.to_string(), first)))
 }
 
+fn ssrf_candidate_host(host: &str) -> bool {
+    let Ok(ip) = host.parse::<std::net::Ipv4Addr>() else {
+        return false;
+    };
+    let octets = ip.octets();
+    octets[0] == 10
+        || (octets[0] == 192 && octets[1] == 168)
+        || (octets[0] == 169 && octets[1] == 254)
+        || (octets[0] == 172 && (16..=31).contains(&octets[1]))
+}
+
+fn ssrf_callback_url(connection: &rusqlite::Connection) -> String {
+    connection
+        .query_row(
+            "SELECT value FROM app_settings WHERE key='agent_ssrf_callback_url'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap_or_default()
+}
+
+fn valid_callback(url: &str) -> bool {
+    let Ok(parsed) = reqwest::Url::parse(url.trim()) else {
+        return false;
+    };
+    matches!(parsed.scheme(), "http" | "https")
+        && parsed.host_str().is_some_and(|host| !host_is_internal_literal(host))
+        && url.len() <= 300
+}
+
+fn observed_internal_hosts(text: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let bytes = text.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if !bytes[index].is_ascii_digit() {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        while index < bytes.len() && (bytes[index].is_ascii_digit() || bytes[index] == b'.') {
+            index += 1;
+        }
+        let token = &text[start..index];
+        if ssrf_candidate_host(token) && !found.iter().any(|item: &String| item == token) {
+            found.push(token.to_string());
+        }
+        if found.len() >= 8 {
+            break;
+        }
+    }
+    found
+}
+
+fn agent_tool_plan_ssrf_channel(
+    context: &AgentRunContext,
+    runtime: &mut AgentToolRuntime,
+    arguments: &JsonValue,
+) -> JsonValue {
+    let Ok(connection) = db::open(&context.db_path) else {
+        return agent_tool_error("无法读取 SSRF 通道配置", "ssrf_plan_unavailable");
+    };
+    let callback = ssrf_callback_url(&connection);
+    let callback_ok = valid_callback(&callback);
+    let internal = agent_internal_scope_authorized(context);
+    let response = value_first(arguments, &["response", "body", "error", "reason"]);
+    let mut seen = observed_internal_hosts(&response);
+    for host in observed_internal_hosts(&context.evidence.to_string()) {
+        if !seen.contains(&host) && seen.len() < 8 {
+            seen.push(host);
+        }
+    }
+    if !callback_ok && (!internal || seen.is_empty()) {
+        return serde_json::json!({
+            "accepted": true,
+            "mode": "stop",
+            "observedHosts": seen,
+            "reason": "没有回连配置，响应里也没有可跟进的内网地址。不会按网段盲举。",
+        });
+    }
+    let prompt = format!(
+        "根据这次响应决定 SSRF 通道，不要使用预先指定的地址。响应片段：{}。响应或证据中出现的内网地址：{}。已配置回连：{}。内网跟进已授权：{internal}。只输出 JSON {{\"mode\":\"callback\"|\"internal\"|\"stop\",\"host\":\"\",\"port\":80,\"reason\":\"\"}}。internal 的 host 必须是上面出现过的某一个地址。没有回连不能选 callback。没有内网授权或没有出现内网地址就不能选 internal。不要输出地址清单，不要建议扫描网段。",
+        response.chars().take(800).collect::<String>(),
+        if seen.is_empty() { "无".to_string() } else { seen.join(",") },
+        if callback_ok { callback.as_str() } else { "无" }
+    );
+    let choice = readonly_model_text_choice(&connection, &prompt);
+    let mut mode = choice.0;
+    let mut host = choice.1;
+    let port = choice.2;
+    let mut why = choice.3;
+    if mode == "callback" && !callback_ok {
+        mode = "stop".into();
+        why = "没有配置回连".into();
+    }
+    if mode == "internal" && (!internal || !seen.iter().any(|item| item == &host) || !(1..=65535).contains(&port)) {
+        mode = "stop".into();
+        host.clear();
+        why = "内网地址必须来自这次响应或已有证据，且任务已授权内网跟进".into();
+    }
+    record_pending_observation(
+        &connection,
+        &context.scan_id,
+        "SSRF 通道",
+        &format!("mode={mode} host={host} port={port} fromResponse={}", seen.join(",")),
+    );
+    let mut sent = JsonValue::Null;
+    let target = value_first(arguments, &["url"]);
+    let param = value_first(arguments, &["param"]);
+    let identity = value_first(arguments, &["identity"]);
+    if !target.is_empty() && !param.is_empty() && !identity.is_empty() && mode != "stop" {
+        let payload = if mode == "callback" {
+            callback.clone()
+        } else {
+            format!("http://{host}:{port}/")
+        };
+        if let Ok(injected) = sqli_inject_url(&target, &param, "{{INJ}}", &payload) {
+            if same_host(&context.target_url, &injected) {
+                if let Ok(response) = agent_http_request(
+                    context, runtime, &identity, "GET", &injected, Vec::new(), None, None, "",
+                    "ssrf", ScopeSource::HttpReplay, "plan_ssrf_channel",
+                ) {
+                    let _ = persist_agent_evidence(context, &response, "plan_ssrf_channel");
+                    sent = serde_json::json!({"url": injected, "status": response.get("status")});
+                }
+            }
+        }
+    }
+    serde_json::json!({
+        "accepted": true,
+        "mode": mode,
+        "callbackUrl": if mode == "callback" { callback } else { String::new() },
+        "host": if mode == "internal" { host } else { String::new() },
+        "port": if mode == "internal" { port } else { 0 },
+        "observedHosts": seen,
+        "sent": sent,
+        "reason": why,
+    })
+}
+
+fn readonly_model_text_choice(connection: &rusqlite::Connection, prompt: &str) -> (String, String, u16, String) {
+    let Ok(profile) = crate::model_configuration::gateway_profile_on(connection, None) else {
+        return ("stop".into(), String::new(), 0, String::new());
+    };
+    let body = serde_json::json!({
+        "model": profile.model,
+        "messages": [
+            {"role":"system","content":"你只根据给出的响应选择一个 SSRF 通道。内网地址必须是响应里出现过的。只输出 JSON。"},
+            {"role":"user","content":prompt}
+        ],
+        "temperature": 0,
+        "max_tokens": 180,
+        "stream": false
+    });
+    let Ok(bytes) = serde_json::to_vec(&body) else { return ("stop".into(), String::new(), 0, String::new()) };
+    let mut request = TransportRequest::post(&profile.endpoint, bytes).header("content-type", "application/json");
+    if let Some(bearer) = profile.bearer() {
+        request = request.header("authorization", format!("Bearer {bearer}"));
+    }
+    request.total_timeout = Some(Duration::from_secs(30));
+    let Ok(response) = transport::send(request, std::sync::Arc::new(|| false), Box::new(|_| true)) else {
+        return ("stop".into(), String::new(), 0, String::new());
+    };
+    let Ok(parsed) = serde_json::from_slice::<JsonValue>(&response.body) else {
+        return ("stop".into(), String::new(), 0, String::new());
+    };
+    let Some(text) = parsed.pointer("/choices/0/message/content").and_then(JsonValue::as_str) else {
+        return ("stop".into(), String::new(), 0, String::new());
+    };
+    let Some(start) = text.find('{') else { return ("stop".into(), String::new(), 0, String::new()) };
+    let Some(end) = text.rfind('}') else { return ("stop".into(), String::new(), 0, String::new()) };
+    let Ok(value) = serde_json::from_str::<JsonValue>(&text[start..=end]) else {
+        return ("stop".into(), String::new(), 0, String::new());
+    };
+    (
+        value.get("mode").and_then(JsonValue::as_str).unwrap_or("stop").to_string(),
+        value.get("host").and_then(JsonValue::as_str).unwrap_or("").trim().to_string(),
+        value.get("port").and_then(JsonValue::as_u64).unwrap_or(80) as u16,
+        value.get("reason").and_then(JsonValue::as_str).unwrap_or("").chars().take(240).collect(),
+    )
+}
+
+#[tauri::command]
+pub fn get_agent_ssrf_callback_url(state: State<AppState>) -> Result<String, String> {
+    let connection = db::open(&state.db_path)?;
+    Ok(ssrf_callback_url(&connection))
+}
+
+#[tauri::command]
+pub fn set_agent_ssrf_callback_url(state: State<AppState>, url: String) -> Result<(), String> {
+    let trimmed = url.trim();
+    if !trimmed.is_empty() && !valid_callback(trimmed) {
+        return Err("回连地址必须是公网 http(s) URL，不能是 10/172/192/169 或本机".into());
+    }
+    let connection = db::open(&state.db_path)?;
+    connection
+        .execute(
+            "INSERT INTO app_settings(key,value) VALUES('agent_ssrf_callback_url',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            [trimmed],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod ssrf_guard_tests {
     use super::{host_is_internal_literal, ip_is_internal, resolve_pinned_address};
     use std::net::IpAddr;
+
+    #[test]
+    fn ssrf_candidate_is_one_private_literal() {
+        assert!(super::ssrf_candidate_host("10.1.2.3"));
+        assert!(super::ssrf_candidate_host("172.16.0.1"));
+        assert!(super::ssrf_candidate_host("192.168.1.1"));
+        assert!(super::ssrf_candidate_host("169.254.169.254"));
+        assert!(!super::ssrf_candidate_host("127.0.0.1"));
+        assert!(!super::ssrf_candidate_host("8.8.8.8"));
+        let seen = super::observed_internal_hosts("upstream 10.0.0.8:8080 refused, ignore 8.8.8.8");
+        assert_eq!(seen, vec!["10.0.0.8".to_string()]);
+    }
 
     fn ip(s: &str) -> IpAddr {
         s.parse().unwrap()

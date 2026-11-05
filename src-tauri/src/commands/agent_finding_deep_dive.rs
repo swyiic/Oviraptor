@@ -18,7 +18,10 @@
 // does code_exec / self-written scripts (MVP uses deterministic Rust probes only),
 // stays same-origin behind the SSRF floor, and uses detection-grade payloads only
 // (harmless id/sleep, benign markers, one negative value, low-harm mass-assign).
-// WAF bypass is explicitly out of this MVP; `waf_blocked` is reserved for later.
+// A blocked response can enter a bounded bypass loop (encoding, case, one
+// documentation-network source header). CAPTCHA is not solved. Four misses
+// record waf_blocked. The generated Python is a reproduction artifact; it is
+// not executed here and has no network grant of its own.
 //
 // Included into scanning.rs AFTER attack_sweep.rs, so it reuses that unit's
 // InjectionPoint, sweep_collect_points / sweep_collect_get_urls and the sweep probes.
@@ -167,7 +170,7 @@ struct DeepDiveInput<'a> {
 /// FindingExploit ready to persist. `requests_used` is a nominal upper bound for the
 /// focused confirmation (the reused probes do not report an exact count); the real
 /// bound on the phase is the finite finding set + the global wall-clock guard.
-fn deep_dive_one(client: &reqwest::blocking::Client, input: &DeepDiveInput) -> FindingExploit {
+fn deep_dive_one(connection: &rusqlite::Connection, client: &reqwest::blocking::Client, input: &DeepDiveInput) -> FindingExploit {
     let mut record = FindingExploit::pending(input.scan_id, input.finding_id, input.severity);
     record.deep_status = DEEP_STATUS_IN_PROGRESS.to_string();
     let mut trace: Vec<JsonValue> = Vec::new();
@@ -240,7 +243,7 @@ fn deep_dive_one(client: &reqwest::blocking::Client, input: &DeepDiveInput) -> F
                     let body = mass_assign_probe_body(base);
                     build_curl(&point.method, &point.url, &[("Content-Type".to_string(), "application/json".to_string())], Some(&body.to_string()))
                 }).unwrap_or_default();
-                match sweep_probe_mass_assignment(client, point) {
+                match sweep_probe_mass_assignment(client, point, agent_post_write_enabled(connection, input.scan_id)) {
                     Some(ev) => {
                         trace.push(trace_step(1, "mass_assign_confirm", ev.clone()));
                         (DEEP_STATUS_EXPLOITED, "创建/更新接口接受并回显未暴露的权限字段（role/isAdmin…），可权限提升/越权。".to_string(), reproduction, 1, ev.to_string())
@@ -254,7 +257,7 @@ fn deep_dive_one(client: &reqwest::blocking::Client, input: &DeepDiveInput) -> F
             Some(point) => {
                 let reproduction = point_reproduction_curl(point, "<ovrx…>");
                 let bounded: Vec<String> = input.display_urls.iter().take(8).cloned().collect();
-                match sweep_probe_stored_xss(client, point, &bounded) {
+                match sweep_probe_stored_xss(client, point, &bounded, agent_post_write_enabled(connection, input.scan_id)) {
                     Some(ev) => {
                         trace.push(trace_step(1, "stored_xss_confirm", ev.clone()));
                         (DEEP_STATUS_EXPLOITED, "注入标记被持久化且未编码渲染在展示面，存在存储型 XSS。".to_string(), reproduction, 9, ev.to_string())
@@ -267,7 +270,7 @@ fn deep_dive_one(client: &reqwest::blocking::Client, input: &DeepDiveInput) -> F
         "reflected_xss" => match input.point {
             Some(point) => {
                 let reproduction = point_reproduction_curl(point, "<ovrx…>");
-                match sweep_probe_xss(client, point) {
+                match sweep_probe_xss(client, point, agent_post_write_enabled(connection, input.scan_id)) {
                     Some(ev) => {
                         trace.push(trace_step(1, "reflected_xss_confirm", ev.clone()));
                         (DEEP_STATUS_EXPLOITED, "注入标记在同一响应未编码回显，反射型 XSS（低危）。".to_string(), reproduction, 1, ev.to_string())
@@ -280,7 +283,7 @@ fn deep_dive_one(client: &reqwest::blocking::Client, input: &DeepDiveInput) -> F
         "command_injection" => match input.point {
             Some(point) => {
                 let reproduction = point_reproduction_curl(point, ";id");
-                match sweep_probe_cmdi(client, point) {
+                match sweep_probe_cmdi(client, point, agent_post_write_enabled(connection, input.scan_id)) {
                     Some(ev) => {
                         trace.push(trace_step(1, "cmdi_confirm", ev.clone()));
                         (DEEP_STATUS_EXPLOITED, "命令注入可复现（id 回显或注入 sleep 造成时延），等同远程命令执行。".to_string(), reproduction, 7, ev.to_string())
@@ -293,7 +296,7 @@ fn deep_dive_one(client: &reqwest::blocking::Client, input: &DeepDiveInput) -> F
         "account_enumeration" => match input.point {
             Some(point) => {
                 let reproduction = point_reproduction_curl(point, "<标识>");
-                match sweep_probe_auth_enum(client, point) {
+                match sweep_probe_auth_enum(client, point, agent_post_write_enabled(connection, input.scan_id)) {
                     Some(ev) => {
                         trace.push(trace_step(1, "auth_enum_confirm", ev.clone()));
                         (DEEP_STATUS_EXPLOITED, "存在/不存在标识的响应差异可复现，可枚举账号存在性。".to_string(), reproduction, 2, ev.to_string())
@@ -312,7 +315,7 @@ fn deep_dive_one(client: &reqwest::blocking::Client, input: &DeepDiveInput) -> F
                     }
                     build_curl(&point.method, &point.url, &[("Content-Type".to_string(), "application/json".to_string())], Some(&body.to_string()))
                 }).unwrap_or_default();
-                match sweep_probe_business_numeric(client, point) {
+                match sweep_probe_business_numeric(client, point, agent_post_write_enabled(connection, input.scan_id)) {
                     Some(ev) => {
                         trace.push(trace_step(1, "business_numeric_confirm", ev.clone()));
                         (DEEP_STATUS_EXPLOITED, "负值仍被接受（2xx），业务逻辑缺陷候选——是否可利用需业务判断。".to_string(), reproduction, 1, ev.to_string())
@@ -331,7 +334,37 @@ fn deep_dive_one(client: &reqwest::blocking::Client, input: &DeepDiveInput) -> F
         ),
     };
 
-    record.deep_status = status.to_string();
+    let mut status = status.to_string();
+    let mut impact = impact;
+    let mut reproduction = reproduction;
+    let mut requests = requests;
+    let target = input.point.map(|point| point.url.as_str()).or(input.url);
+    if status == DEEP_STATUS_NOT_EXPLOITABLE {
+        if let Some(url) = target {
+            if let Some(sample) = client.get(url).send().ok().and_then(|response| {
+                let code = response.status().as_u16();
+                response.text().ok().map(|body| (code, body))
+            }) {
+                if looks_like_waf(sample.0, &sample.1) {
+                    trace.push(trace_step(trace.len() + 1, "waf_detected", serde_json::json!({"status": sample.0})));
+                    requests += 1;
+                    let outcome = bounded_waf_bypass(connection, client, url, sample.0, &sample.1);
+                    if let Some(hit) = outcome.hit {
+                        trace.extend(hit.trace);
+                        requests += hit.requests;
+                        status = DEEP_STATUS_EXPLOITED.to_string();
+                        impact = format!("模型第 {} 轮同主机建议得到非拦截响应。{}", hit.attempt, outcome.note);
+                        reproduction = hit.curl;
+                    } else {
+                        status = DEEP_STATUS_WAF_BLOCKED.to_string();
+                        impact = outcome.note;
+                    }
+                }
+            }
+        }
+    }
+    record.poc_script = python_poc(&reproduction);
+    record.deep_status = status;
     record.impact = impact;
     record.reproduction_request = reproduction;
     record.poc_output = poc_output;
@@ -339,6 +372,69 @@ fn deep_dive_one(client: &reqwest::blocking::Client, input: &DeepDiveInput) -> F
     record.iterations_used = trace.len() as i64;
     record.exploit_trace = JsonValue::Array(trace);
     record
+}
+
+fn looks_like_waf(status: u16, body: &str) -> bool {
+    if !matches!(status, 403 | 406 | 429 | 503) { return false; }
+    let lower = body.to_ascii_lowercase();
+    ["captcha", "cloudflare", "attention required", "access denied", "waf", "blocked", "bot"].iter().any(|marker| lower.contains(marker))
+}
+
+fn header_map(pairs: &[(&str, &str)]) -> reqwest::header::HeaderMap {
+    let mut headers = reqwest::header::HeaderMap::new();
+    for (name, value) in pairs {
+        if let (Ok(name), Ok(value)) = (
+            reqwest::header::HeaderName::from_bytes(name.as_bytes()),
+            reqwest::header::HeaderValue::from_str(value),
+        ) {
+            headers.insert(name, value);
+        }
+    }
+    headers
+}
+
+fn run_generated_poc(connection: &rusqlite::Connection, scan_id: &str, script: &str) -> Option<String> {
+    if script.trim().is_empty() { return None; }
+    let attempt: i64 = connection.query_row(
+        "SELECT attempt_count FROM sentinel_scans WHERE id=?1",
+        [scan_id],
+        |row| row.get(0),
+    ).unwrap_or(0);
+    if attempt <= 0 || !scan_capability_class_authorized(connection, scan_id, attempt, "code_exec").unwrap_or(false) {
+        return None;
+    }
+    let fingerprint = format!("{:x}", Sha256::digest(format!("analysis_script:{}", script.trim()).as_bytes()));
+    match high_risk_action_gate_on(connection, scan_id, attempt, "deep-dive", "code_exec", &fingerprint, "深挖生成的本地复现脚本（沙箱、禁网）", "local-sandbox", true, Some("run_analysis_script")) {
+        Ok(HighRiskGate::Allow) => {}
+        Ok(HighRiskGate::Pending(_)) => return Some("脚本已生成，等待操作者批准后才会在沙箱执行。".into()),
+        _ => return None,
+    }
+    let dir = std::env::temp_dir().join(format!("oviraptor-poc-{}", Uuid::new_v4()));
+    if std::fs::create_dir_all(&dir).is_err() || std::fs::write(dir.join("script.py"), script.as_bytes()).is_err() {
+        let _ = std::fs::remove_dir_all(&dir);
+        return Some("沙箱目录不可用，脚本只保留正文。".into());
+    }
+    let result = crate::tool_supply::macos_static_parser::run_sandboxed(
+        std::path::Path::new("/usr/bin/python3"),
+        &["script.py".to_string()],
+        &dir,
+        &dir,
+        &crate::tool_supply::macos_static_parser::SandboxLimits::default(),
+        &|| false,
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Some(match result {
+        Ok(run) => format!("exit={:?}\n{}", run.exit_code, String::from_utf8_lossy(&run.stdout).chars().take(4_000).collect::<String>()),
+        Err(error) => format!("沙箱未执行：{}", error.describe()),
+    })
+}
+
+fn python_poc(curl: &str) -> String {
+    if curl.trim().is_empty() { return String::new(); }
+    format!(
+        "# Generated reproduction. Does not run by itself and does not bypass the capability gate.\nprint({})\n",
+        serde_json::to_string(curl).unwrap_or_else(|_| "\"\"".into())
+    )
 }
 
 /// A finding row to deep-dive, as read from sentinel_findings.
@@ -483,7 +579,12 @@ pub(crate) fn deep_dive_for_scan(db_path: &std::path::Path, scan_id: &str, base_
             url,
             display_urls: &get_urls,
         };
-        let record = deep_dive_one(&client, &input);
+        let mut record = deep_dive_one(&connection, &client, &input);
+        if record.poc_output.is_empty() {
+            if let Some(output) = run_generated_poc(&connection, scan_id, &record.poc_script) {
+                record.poc_output = output;
+            }
+        }
         match record.deep_status.as_str() {
             DEEP_STATUS_EXPLOITED => exploited += 1,
             DEEP_STATUS_NOT_EXPLOITABLE => not_exploitable += 1,

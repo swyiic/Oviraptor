@@ -46,9 +46,22 @@ fn agent_tool_run_analysis_script(
     } else {
         format!("运行本地分析脚本（沙箱、禁网）：{}", purpose.trim())
     };
+    let prior_same: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM tool_invocations t JOIN agent_runs r ON r.id=t.run_id WHERE r.scan_id=?1 AND t.tool_name='run_analysis_script' AND t.input_hash=?2",
+        params![&context.scan_id, &fingerprint],
+        |row| row.get(0),
+    ).unwrap_or(0);
+    if prior_same >= 3 {
+        return serde_json::json!({
+            "accepted": false,
+            "code": "doom_loop",
+            "error": "同一脚本连续重复已达 3 次，停止这一轮。换输入或换手法后再试。",
+        });
+    }
     match high_risk_action_gate_on(
         &connection, &context.scan_id, context.attempt_number, &fencing,
         "code_exec", &fingerprint, &summary, "local-sandbox", true,
+        Some("run_analysis_script"),
     ) {
         Ok(HighRiskGate::Allow) => {}
         Ok(HighRiskGate::Pending(request_id)) => {

@@ -207,6 +207,7 @@ fn agent_tool_run_target_poc(
     match high_risk_action_gate_on(
         &connection, &context.scan_id, context.attempt_number, &fencing,
         "egress", &fingerprint, &summary, &context.target_url, false,
+        Some("run_target_poc"),
     ) {
         Ok(HighRiskGate::Allow) => {}
         Ok(HighRiskGate::Pending(request_id)) => {

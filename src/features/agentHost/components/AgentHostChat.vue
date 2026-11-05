@@ -85,6 +85,14 @@ const activityMessage = computed(() => {
 const activityEvidence = computed(() => activityMessage.value?.runId
   ? task.value?.evidence.filter(item => item.runId === activityMessage.value?.runId).slice(-12) || [] : []);
 const activityCount = computed(() => steps.value.length || activityEvidence.value.length);
+const chainHops = ref<Array<{ id: string; factLabel: string; factValue: string; source: string; opensNext: boolean }>>([]);
+async function loadChain() {
+  const id = selectedId.value;
+  const projectId = hostProjectId.value;
+  if (!id || projectId === undefined) { chainHops.value = []; return; }
+  try { chainHops.value = await props.client.chain(id, projectId); }
+  catch { chainHops.value = []; }
+}
 function resetActivity() {
   inner.value = null; steps.value = []; heartbeat.value = undefined;
   activityRunId.value = undefined; activityMessageId.value = undefined; activityOpen.value = false;
@@ -163,6 +171,7 @@ function permissionLabel(id: string) {
     "workspace.read": tr("读取工作区文件", "Read workspace files"),
     "workspace.write": tr("写入工作区文件", "Write workspace files"),
     "workspace.run": tr("在工作区运行脚本", "Run scripts in the workspace"),
+    "material.open": tr("放行网址和本地文件。确认后本对话不再询问；大文件按原路径读取，不整份复制", "Allow URLs and local files. This conversation will not ask again; large files stay in place"),
   };
   return known[id] || id;
 }
@@ -176,6 +185,9 @@ const innerPhaseText = computed(() => {
     if (message.status === 'refused' || message.stopReason === 'refusal') return tr('已停止', 'Stopped');
     if (message.status === 'completed') return message.stopReason && message.stopReason !== 'end_turn'
       ? tr('本轮已结束', 'Turn ended') : tr('已完成', 'Completed');
+    if (message.status === 'incomplete') return message.stopReason === 'max_tokens'
+      ? tr('回复被长度截断，还没开始抓取', 'Reply hit the length limit before any fetch')
+      : tr('本轮没有做完', 'Turn did not finish');
   }
   const known: Record<string, [string, string]> = {
     model: ["思考中", "Thinking"],
@@ -500,6 +512,11 @@ let needsReconnectRefresh=false;
 async function refreshConversationMetadata(){const pid=hostProjectId.value,g=projectGeneration;if(pid===undefined)return;try{const rows=await props.client.conversations(pid);if(!disposed&&g===projectGeneration&&pid===hostProjectId.value){conversations.value=rows.map(row=>{const current=conversations.value.find(c=>c.id===row.id);return current&&(current.metadataRevision??0)>(row.metadataRevision??0)?current:row;});if(selectedId.value&&!rows.some(c=>c.id===selectedId.value))selectedId.value=visibleConversations.value[0]?.id;}}catch{/* Reconnect metadata is retried by the next event. */}}
 function handleEvent(event: AgentHostEvent) {
   if(event.type==='access.policy.changed'&&typeof window!=='undefined'&&typeof CustomEvent!=='undefined')window.dispatchEvent(new CustomEvent('oviraptor:access-policy-changed',{detail:{projectId:event.projectId}}));
+  if (event.type === "chain.updated" && event.conversationId === selectedId.value && event.hop && typeof event.hop === "object") {
+    const hop = event.hop as { id: string; factLabel: string; factValue: string; source: string; opensNext: boolean };
+    if (hop.id && !chainHops.value.some(item => item.id === hop.id)) chainHops.value = [...chainHops.value, hop];
+    return;
+  }
   if (event.type === "connection.status") { if(event.connected!==true)needsReconnectRefresh=true;connected.value = event.connected === true; return; }
   if (event.type === "host.snapshot") {
     connected.value = true;
@@ -587,7 +604,7 @@ const stop = props.client.events(handleEvent);
 onBeforeUnmount(() => { ++permissionGeneration; disposed = true; ++projectGeneration; ++messageGeneration; stop(); });
 watch(() => [props.projectName, props.projectId], () => void loadProject(), { immediate: true, flush: "sync" });
 watch(running, value => { if (!value) heartbeat.value = undefined; });
-watch(selectedId, (id,previous) => { if(previous)conversationDrafts.set(previous,draft.value);++messageGeneration;messageLoad=undefined;messages.value=[];loadingMessages.value=false;loadingEarlier.value=false;historyLoaded=false;earlierCursor=undefined;hasEarlier.value=false;followingTail.value=true;unreadBelow.value=false;error.value='';discoveryPanelOpen.value=!!props.draftRequest?.analysis;draft.value=id?conversationDrafts.get(id)||"":""; permissionsOpen.value = false; ++permissionGeneration; resetActivity(); task.value = null; cancellingChildren.value = []; grantPrompt.value = null; runtimePermission.value = null; running.value = false; void loadMessages(); void restoreStatus(); }, { flush: "sync" });
+watch(selectedId, (id,previous) => { if(previous)conversationDrafts.set(previous,draft.value);++messageGeneration;messageLoad=undefined;messages.value=[];loadingMessages.value=false;loadingEarlier.value=false;historyLoaded=false;earlierCursor=undefined;hasEarlier.value=false;followingTail.value=true;unreadBelow.value=false;error.value='';discoveryPanelOpen.value=!!props.draftRequest?.analysis;draft.value=id?conversationDrafts.get(id)||"":""; permissionsOpen.value = false; ++permissionGeneration; resetActivity(); task.value = null; cancellingChildren.value = []; grantPrompt.value = null; runtimePermission.value = null; running.value = false; void loadMessages(); void loadChain(); void restoreStatus(); }, { flush: "sync" });
 watch([()=>props.draftRequest,loadingProject,running,continuingTask,hostProjectId],()=>void applyDiscoveryDraft(),{immediate:true});
 watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{immediate:true});
 </script>
@@ -680,8 +697,9 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
       <code>{{ errorView.code }}</code>
     </div>
     <div v-if="grantPrompt" class="ahc-grant" role="dialog" aria-modal="true" :aria-label="tr('授权', 'Grant access')">
-      <strong>{{ grantIsWorkspace ? tr('需要授权才能继续', 'Permission needed to continue') : tr('需要授权才能查', 'Permission needed') }}</strong>
-      <p>{{ tr('这次操作要用到还没打开的权限。授权只作用于当前工作空间，也可以先不授。', 'This step needs a permission that is still off. Granting applies only to this workspace.') }}</p>
+      <strong>{{ grantPrompt.offers.some(offer => offer.appId === 'material') ? tr('放行这次访问', 'Allow this access') : (grantIsWorkspace ? tr('需要授权才能继续', 'Permission needed to continue') : tr('需要授权才能查', 'Permission needed')) }}</strong>
+      <p v-if="grantPrompt.question">{{ grantPrompt.question }}</p>
+      <p v-else>{{ tr('这次操作要用到还没打开的权限。授权只作用于当前工作空间，也可以先不授。', 'This step needs a permission that is still off. Granting applies only to this workspace.') }}</p>
       <p v-if="grantPrompt.offers.some(offer => offer.appId === 'workspace')">{{ tr('此请求只授予列出的文件权限。脚本执行将在隔离运行环境接通后开放。', 'This request grants only the listed file permissions. Script execution requires an isolated runtime.') }}</p>
       <ul>
         <li v-for="offer in grantPrompt.offers" :key="offer.appId">{{ offer.permissions.map(item => permissionLabel(item.permission)).join('、') }}</li>
@@ -694,6 +712,13 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
     </div>
     <div v-if="runtimePermission" class="ahc-grant" role="dialog" :aria-label="tr('运行时授权','Runtime permission')"><strong>{{tr('请审核运行时操作','Review runtime operation')}}</strong><p>{{runtimePermission.description}}</p><footer><button v-for="option in runtimePermission.options" :key="option.id" type="button" class="button secondary compact" @click="decidePermission(option.id)">{{option.label}}</button></footer></div>
     <p v-if="!connected" class="ahc-connection" role="status">{{tr('连接中断，正在重连。已运行的任务状态会重新核实。','Connection lost. Reconnecting and checking the running task.')}}</p>
+    <ol v-if="chainHops.length" class="ahc-chain" :aria-label="tr('分析链', 'Analysis chain')">
+      <li v-for="(hop, index) in chainHops" :key="hop.id">
+        <b>{{ index + 1 }} {{ hop.factLabel }}</b>
+        <span>{{ hop.factValue }}</span>
+        <small>{{ hop.source }} · {{ hop.opensNext ? tr('可继续', 'continues') : tr('停止', 'stopped') }}</small>
+      </li>
+    </ol>
     <div class="ahc-compose-dock">
     <form class="ahc-composer" @submit.prevent="send">
       <textarea ref="composerInput" v-model="draft" rows="1" :disabled="loadingProject" :placeholder="running ? tr('输入插话：会在下一步带入当前回复', 'Steer: injected before the next step') : tr('问点什么…（Enter 发送，Shift+Enter 换行）', 'Ask anything… (Enter to send)')" @keydown="onComposerKeydown" />
@@ -806,6 +831,9 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
 .ahc-remember input { flex:0 0 auto; width:16px; height:16px; margin:2px 0 0; }
 @media(max-width:900px){.agent-host-chat-transcript{padding:16px}.ahc-model .ahc-select{max-width:240px}}
 
+.ahc-chain{width:min(800px,calc(100% - 40px));margin:0 auto;padding:0;list-style:none;font-size:12px;line-height:1.5}
+.ahc-chain li{display:grid;gap:2px;padding:6px 0;border-top:1px solid var(--line,#e6e6e6)}
+.ahc-chain span,.ahc-chain small{overflow-wrap:anywhere;color:var(--muted,#666)}
 .ahc-compose-dock{flex-shrink:0;position:relative;width:min(800px,calc(100% - 40px));margin:8px auto 12px}
 .ahc-composer-controls{display:flex;align-items:center;gap:8px;min-height:34px;padding:6px 8px 0;color:var(--app-muted,#72746f)}
 .ahc-composer-controls .ahc-select{max-width:280px;height:26px;padding-left:0;border-color:transparent;background:transparent;font-size:11px;font-weight:500}

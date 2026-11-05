@@ -313,6 +313,33 @@ CREATE TABLE IF NOT EXISTS agent_finding_exploits (
     UNIQUE(scan_id,finding_id)
 );
 CREATE INDEX IF NOT EXISTS idx_agent_finding_exploits_scan ON agent_finding_exploits(scan_id,deep_status);
+CREATE TABLE IF NOT EXISTS agent_operator_questions (
+    question_id TEXT PRIMARY KEY,
+    scan_id TEXT NOT NULL REFERENCES sentinel_scans(id) ON DELETE CASCADE,
+    attempt_number INTEGER NOT NULL CHECK(attempt_number > 0),
+    run_id TEXT NOT NULL DEFAULT '',
+    question TEXT NOT NULL,
+    options_json TEXT NOT NULL DEFAULT '[]',
+    context_note TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK(status IN ('pending','answered','dismissed')),
+    answer TEXT NOT NULL DEFAULT '',
+    selected_option TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    answered_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_agent_operator_questions_scan ON agent_operator_questions(scan_id, status, created_at);
+CREATE TABLE IF NOT EXISTS agent_mcp_servers (
+    server_id TEXT PRIMARY KEY,
+    label TEXT NOT NULL DEFAULT '',
+    transport TEXT NOT NULL DEFAULT 'stdio' CHECK(transport IN ('stdio','http','sse')),
+    command TEXT NOT NULL,
+    args_json TEXT NOT NULL DEFAULT '[]',
+    env_json TEXT NOT NULL DEFAULT '[]',
+    enabled INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
 CREATE TABLE IF NOT EXISTS sentinel_opportunities (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,

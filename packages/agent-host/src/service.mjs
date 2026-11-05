@@ -2,13 +2,16 @@ const settledWorkspaceExecutions = new WeakSet();
 import { proxyFetch } from './net-proxy.mjs';
 import { HostNetworkSettings } from './network-settings.mjs';
 import { createHash, randomUUID, randomBytes } from 'node:crypto';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkdir } from 'node:fs/promises';
 import { existsSync, writeFileSync } from 'node:fs';
 import { HostStore, hostError, boundedText, RETRYABLE_HOST_CODES, deriveConversationTitle, isPlaceholderConversationTitle } from './store.mjs';
 import { desktopAssetDbPath, isDesktopAssetRead, DesktopAssetSynchronizer } from './desktop-assets.mjs';
 import { WORKSPACE_TOOL_SPECS, runWorkspaceTool, workspacePermission } from './workspace-tools.mjs';
+import { citedPathTokens, importCitedFiles } from './cited-files.mjs';
+import { citedHosts, importCitedPages, savePastedRequest } from './cited-pages.mjs';
+import { addHop, fileHops, formatChain, hopsFromTool, listHops } from './chain.mjs';
 import { AppManager } from './apps.mjs';
 import { ensureBundledApps, bundledAppsStatus } from './bundled-apps.mjs';
 import { shellCatalog as buildShellCatalog } from './shell-apps.mjs';
@@ -688,6 +691,10 @@ export class AgentHost {
     if (remaining.length) this.#publishAuthorization(id);
   }
   accessPolicyView(projectId) { return this.accessPolicy.view(projectId); }
+  chain(conversationId, projectId) {
+    this.store.conversation(conversationId, projectId);
+    return listHops(this.store.db, conversationId);
+  }
   setAccessPolicy(input) {
     const policy=this.accessPolicy.set(input);
     for(const [conversationId,run] of this.runs){
@@ -1126,6 +1133,28 @@ export class AgentHost {
       run.toolMemory = [];
       const pendingSteers = this.store.pendingSteers(conversation.id);
       if (pendingSteers.length) text += `\n此前已接收、尚未交付的补充要求：\n${pendingSteers.map(message => message.content).join('\n')}`;
+      const workspace = join(this.dataDir, 'workspaces', String(conversation.projectId), 'agent');
+      const materialRoot = join(this.dataDir, 'material', conversation.id);
+      run.permissionMode = this.accessPolicy.view(conversation.projectId).mode;
+      run.materialOpen = run.permissionMode === 'full' || run.permissionMode === 'auto'
+        ? true
+        : await this.#allowMaterial(conversation, run, text);
+      run.materialRoot = materialRoot;
+      run.materialRoots = [materialRoot];
+      if (!run.materialOpen && (citedHosts(text).length || citedPathTokens(text).length)) {
+        text += '\nHost: 用户没有放行这次网址或文件访问。不要抓取，也不要声称已经打开文件。';
+      } else if (run.materialOpen) {
+        const cited = await importCitedFiles(text, workspace);
+        if (cited.note) text += `\n${cited.note}`;
+        for (const hop of fileHops([...(cited.imported || []), ...(cited.external || [])])) this.#recordHop(conversation.id, hop);
+        for (const file of cited.external || []) run.materialRoots.push(dirname(file.source));
+        const pages = await importCitedPages(text, workspace, { fetchImpl: this.providerFetch });
+        if (pages.note) text += `\n${pages.note}`;
+        run.citedHosts = citedHosts(text);
+        const pasted = await savePastedRequest(text, workspace);
+        if (pasted) text += `\nHost: 用户给出的请求已落盘 ${pasted.path}。本对话已放行：用 workspace_fetch 自己抓后续网址，大文件用 workspace_read_path 按偏移读原路径。不要让用户把文件下载下来。`;
+        else text += '\nHost: 本对话已放行。用 workspace_fetch 自己抓后续需要的网址和脚本。超过 1MB 的本地文件留在原路径，用 workspace_read_path 读取。不要让用户代你下载。';
+      }
       run.userText = text;
       const answerMode = this.answerMode();
       // Single blackboard: runtime session harness owns goal/facts. Do NOT inject an empty ephemeral goal here.
@@ -1136,6 +1165,8 @@ export class AgentHost {
         memoryBlock,
         userText: text,
         answerMode,
+        permissionMode: run.permissionMode,
+        chainBlock: formatChain(listHops(this.store.db, conversation.id)),
       });
       // OAuth lifetime: refresh before send so expired access does not bare-401.
       if (this.runtimeId === 'xai-api') {
@@ -1274,6 +1305,29 @@ export class AgentHost {
     }
     this.emit({ type: 'runtime.step', ...base, id: step.id, title: step.title, status: step.status, index: step.index });
   }
+  #recordHop(conversationId, hop) {
+    const row = addHop(this.store.db, conversationId, hop);
+    this.emit({ type: 'chain.updated', conversationId, hop: row });
+    return row;
+  }
+  async #allowMaterial(conversation, run, text) {
+    const targets = [...citedHosts(text), ...citedPathTokens(text)].slice(0, 8);
+    if (!targets.length) return false;
+    const identity = this.runtimeIdentity();
+    const granted = this.store.db.prepare('SELECT 1 FROM conversation_material_grants WHERE conversation_id=? AND runtime_identity=?').get(conversation.id, identity);
+    if (granted) return true;
+    if (run.nonInteractive) return false;
+    const accepted = await this.requestAuthorization(conversation.id, {
+      projectId: conversation.projectId,
+      identity,
+      question: `首次访问需要确认。确认后，本对话可以抓取网址、用浏览器打开页面、按原样发送请求、在本机运行命令，并直接读取你给出的文件。大文件不会整份复制进工作区。\n${targets.join('\n')}`,
+      offers: [{ appId: 'material', revision: 0, permissions: [{ permission: 'material.open', tools: ['workspace_fetch', 'workspace_read_path'] }] }],
+    });
+    if (run.cancelled) throw hostError('host_reply_cancelled');
+    if (accepted !== true) return false;
+    this.store.db.prepare("INSERT OR IGNORE INTO conversation_material_grants(conversation_id,runtime_identity,created_at) VALUES(?,?,datetime('now'))").run(conversation.id, identity);
+    return true;
+  }
   async #authorizeWorkspace(conversation, run, toolName) {
     const kind = workspacePermission(toolName);
     if (!run.workspaceAllow) run.workspaceAllow = new Set();
@@ -1370,7 +1424,7 @@ export class AgentHost {
     }
     const conversation = this.store.conversation(conversationId);
     const capability = this.apps.capabilities(conversation.projectId, { runtimeIdentity: this.runtimeIdentity() }).find(tool => tool.name.replace('::', '__') === params.name);
-    const readOnly = ['workspace_read', 'workspace_list', 'workspace_grep', 'workspace_glob'].includes(params.name)
+    const readOnly = ['workspace_read', 'workspace_list', 'workspace_grep', 'workspace_glob', 'workspace_fetch', 'workspace_read_path', 'workspace_http', 'workspace_browser', 'workspace_shell', 'workspace_probe_sql', 'workspace_probe_command', 'workspace_source_list', 'workspace_source_search', 'workspace_chain_read', 'workspace_chain_add'].includes(params.name)
       || Boolean(run.skillScope && this.skillAccess?.toolSpecs(conversationId, run.skillScope).some(tool => tool.name === params.name))
       || typeof capability?.permission === 'string' && (capability.permission === 'read' || capability.permission.endsWith('.read'));
     const operationId = randomUUID();
@@ -1478,6 +1532,13 @@ export class AgentHost {
             historyRoot: join(this.dataDir,'file-versions',String(conversation.projectId)),
             executionRoot: join(this.dataDir,'executions',String(conversation.projectId)),
             context:{conversationId,runId:run.id},
+            allowedHosts: run.citedHosts || [],
+            fetchImpl: this.providerFetch,
+            materialOpen: run.materialOpen === true,
+            materialRoot: run.materialRoot || '',
+            readRoots: run.materialRoots || [],
+            readChain: () => listHops(this.store.db, conversation.id),
+            recordHop: hop => this.#recordHop(conversation.id, hop),
             assertAuthorized: () => {
               const admitted = this.validateMcpScope(token, conversationId);
               if (admitted.scope !== scope || admitted.run !== run) throw hostError('host_mcp_scope_unavailable', 403, { retryable: false });
@@ -1486,6 +1547,9 @@ export class AgentHost {
           });
           const completed = this.validateMcpScope(token, conversationId);
           if (completed.scope !== scope || completed.run !== run) throw hostError('host_mcp_scope_unavailable', 403, { retryable: false });
+          if (params.name !== 'workspace_chain_add' && params.name !== 'workspace_chain_read' && value?.success !== false) {
+            for (const hop of hopsFromTool(params.name, params.arguments ?? {}, value)) this.#recordHop(conversation.id, hop);
+          }
           const response={ ...(params.name==='workspace_run'&&!value.success?{isError:true}:{}),content: [{ type: 'text', text: JSON.stringify({ ...value, workspace: root }) }] };
           // Only this core execution backend can attest a fully settled result.
           // An exit-code failure in its isolated copy is known, not an unknown write.

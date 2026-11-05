@@ -34,7 +34,7 @@ BEGIN SELECT RAISE(ABORT,'scan_capability_authorization_immutable'); END;
 // string accepted here that the gate did not recognize would simply never match
 // a capability, so the default-closed floor holds either way.
 const HIGH_RISK_CLASS_STRINGS: &[&str] =
-    &["code_exec", "target_write", "egress", "persistence", "exfil", "waf_evasion", "internal_scope"];
+    &["code_exec", "target_write", "egress", "persistence", "exfil", "waf_evasion", "internal_scope", "post_write"];
 
 /// Whether this scan attempt authorized a given high-risk class, read from the
 /// immutable operator record. Canonical reader for the scope gate; mirrors the
@@ -183,6 +183,40 @@ fn set_scan_capability_authorization_inner(
 /// authorized for, with an explicit legal-authorization attestation. Immutable:
 /// a second call for the same scan+attempt is refused. This is the opt-in that
 /// the scheduling/per-call gates consult; it never itself executes anything.
+#[tauri::command]
+pub fn get_scan_capability_authorization(
+    state: State<AppState>,
+    scan_id: String,
+) -> Result<JsonValue, String> {
+    let connection = db::open(&state.db_path)?;
+    let attempt: i64 = connection.query_row(
+        "SELECT attempt_count FROM sentinel_scans WHERE id=?1",
+        [&scan_id],
+        |row| row.get(0),
+    ).unwrap_or(0).max(1);
+    let storage: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name='scan_capability_authorizations')",
+        [],
+        |row| row.get(0),
+    ).unwrap_or(false);
+    if !storage {
+        return Ok(serde_json::json!({"attested": false, "classes": []}));
+    }
+    let row = connection.query_row(
+        "SELECT legal_attestation, authorized_classes FROM scan_capability_authorizations WHERE scan_id=?1 AND attempt_number=?2",
+        params![scan_id, attempt],
+        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+    );
+    match row {
+        Ok((attested, classes)) => Ok(serde_json::json!({
+            "attested": attested == 1,
+            "classes": serde_json::from_str::<Vec<String>>(&classes).unwrap_or_default(),
+        })),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(serde_json::json!({"attested": false, "classes": []})),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
 #[tauri::command]
 pub fn set_scan_capability_authorization(
     state: State<AppState>,

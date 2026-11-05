@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref } from "vue";
+import { computed, onUnmounted, ref, watch } from "vue";
 import {
   Activity,
   BookOpen,
@@ -20,15 +20,22 @@ import { scanningLearningApi } from "../learningApi";
 import { useI18n } from "../../../i18n";
 import type { AgentSkill } from "../../skills/catalogTypes";
 import type { AgentLearningCandidate, AgentKnowledgeEntry } from "../../skills/knowledgeTypes";
-import type { AgentTraceSummary } from "../types";
+import type { AgentTraceSummary, SentinelTarget } from "../types";
 import InlineConfirm from "../../../shared/components/InlineConfirm.vue";
 import { tracePresentation } from "../traces/presentation";
 import { useLiveTrace } from "../traces/useLiveTrace";
 import { useTraceSelection } from "../traces/useTraceSelection";
 import TraceHubToolbar from "./TraceHubToolbar.vue";
+import McpIntegrationsPanel from "./McpIntegrationsPanel.vue";
+import ScanAgentStatsPanel from "./ScanAgentStatsPanel.vue";
+import HeadlessScanConsole from "./HeadlessScanConsole.vue";
+import AgentToolPermissionRulesPanel from "./AgentToolPermissionRulesPanel.vue";
 import RootDecisionSummary from "./RootDecisionSummary.vue";
 import { isRootModelRound } from "../traces/rootDecisionContract";
+import { steeringPlaybooks, steeringSlashTemplate } from "../steering/playbooks";
+import { queueSteeringInsert } from "../steering/insertBus";
 
+const props = defineProps<{ projectId?: number }>();
 const emit = defineEmits<{
   notify: [type: "success" | "error" | "info", text: string];
 }>();
@@ -54,7 +61,11 @@ const deleteKnowledge = ref<AgentKnowledgeEntry>();
 const deleteCandidate = ref<AgentLearningCandidate>();
 let catalogRevision = 0;
 let disposed = false;
-onUnmounted(() => { disposed = true; catalogRevision++; });
+onUnmounted(() => {
+  disposed = true;
+  catalogRevision++;
+  if (liveTimer !== undefined) window.clearInterval(liveTimer);
+});
 
 const totals = computed(() => ({
   tasks: traces.value.length,
@@ -65,6 +76,50 @@ const totals = computed(() => ({
 const selectedCandidate = computed(() =>
   candidates.value.find((item) => item.scanId === selectedId.value),
 );
+const narrative = computed(() => {
+  const events = detail.value?.events ?? [];
+  return events.map((event) => ({
+    key: event.id,
+    name: event.name || eventLabel(event.eventType),
+    count: 1,
+    events: [event],
+  }));
+});
+const selectedLive = computed(() => {
+  const row = traces.value.find((item) => item.scanId === selectedId.value);
+  return row?.status === "scanning" || row?.status === "pausing";
+});
+const menuOpen = ref(false);
+const menuTargets = ref<SentinelTarget[]>([]);
+const steeringHint = ref("");
+let liveTimer: number | undefined;
+
+function queueComposer(text: string) {
+  queueSteeringInsert(text);
+  steeringHint.value = text;
+  menuOpen.value = false;
+  emit("notify", "info", tr("已写入智能体协作输入框", "Inserted into the agent composer"));
+}
+
+function insertSteering(command: string) {
+  queueComposer(steeringSlashTemplate(command));
+}
+
+async function toggleCapabilityMenu() {
+  menuOpen.value = !menuOpen.value;
+  if (!menuOpen.value || !props.projectId) return;
+  try {
+    menuTargets.value = await sentinelApi.listSentinelTargets(props.projectId, 40);
+  } catch {
+    menuTargets.value = [];
+  }
+}
+
+async function attachWorkspaceFile() {
+  const path = await open({ multiple: false, directory: false });
+  if (!path || Array.isArray(path)) return;
+  queueComposer(`参考工作区文件：${path}`);
+}
 
 async function load() {
   if (disposed) return;
@@ -256,6 +311,12 @@ async function refreshLive(eventDriven?: boolean) {
 useLiveTrace(load, refreshLive, () => selectedId.value, () => {
   emit("notify", "info", tr("轨迹实时通知连接失败，已使用定期补查", "Live trace notifications unavailable; using periodic reconciliation"));
 });
+watch(selectedLive, (live) => {
+  if (liveTimer !== undefined) window.clearInterval(liveTimer);
+  liveTimer = undefined;
+  if (!live) return;
+  liveTimer = window.setInterval(() => void refreshLive(false), 3000);
+}, { immediate: true });
 </script>
 
 <template>
@@ -342,17 +403,44 @@ useLiveTrace(load, refreshLive, () => selectedId.value, () => {
             <header><strong>{{ tr("工具画像", "Tool profile") }}</strong><small>{{ detail.summary.toolCallCount }} calls · {{ detail.summary.toolResultCount }} results</small></header>
             <div><span v-for="tool in detail.summary.tools" :key="tool.name"><Wrench :size="12" /><b>{{ tool.name }}</b><em>{{ tool.calls }}/{{ tool.results }}</em></span><small v-if="!detail.summary.tools.length">{{ tr("没有结构化工具记录", "No structured tool records") }}</small></div>
           </section>
-          <section class="trace-timeline">
-            <header><strong>{{ tr("调用时间线", "Invocation timeline") }}</strong><small>{{ detail.events.length }} {{ tr("条本机事件", "local events") }}</small></header>
-            <article class="trace-event" v-for="event in detail.events" :key="event.id">
-              <span class="trace-event-icon" :class="event.eventType"><Cpu v-if="event.eventType === 'reasoning' || event.eventType === 'model_request'" :size="13" /><Wrench v-else-if="event.eventType.includes('function')" :size="13" /><MessagesSquare v-else :size="13" /></span>
-              <div><strong>{{ event.name || eventLabel(event.eventType) }}</strong><small>{{ eventLabel(event.eventType) }} · Agent {{ shortSession(event.sessionId) }}<template v-if="event.targetUrl"> · {{ event.targetUrl }}</template></small></div>
-              <em>{{ isRootModelRound(event) ? tr("已记录", "Recorded") : event.status || event.role || "recorded" }}</em><time>{{ event.createdAt }}</time>
-              <RootDecisionSummary v-if="isRootModelRound(event)" :event="event" :source-authority="detail.summary.sourceAuthority" />
-              <details v-else-if="event.detail" class="trace-event-detail">
-                <summary>{{ tr("查看完整详情", "View full detail") }} · {{ formatBytes(event.detailSize) }}<span v-if="event.detailTruncated"> · {{ tr("限长预览", "preview") }}</span></summary>
-                <pre>{{ event.detail }}</pre>
+          <section class="trace-timeline" :class="{ live: selectedLive }">
+            <header><strong>{{ tr("调用时间线", "Invocation timeline") }}</strong><small>{{ detail.events.length }} {{ tr("条本机事件", "local events") }}<template v-if="selectedLive"> · {{ tr("实时", "live") }}</template></small></header>
+            <div class="trace-capability-menu">
+              <button type="button" aria-label="+" @click="toggleCapabilityMenu">+</button>
+              <div v-if="menuOpen" class="trace-capability-panel">
+                <strong>{{ tr("Steering 命令", "Steering commands") }}</strong>
+                <button v-for="book in steeringPlaybooks" :key="book.command" type="button" @click="insertSteering(book.command)">
+                  /{{ book.command }} · {{ tr(book.label.zh, book.label.en) }}
+                </button>
+                <strong>{{ tr("计划", "Plan") }}</strong>
+                <button type="button" @click="queueComposer('请根据当前证据给出下一步计划，并说明停止条件。')">{{ tr("写入计划指令", "Insert plan prompt") }}</button>
+                <strong>{{ tr("站点", "Sites") }}</strong>
+                <button v-for="target in menuTargets.slice(0, 12)" :key="target.url" type="button" @click="queueComposer(`关注站点 ${target.url}`)">{{ target.url }}</button>
+                <small v-if="!menuTargets.length">{{ tr("当前项目没有站点", "No sites in this project") }}</small>
+                <strong>{{ tr("工作区文件", "Workspace file") }}</strong>
+                <button type="button" @click="attachWorkspaceFile">{{ tr("选择文件并写入", "Pick a file") }}</button>
+                <strong>{{ tr("工具", "Tools") }}</strong>
+                <button v-for="tool in detail.summary.tools" :key="tool.name" type="button" @click="queueComposer(`优先使用工具 ${tool.name}`)">{{ tool.name }}</button>
+                <strong>{{ tr("技能", "Skills") }}</strong>
+                <button v-for="skill in skills" :key="skill.id" type="button" @click="queueComposer(`使用技能 ${skill.name}`)">{{ skill.name }}</button>
+              </div>
+            </div>
+            <article class="trace-event" v-for="group in narrative" :key="group.key">
+              <template v-if="group.count > 1">
+                <span class="trace-event-icon"><Wrench :size="13" /></span>
+                <div><strong>{{ tr(`执行 ${group.name} ${group.count} 次`, `Ran ${group.name} ${group.count} times`) }}</strong></div>
+                <details><summary>{{ tr("展开", "Expand") }}</summary><p v-for="event in group.events" :key="event.id">{{ event.name || eventLabel(event.eventType) }} · {{ event.status || event.role || "recorded" }}</p></details>
+              </template>
+              <template v-else>
+              <span class="trace-event-icon" :class="group.events[0].eventType"><Cpu v-if="group.events[0].eventType === 'reasoning' || group.events[0].eventType === 'model_request'" :size="13" /><Wrench v-else-if="group.events[0].eventType.includes('function')" :size="13" /><MessagesSquare v-else :size="13" /></span>
+              <div><strong>{{ group.events[0].name || eventLabel(group.events[0].eventType) }}</strong><small>{{ eventLabel(group.events[0].eventType) }} · Agent {{ shortSession(group.events[0].sessionId) }}<template v-if="group.events[0].targetUrl"> · {{ group.events[0].targetUrl }}</template></small></div>
+              <em>{{ isRootModelRound(group.events[0]) ? tr("已记录", "Recorded") : group.events[0].status || group.events[0].role || "recorded" }}</em><time>{{ group.events[0].createdAt }}</time>
+              <RootDecisionSummary v-if="isRootModelRound(group.events[0])" :event="group.events[0]" :source-authority="detail.summary.sourceAuthority" />
+              <details v-else-if="group.events[0].detail" class="trace-event-detail">
+                <summary>{{ tr("查看完整详情", "View full detail") }} · {{ formatBytes(group.events[0].detailSize) }}<span v-if="group.events[0].detailTruncated"> · {{ tr("限长预览", "preview") }}</span></summary>
+                <pre>{{ group.events[0].detail }}</pre>
               </details>
+              </template>
             </article>
           </section>
         </div>
@@ -382,6 +470,11 @@ useLiveTrace(load, refreshLive, () => selectedId.value, () => {
         </article>
       </div>
     </section>
+
+    <HeadlessScanConsole :project-id="props.projectId" @notify="(type, text) => emit('notify', type, text)" />
+    <ScanAgentStatsPanel v-if="selectedId" :scan-id="selectedId" />
+    <AgentToolPermissionRulesPanel compact @notify="(type, text) => emit('notify', type, text)" />
+    <McpIntegrationsPanel />
 
     <section class="knowledge-section">
       <header><div><h3>{{ tr("候选与聚合知识", "Candidate and aggregated knowledge") }}</h3><p>{{ tr("单任务知识可人工转换，但不会自动影响后续精炼；只有至少两个不同任务支持的规范化模式才进入自动复用。同一任务换模型重复提炼不会增加支持数。", "A task card can be converted manually but cannot influence later refinement automatically; only normalized patterns supported by at least two distinct scans are auto-reused. Re-running another model on the same scan does not add support.") }}</p></div></header>

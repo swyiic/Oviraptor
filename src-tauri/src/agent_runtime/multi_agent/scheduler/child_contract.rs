@@ -390,7 +390,7 @@ mod capability_class_tests {
             "evidence.read", "review.write", "mailbox.read", "mailbox.write",
             "public_surface_get", "authorization_probe",
             "inspect_evidence", "replay_http", "compare_identities", "targeted_discovery",
-            "browser_action", "record_hypothesis_result", "finish_target",
+            "browser_action", "record_hypothesis_result", "finish_target", "ask_operator", "call_mcp_tool",
             "repo.inventory", "repo.read_slice", "analyzer.get_result",
             "evidence.submit_candidate", "assignment.finish",
         ];

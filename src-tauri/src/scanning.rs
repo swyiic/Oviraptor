@@ -3,7 +3,7 @@
 // Thin bridge for Ownership O3 regression fixtures; available only in test builds.
 // The production function and AuthorizationControlSetup fields stay private.
 
-mod service_environment;
+pub(crate) mod service_environment;
 pub(crate) mod agent_channel;
 pub(crate) mod task_binding;
 #[cfg(test)]
@@ -204,6 +204,11 @@ include!("commands/workbench_retry.rs");
 include!("commands/scan_control.rs");
 include!("commands/scan_capability_authorization.rs");
 include!("commands/high_risk_action_approval.rs");
+include!("commands/agent_tool_permission_rules.rs");
+include!("commands/agent_operator_questions.rs");
+include!("commands/agent_mcp_client.rs");
+include!("commands/agent_scan_stats.rs");
+include!("commands/agent_headless_run.rs");
 include!("commands/rce_command_gate.rs");
 include!("commands/exposure_endpoints.rs");
 include!("commands/agent_analysis_script.rs");
@@ -215,6 +220,7 @@ include!("commands/jwt_analyzer.rs");
 include!("commands/target_egress_sandbox.rs");
 include!("commands/agent_finding_exploits.rs");
 include!("commands/attack_sweep.rs");
+include!("commands/agent_waf_strategies.rs");
 include!("commands/agent_finding_deep_dive.rs");
 include!("commands/scan_startup.rs");
 include!("commands/web_dispatch_binding.rs");

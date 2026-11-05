@@ -3,6 +3,11 @@
 // Generic wire contract only; business adapters stay in their owning modules.
 pub use native_app_sdk;
 
+pub use headless_automation::{
+    default_database_path, default_oviraptor_data_dir, read_headless_wait_job, resolve_cli_resource_root,
+    run_url_scan_cli, CliScanEnvironment,
+};
+
 mod agent_runtime;
 pub mod recovery_finance;
 mod artifact_import;
@@ -15,6 +20,7 @@ mod secret_store;
 mod auth_session;
 mod collaboration_events;
 mod commands;
+mod headless_automation;
 mod scanning;
 mod scanning_contract;
 mod conversations;
@@ -666,9 +672,37 @@ pub fn run() {
             scanning::delete_sentinel_scan,
             scanning::force_delete_sentinel_scan,
             scanning::set_scan_capability_authorization,
+            scanning::get_scan_capability_authorization,
+            scanning::get_operator_permission_tier,
+            scanning::set_operator_permission_tier,
             scanning::list_pending_high_risk_actions,
             scanning::approve_high_risk_action,
             scanning::reject_high_risk_action,
+            scanning::list_pending_operator_questions,
+            scanning::answer_operator_question,
+            scanning::dismiss_operator_question,
+            scanning::get_agent_tool_permission_rules,
+            scanning::get_scan_post_write_enabled,
+            scanning::set_scan_post_write_enabled,
+            scanning::list_scan_write_confirmations,
+            scanning::decide_scan_write_confirmation,
+            scanning::get_agent_ssrf_callback_url,
+            scanning::set_agent_ssrf_callback_url,
+            scanning::set_agent_tool_permission_rules,
+            scanning::list_agent_mcp_servers,
+            scanning::upsert_agent_mcp_server,
+            scanning::delete_agent_mcp_server,
+            scanning::get_agent_mcp_tool_allowlist,
+            scanning::set_agent_mcp_tool_allowlist,
+            scanning::list_agent_mcp_server_tools,
+            scanning::list_agent_mcp_server_catalog,
+            scanning::get_scan_agent_stats,
+            scanning::list_scan_request_log,
+            scanning::export_scan_agent_stats,
+            scanning::run_headless_url_scan,
+            scanning::get_scan_headless_snapshot,
+            scanning::get_headless_wait_job,
+            scanning::export_project_agent_stats,
             scanning::analyze_decompiled_artifact,
             scanning::probe_exposed_endpoints,
             scanning::probe_cloud_bucket,

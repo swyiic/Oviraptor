@@ -16,6 +16,7 @@ import WorkbenchSkillSelection from "../workbench/WorkbenchSkillSelection.vue";
 import WorkbenchBrowserAuth from "../workbench/WorkbenchBrowserAuth.vue";
 import WorkbenchTaskNotices from "../workbench/WorkbenchTaskNotices.vue";
 import { skillsApi } from "../../skills/api";
+import { sentinelApi } from "../api";
 import { useWorkbenchPresentation } from "../workbench/useWorkbenchPresentation";
 
 const props = defineProps<{
@@ -74,7 +75,7 @@ const form = reactive({
   // task is created — that is their deliberate affirmation, never auto-set — and
   // every dangerous action still goes through per-action approval. Clear the
   // high-risk toggle for a passive recon-only scan.
-  highRiskClasses: ["code_exec", "target_write", "egress"] as string[],
+  highRiskClasses: ["code_exec", "target_write", "post_write", "egress"] as string[],
   legalAttestation: false,
   scopeMode: "full" as "auto" | "diff" | "full",
   diffBase: "origin/main",
@@ -154,11 +155,12 @@ const { start } = useWorkbenchTaskCreation({
 // Canonical high-risk capability classes (mirror of the Rust CapabilityClass
 // high-risk variants). Order here is the display order; the ids are what the
 // backend authorization table stores.
-const HIGH_RISK_CLASSES = ["code_exec", "target_write", "egress", "internal_scope", "persistence", "exfil", "waf_evasion"] as const;
+const HIGH_RISK_CLASSES = ["code_exec", "target_write", "post_write", "egress", "internal_scope", "persistence", "exfil", "waf_evasion"] as const;
 function highRiskLabel(cls: string): string {
   switch (cls) {
     case "code_exec": return tr("命令执行 / RCE", "Command execution / RCE");
     case "target_write": return tr("对目标写入或改动", "Write / modify the target");
+    case "post_write": return tr("POST / 上传", "POST / upload");
     case "egress": return tr("出网与 OOB 外带（DNSlog 等）", "Egress & OOB callback (DNSlog etc.)");
     case "internal_scope": return tr("内网 / SSRF 深入", "Internal / SSRF reach");
     case "persistence": return tr("在目标上建立持久化", "Establish persistence on target");
@@ -170,13 +172,26 @@ function highRiskLabel(cls: string): string {
 function highRiskHint(cls: string): string {
   switch (cls) {
     case "code_exec": return tr("仅无害命令（id/whoami/ifconfig）可自动执行；其他命令逐次人工批准。", "Only harmless commands (id/whoami/ifconfig) auto-run; anything else needs per-action approval.");
-    case "target_write": return tr("任何写接口 / 变更类请求都需人工批准。", "Any write / mutating request needs per-action approval.");
-    case "egress": return tr("用于验证盲注类问题，可配置自备 DNSlog。", "For blind-class verification; a self-hosted DNSlog can be configured.");
-    case "internal_scope": return tr("放行解析到内网/环回的目标（换协议深入）；SSRF 确定性守卫其余判定不变。", "Allows reaching internal/loopback targets (protocol pivots); the rest of the deterministic SSRF guard is unchanged.");
+    case "target_write": return tr("变更类探测需人工批准。真正的 POST 正文由下面的 POST / 上传单独控制。", "Mutating probes need approval. Actual POST bodies are controlled by POST / upload below.");
+    case "post_write": return tr("默认随总开关。打开后仍须在任务里当场确认每一次写请求；不确认不会发包。", "Follows the master switch. Each write still needs a live confirmation on the task; nothing is sent without it.");
+    case "egress": return tr("盲注回连。填写你自己的 DNSLog 或 httptool 地址；不填就不能用外带回连。", "Blind callback. Enter your own DNSLog or httptool URL; without it there is no out-of-band callback.");
+    case "internal_scope": return tr("授权后由模型根据响应里出现的内网地址决定是否跟进，不预先指定，也不扫网段。", "After authorization the model follows an internal address only if it appeared in a response. Nothing is preselected and ranges are not scanned.");
     case "persistence": return tr("高度不可逆，默认证明即止、可回滚。", "Highly irreversible; proof-only and reversible by default.");
     case "exfil": return tr("仅取证明影响所需的最小样本。", "Only the minimal sample needed to prove impact.");
     case "waf_evasion": return tr("允许对拦截进行多次智能绕过尝试。", "Allows multiple intelligent evasion attempts against blocking.");
     default: return "";
+  }
+}
+const ssrfCallback = ref("");
+onMounted(() => {
+  void sentinelApi.getAgentSsrfCallbackUrl().then((value) => { ssrfCallback.value = value; }).catch(() => {});
+});
+async function saveSsrfCallback() {
+  try {
+    await sentinelApi.setAgentSsrfCallbackUrl(ssrfCallback.value.trim());
+    emit("notify", "info", tr("SSRF 回连地址已保存", "SSRF callback saved"));
+  } catch (error) {
+    emit("notify", "error", String(error));
   }
 }
 
@@ -362,6 +377,10 @@ onBeforeUnmount(() => {
                   <strong>{{ highRiskLabel(cls) }}</strong><span>{{ highRiskHint(cls) }}</span>
                 </li>
               </ul>
+              <label v-if="highRiskEnabled" class="field">
+                <span>{{ tr("SSRF 回连 URL（DNSLog 或 httptool，可空）", "SSRF callback URL (DNSLog or httptool, optional)") }}</span>
+                <input v-model="ssrfCallback" :placeholder="tr('https://你的回连域名', 'https://your-callback')" @change="saveSsrfCallback" />
+              </label>
               <label v-if="highRiskEnabled" class="checkbox-row high-risk-attest" :class="{ 'attest-missing': !form.legalAttestation }">
                 <input type="checkbox" v-model="form.legalAttestation" />
                 {{ tr("我确认已获得对以上目标的合法书面授权，并对使用这些能力负责。", "I confirm I hold written legal authorization for these targets and take responsibility for using these capabilities.") }}

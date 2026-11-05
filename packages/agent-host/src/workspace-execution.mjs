@@ -15,23 +15,26 @@ function boundedScrubbedOutput(raw){
  return {text:bytes.subarray(0,end).toString('utf8'),truncated:true};
 }
 const digest=b=>createHash('sha256').update(b).digest('hex');
-const MAX_BYTES=20*1024*1024,MAX_FILE=1024*1024;
+const MAX_BYTES=40*1024*1024,MAX_FILE=8*1024*1024;
 async function tree(root){const out=new Map();let total=0;async function walk(dir,depth=0){if(depth>16)throw error('workspace_execution_capacity');for(const entry of await readdir(dir,{withFileTypes:true})){const path=join(dir,entry.name),info=await lstat(path);if(info.isSymbolicLink()||info.nlink>1&&!info.isDirectory())throw error('workspace_path_denied');if(info.isDirectory()){await walk(path,depth+1);continue;}if(!info.isFile()||info.size>MAX_FILE||out.size>=1000||(total+=info.size)>MAX_BYTES)throw error('workspace_execution_capacity');const handle=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW);let bytes;try{const stat=await handle.stat();if(!stat.isFile()||stat.nlink>1)throw error('workspace_path_denied');bytes=await handle.readFile();}finally{await handle.close()}out.set(relative(root,path),{bytes,sha256:digest(bytes)});}}await walk(root);return out;}
-function sandbox(work,runtime,script,args){
+function sandbox(work,runtime,script,args,readRoots=[]){
+ const reads=readRoots.filter(path=>typeof path==='string'&&path.startsWith('/')&&!path.includes('\0')&&!path.includes('"'));
  if(process.platform==='darwin'&&existsSync('/usr/bin/sandbox-exec')){
   const quoted=x=>JSON.stringify(x);
   const excluded=['/Users','/Volumes','/private/var','/private/tmp','/tmp','/private/etc','/etc','/Library/Keychains','/opt/homebrew/etc'];
-  const profile=`(version 1)(deny default)(allow process-exec (literal ${quoted(runtime)}))(allow process-info* (target self))(allow sysctl-read)(allow file-read-metadata)(allow file-map-executable)(allow file-read* (require-all ${excluded.map(p=>`(require-not (subpath ${quoted(p)}))`).join(' ')}))(allow file-read* (subpath ${quoted(work)}) (literal ${quoted(runtime)}))(allow file-write* (subpath ${quoted(work)}))`;
+  const extra=reads.map(path=>`(subpath ${quoted(path)})`).join(' ');
+  const profile=`(version 1)(deny default)(allow process-exec (literal ${quoted(runtime)}))(allow process-info* (target self))(allow sysctl-read)(allow file-read-metadata)(allow file-map-executable)(allow file-read* (require-all ${excluded.map(p=>`(require-not (subpath ${quoted(p)}))`).join(' ')}))(allow file-read* (subpath ${quoted(work)}) (literal ${quoted(runtime)}) ${extra})(allow file-write* (subpath ${quoted(work)}))`;
   return ['/usr/bin/sandbox-exec',['-p',profile,runtime,script,...args]];
  }
  if(process.platform==='linux'&&existsSync('/usr/bin/bwrap')){
   const flags=['--unshare-all','--die-with-parent','--new-session','--proc','/proc','--dev','/dev','--tmpfs','/tmp'];
   for(const path of ['/usr','/bin','/lib','/lib64',dirname(runtime)])if(existsSync(path))flags.push('--ro-bind',path,path);
+  for(const path of reads)if(existsSync(path))flags.push('--ro-bind',path,path);
   flags.push('--bind',work,work,'--chdir',work,runtime,script,...args);return['/usr/bin/bwrap',flags];
  }
  throw error('workspace_execution_unsupported');
 }
-export async function executeWorkspaceScript(root,input,{executionRoot,assertAuthorized,write}){
+export async function executeWorkspaceScript(root,input,{executionRoot,assertAuthorized,write,readRoots=[]}){
  if(!input||!['node','python'].includes(input.runtime)||typeof input.path!=='string'||!input.path||isAbsolute(input.path)||input.path.split('/').some(p=>p==='..'||p==='.'||!p)||/[\\\u0000-\u001f]/u.test(input.path)||!Array.isArray(input.args??[])||(input.args??[]).length>32||(input.args??[]).some(a=>typeof a!=='string'||a.length>4096)||Object.keys(input).some(k=>!['path','runtime','args','timeoutMs'].includes(k)))throw error('workspace_execution_invalid');
  const timeoutMs=input.timeoutMs??30000;if(!Number.isSafeInteger(timeoutMs)||timeoutMs<100||timeoutMs>60000)throw error('workspace_execution_invalid');
  if(!executionRoot)throw error('workspace_execution_unsupported');
@@ -42,7 +45,7 @@ export async function executeWorkspaceScript(root,input,{executionRoot,assertAut
  const work=await mkdtemp(join(await realpath(executionRoot),'run-'));let command,argv;
  try{
   for(const[path,entry]of before){const dest=join(work,path);await mkdir(dirname(dest),{recursive:true,mode:0o700});await writeFile(dest,entry.bytes,{mode:0o600,flag:'wx'});}
-  await mkdir(join(work,'.tmp'),{mode:0o700,recursive:true});[command,argv]=sandbox(work,runtime,join(work,input.path),input.args??[]);assertAuthorized();
+  await mkdir(join(work,'.tmp'),{mode:0o700,recursive:true});[command,argv]=sandbox(work,runtime,join(work,input.path),input.args??[],readRoots);assertAuthorized();
   const result=await new Promise((resolveResult,reject)=>{
    let stdoutChunks=[],stderrChunks=[],timedOut=false,cancelled=false,settled=false,child;
    const append=(kind,chunk)=>{(kind==='out'?stdoutChunks:stderrChunks).push(Buffer.isBuffer(chunk)?chunk:Buffer.from(chunk));};

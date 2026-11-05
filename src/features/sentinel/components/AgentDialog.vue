@@ -466,7 +466,7 @@ onUnmounted(() => {
           <p class="input-hint">{{ tr("用于尚未迁入主 Agent 的角色关注点与旧指令草案。原任务校验和确认步骤仍适用；普通分析请使用上方 Agent 入口。", "For role guidance and old directive drafts not yet available in the main Agent. Original checks and confirmation still apply; use the Agent above for analysis.") }}</p>
         <form class="dialog-composer" @submit.prevent="send">
           <p class="input-hint">{{ tr("发送到", "Send to") }}：{{ !threadFilter || threadFilter === "team" ? tr("团队频道", "Team") : selectedThreadLabel }}</p>
-          <textarea v-model="draft" :aria-label="tr('调查方向与补充说明', 'Investigation correction')" rows="3" maxlength="2000" :placeholder="tr('写下要修正的方向，例如先验证登录接口，不要停在 404', 'Write a correction, for example keep testing the login endpoint instead of stopping on 404')"></textarea>
+          <textarea v-model="draft" :aria-label="tr('调查方向与补充说明', 'Investigation correction')" rows="3" maxlength="2000" :placeholder="tr('写下要修正的方向，或使用 /deepdive、/wafbypass、/recon 快捷指令', 'Write a correction, or use /deepdive, /wafbypass, /recon playbooks')"></textarea>
           <p class="input-hint">{{ tr("新建同质任务保留用于身份比对的 Cookie、Token、密码等原文。发送生成草案，确认后由主管处理。", "New homogeneous tasks preserve original cookies, tokens and passwords for identity comparison. Send creates a draft; the supervisor handles it after confirmation.") }}</p>
           <button class="button" type="submit" :disabled="sending || !draft.trim() || directiveDrafts.some((item) => item.status !== 'rejected')">{{ sending ? tr("解析中", "Parsing") : tr("解析指令", "Parse directive") }}</button>
         </form>

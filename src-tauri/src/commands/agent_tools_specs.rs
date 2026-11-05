@@ -28,7 +28,7 @@ fn agent_tool_specs() -> Vec<AgentToolSpec> {
         ),
         agent_string_tool(
             "replay_http",
-            "Replay one captured request with its recorded method, URL, headers, cookies and body. Read-only by default; a write method needs contractKey, attempt, cleanup and recoveryCondition.",
+            "Replay one captured request with its recorded method, URL, headers, cookies and body. Read-only comparisons need no confidence score. POST/PUT/PATCH/DELETE stay disabled until the operator opens the POST switch, then one in-person approval covers a bounded comparison series (default 6, max 8) on that contract. An HTML marker is sent only after the frontend render sink is HTML (escaped sinks are ignored, unmapped fields are not probed, and HTML sinks are recorded without automatic bypasses) and the operator has confirmed. A refused write does not stop other tests.",
             agent_strict_schema(&["identity","method","url"], serde_json::json!({
                 "identity": {"type":"string","minLength":1},
                 "method": {"type":"string","enum":["GET","HEAD","POST","PUT","PATCH","DELETE"]},
@@ -40,6 +40,8 @@ fn agent_tool_specs() -> Vec<AgentToolSpec> {
                 "attempt": {"type":"integer","minimum":1,"maximum":3},
                 "cleanup": {"type":"string"},
                 "recoveryCondition": {"type":"string"},
+                "confidence": {"type":"number","minimum":0,"maximum":1},
+                "confidenceRationale": {"type":"string","minLength":12,"maxLength":400},
                 "family": {"type":"string","enum": AGENT_COVERAGE_FAMILIES.to_vec()}
             })),
         ),
@@ -58,7 +60,7 @@ fn agent_tool_specs() -> Vec<AgentToolSpec> {
         ),
         agent_string_tool(
             "targeted_discovery",
-            "Verify a bounded round of path candidates that must already appear in links, forms, JS call sites, observed business vocabulary, product routes or local knowledge.",
+            "Verify a bounded round of path candidates. Words already present in links, forms, JS call sites, routes or local knowledge are probed as-is. The scan's configured cloud model may also expand those names and the domain into pinyin, initials or English path segments; unrelated dictionaries are not added.",
             agent_strict_schema(&["identity","words"], serde_json::json!({
                 "identity": {"type":"string","minLength":1},
                 "words": {"type":"array","items":{"type":"string","minLength":1,"maxLength":64},"minItems":1,"maxItems":24},
@@ -68,11 +70,22 @@ fn agent_tool_specs() -> Vec<AgentToolSpec> {
         ),
         agent_string_tool(
             "browser_action",
-            "Inspect one located read-only action or route. The capability snapshot excludes the browser probe, so this call does not start it. Only the located URL may be fetched once through the HTTP Broker, explicitly labelled browserDriven=false. This does not execute the DOM action or observe a network delta.",
+            "Open the located read-only page in the task browser runtime (headed only when OVIRAPTOR_BROWSER_HEADED=1; otherwise headless Chrome/Edge). Use this when a field has no render sink yet. It does not submit forms or uploads. If the runtime is missing, the same URL is fetched once and labelled browserDriven=false.",
             agent_strict_schema(&["identity","actionKey"], serde_json::json!({
                 "identity": {"type":"string","minLength":1},
                 "actionKey": {"type":"string","minLength":1},
                 "family": {"type":"string","enum": AGENT_COVERAGE_FAMILIES.to_vec()}
+            })),
+        ),
+        agent_string_tool(
+            "plan_ssrf_channel",
+            "Choose one SSRF proof channel from the latest response and do not send it. Use the configured callback when the response does not reveal an internal address. Use one internal host only when internal_scope is authorized and that exact address already appeared in the response or saved evidence. Never scan a range and never invent an address that was not observed.",
+            agent_strict_schema(&[], serde_json::json!({
+                "response": {"type":"string","maxLength":4000},
+                "reason": {"type":"string","maxLength":400},
+                "url": {"type":"string","format":"url"},
+                "param": {"type":"string","maxLength":128},
+                "identity": {"type":"string","minLength":1}
             })),
         ),
         agent_string_tool(
@@ -102,6 +115,25 @@ fn agent_tool_specs() -> Vec<AgentToolSpec> {
             })),
         ),
         agent_string_tool(
+            "call_mcp_tool",
+            "Invoke one tool on an operator-configured MCP server (stdio). Both the server and tool must be enabled and on the workspace MCP allowlist (default deny). Pass the tool arguments object exactly as tools/list describes.",
+            agent_strict_schema(&["serverId", "tool"], serde_json::json!({
+                "serverId": {"type":"string","minLength":1,"maxLength":64},
+                "tool": {"type":"string","minLength":1,"maxLength":128},
+                "arguments": {"type":"object"}
+            })),
+        ),
+        agent_string_tool(
+            "ask_operator",
+            "Ask the human operator a structured question when you need credentials, scope clarification, or a fork in the test plan. Optional `options` (max 8) become clickable choices in the UI. Pass `questionId` on retry to read the answer; do not recreate the same question. The operator's answer is authoritative.",
+            agent_strict_schema(&["question"], serde_json::json!({
+                "question": {"type":"string","minLength":1,"maxLength":800},
+                "context": {"type":"string","maxLength":600},
+                "options": {"type":"array","items":{"type":"string","minLength":1,"maxLength":120},"maxItems":8},
+                "questionId": {"type":"string","minLength":1,"maxLength":64}
+            })),
+        ),
+        agent_string_tool(
             "finish_target",
             "Close the target with the coverage ledger, uncovered reasons, exclusions and manual deep-dive suggestions.",
             agent_strict_schema(&["coverage","stopReason"], serde_json::json!({
@@ -127,7 +159,7 @@ fn agent_tool_specs() -> Vec<AgentToolSpec> {
         // high-risk capability class never trips the scheduling floor.
         agent_string_tool(
             "probe_command_execution",
-            "Prove a command-injection finding on the authorized target by delivering ONE command through the vulnerable request and capturing its output as evidence. Gated: the task must have authorized the code_exec class; harmless identity commands (id, whoami, ifconfig, uname, hostname, pwd, ip, arch) run automatically; any other command needs the operator's single-use approval; irreversibly destructive commands are always refused. v1 delivers through read methods only (GET/HEAD/OPTIONS) — put the placeholder {{CMD}} where the command goes in the url or a header value. Never runs anything off-target or on your host.",
+            "Prove a command-injection finding on the authorized target by delivering ONE command through the vulnerable request and capturing its output as evidence. Gated: the task must have authorized the code_exec class; harmless identity commands (id, whoami, ifconfig, uname, hostname, pwd, ip, arch) run automatically; any other command, including destructive ones, needs the operator's single-use approval and is never auto-run. v1 delivers through read methods only (GET/HEAD/OPTIONS) — put the placeholder {{CMD}} where the command goes in the url or a header value. Never runs anything off-target or on your host.",
             agent_strict_schema(&["command", "url"], serde_json::json!({
                 "command": {"type":"string","minLength":1,"maxLength":512},
                 "method": {"type":"string","enum":["GET","HEAD","OPTIONS"]},
@@ -144,7 +176,7 @@ fn agent_tool_specs() -> Vec<AgentToolSpec> {
         // authorized target_write (filtered in agent_tool_specs_for).
         agent_string_tool(
             "probe_sql_injection",
-            "Detect SQL injection at ONE injection point on the authorized target. Sends a small fixed differential set (a single quote for error-based, a true/false pair for boolean-based, one sleep for time-based) and returns which techniques are injectable. It never dumps data, never stacks statements and never writes — the proof is the response differential; after a positive result, record the finding with record_hypothesis_result using the returned requestIds. Gated: the task must have authorized the target_write class; because this probe is read-only and non-destructive (SELECT-inference only, no write, no stacked statements), once that class is authorized it runs automatically with no separate per-injection-point approval. v1 injects through GET query parameters only. Give `url` and either `param` (the query parameter to inject) or a {{INJ}} placeholder in the url; `identity` selects the session; optional `dbms` (mysql|postgres|mssql) picks the time trigger.",
+            "Detect SQL injection at ONE authorized GET parameter. Sends the unmodified value first, then asks the scan model what single next value to compare, based on the response. No fixed payload list and no data dump. Stop when the model stops. Give `url` and either `param` or a {{INJ}} placeholder; `identity` selects the session.",
             agent_strict_schema(&["url", "identity"], serde_json::json!({
                 "url": {"type":"string","format":"url"},
                 "identity": {"type":"string","minLength":1},
@@ -293,8 +325,17 @@ fn agent_tool_specs_for(context: &AgentRunContext) -> Vec<AgentToolSpec> {
     let code_exec_authorized = agent_scan_code_exec_authorized(context);
     let target_write_authorized = agent_scan_target_write_authorized(context);
     let egress_authorized = agent_scan_egress_authorized(context);
+    let Ok(connection) = db::open(&context.db_path) else {
+        return agent_tool_specs()
+            .into_iter()
+            .filter(|spec| spec.name != "call_mcp_tool")
+            .filter(|spec| source || !agent_is_source_tool(spec.name))
+            .collect();
+    };
+    let mcp_surface = scan_has_mcp_surface(&connection);
     agent_tool_specs()
         .into_iter()
+        .filter(|spec| spec.name != "call_mcp_tool" || mcp_surface)
         .filter(|spec| source || !agent_is_source_tool(spec.name))
         .filter(|spec| spec.name != "browser_action" || (!agent_channel::preflight_snapshot_excludes_browser(&context.db_path, &context.scan_id, context.attempt_number) && context.browser.is_some()))
         // The RCE probe and the sandboxed analysis script are advertised only to a scan

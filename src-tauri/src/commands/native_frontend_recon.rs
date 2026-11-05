@@ -12,10 +12,12 @@ fn native_runtime_probe(
     comparison_requests: &[JsonValue],
     comparison_only: bool,
     target_action: Option<&str>,
+    headed: bool,
     control: &NativeReconControl,
 ) -> Result<JsonValue, String> {
     let payload = serde_json::json!({
         "url": url,
+        "headed": headed,
         "authSession": auth_session.cloned().unwrap_or(JsonValue::Null),
         "timeoutMs": timeout_seconds.saturating_mul(1000),
         "explorationTimeoutMs": exploration_seconds.saturating_mul(1000),
@@ -565,6 +567,7 @@ fn run_native_frontend_recon(
             &[],
             false,
             None,
+            false,
             control,
         ) {
             Ok(runtime) => runtime,
@@ -664,6 +667,7 @@ fn run_native_frontend_recon(
                 &comparison_requests,
                 true,
                 None,
+                false,
                 control,
             );
             control.check()?;

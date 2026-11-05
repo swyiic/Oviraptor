@@ -24,9 +24,9 @@ enum RceCommandClass {
     Harmless,
     /// Anything else that is not catastrophic: the operator approves one run.
     NeedsApproval,
-    /// Catastrophic / irreversible (filesystem wipe, fork bomb, shutdown, …). A
-    /// proof tool gains nothing by running these and the damage is irreversible,
-    /// so they are refused even if an operator approval exists — the proof-mode floor.
+    /// Catastrophic / irreversible (filesystem wipe, fork bomb, shutdown, …).
+    /// Not auto-run. The operator must approve this exact command once so the
+    /// affected party can see the proof; a refusal still blocks it.
     Denied,
 }
 
@@ -46,8 +46,8 @@ const RCE_DESTRUCTIVE_FRAGMENTS: &[&str] = &[
 ];
 // Note: off-host fetch (curl/wget), pipe-to-shell and the like are NOT hard-denied
 // — they are dual-use pentest actions, so they fall to NeedsApproval and the
-// operator decides. Only catastrophic / irreversible host destruction is refused
-// outright above.
+// operator decides. Catastrophic / irreversible host destruction is the same
+// path: one explicit approval for that exact command, never an automatic run.
 
 /// Classify a command for the RCE proof gate. Checks the catastrophic floor first
 /// (so `id && rm -rf /` is Denied, not Harmless), then the harmless safelist,
@@ -111,9 +111,6 @@ fn rce_command_gate_on(
         ));
     }
     match classify_rce_command(command) {
-        RceCommandClass::Denied => Ok(HighRiskGate::Denied(
-            "该命令属于不可逆破坏类，证明工具一律拒绝执行".into(),
-        )),
         RceCommandClass::Harmless => Ok(HighRiskGate::Allow),
         RceCommandClass::NeedsApproval => high_risk_action_gate_on(
             connection,
@@ -125,6 +122,19 @@ fn rce_command_gate_on(
             &format!("执行命令以证明 RCE：{}", command.trim()),
             target,
             false,
+            Some("probe_command_execution"),
+        ),
+        RceCommandClass::Denied => high_risk_action_gate_on(
+            connection,
+            scan_id,
+            attempt_number,
+            fencing_token,
+            "code_exec",
+            &rce_action_fingerprint(command),
+            &format!("破坏性命令，需操作者单次同意后才会发到目标：{}", command.trim()),
+            target,
+            false,
+            Some("probe_command_execution"),
         ),
     }
 }
@@ -149,7 +159,8 @@ fn current_coordinator_fencing_token(connection: &rusqlite::Connection, context:
 /// gated command through the vulnerable request and capturing the output. This is
 /// the only sanctioned path for command execution: the raw `command` is gated by
 /// `rce_command_gate_on` (code_exec authorized? harmless? else single-use operator
-/// approval; irreversible destruction always refused) and only then substituted
+/// approval; irreversible destruction uses that same single-use approval, with
+/// the command text shown to the operator) and only then substituted
 /// for the `{{CMD}}` placeholder and sent through the SAME brokered transport as
 /// replay (scope / SSRF / budget / identity gates all apply). v1 is read-method
 /// only, so it cannot be used to smuggle a write past the mutation-contract gate.
@@ -166,15 +177,17 @@ fn agent_tool_probe_command_execution(
         let raw = value_first(arguments, &["method"]);
         if raw.is_empty() { "GET".to_string() } else { raw.to_ascii_uppercase() }
     };
-    if !AGENT_READ_METHODS.contains(&method.as_str()) {
-        return agent_tool_error(
-            "probe_command_execution v1 仅支持读方法(GET/HEAD/OPTIONS)投递；写方法的注入请走 replay_http 的写契约路径",
-            "method_not_supported",
-        );
-    }
     let url_template = value_first(arguments, &["url"]);
     if url_template.is_empty() {
         return agent_tool_error("缺少 url", "invalid_arguments");
+    }
+    if !AGENT_READ_METHODS.contains(&method.as_str()) {
+        if !matches!(method.as_str(), "POST" | "PUT" | "PATCH") {
+            return agent_tool_error("命令投递只允许只读方法，或经写门禁的 POST/PUT/PATCH", "method_not_supported");
+        }
+        if let Some(gate) = agent_write_gate(context, runtime, arguments, &method, &url_template) {
+            return gate;
+        }
     }
     // Deterministic command gate (never the model's judgement).
     let connection = match db::open(&context.db_path) {
@@ -317,10 +330,10 @@ mod rce_command_gate_tests {
             rce_command_gate_on(&c, "scan-a", 1, "fence-1", "whoami", "http://t").unwrap(),
             HighRiskGate::Allow
         );
-        // Destructive stays denied even with code_exec authorized.
+        // Destructive is not auto-run; the operator must approve that exact command.
         assert!(matches!(
             rce_command_gate_on(&c, "scan-a", 1, "fence-1", "rm -rf /", "http://t").unwrap(),
-            HighRiskGate::Denied(_)
+            HighRiskGate::Pending(_)
         ));
     }
 

@@ -294,7 +294,12 @@ fn sweep_send(
     client: &reqwest::blocking::Client,
     point: &InjectionPoint,
     payload: &str,
+    allow_post: bool,
 ) -> Option<(u16, String)> {
+    let write = matches!(point.method.to_ascii_uppercase().as_str(), "POST" | "PUT" | "PATCH" | "DELETE");
+    if write && !allow_post {
+        return None;
+    }
     let resp = if let Some(param) = &point.query_param {
         let url = sqli_inject_url(&point.url, param, "{{INJ}}", payload).ok()?;
         client.request(http_method(&point.method), &url).send().ok()?
@@ -328,10 +333,10 @@ fn xss_marker_reflected(body: &str, raw_marker: &str) -> bool {
 /// Reflected-XSS probe: inject a unique `<ovrx…>` marker and check it is echoed back
 /// with the angle brackets intact. Reported, but at LOW severity — many SRC programs
 /// don't accept reflected XSS; STORED XSS (below) is the high-value class. Both kept.
-fn sweep_probe_xss(client: &reqwest::blocking::Client, point: &InjectionPoint) -> Option<JsonValue> {
+fn sweep_probe_xss(client: &reqwest::blocking::Client, point: &InjectionPoint, allow_post: bool) -> Option<JsonValue> {
     let digest = format!("{:x}", Sha256::digest(point.label.as_bytes()));
     let marker = format!("<ovrx{}>", &digest[..8]);
-    let (_status, body) = sweep_send(client, point, &marker)?;
+    let (_status, body) = sweep_send(client, point, &marker, allow_post)?;
     if xss_marker_reflected(&body, &marker) {
         Some(serde_json::json!({
             "point": point.label, "method": point.method, "url": point.url,
@@ -374,34 +379,15 @@ fn sweep_probe_stored_xss(
     client: &reqwest::blocking::Client,
     point: &InjectionPoint,
     display_urls: &[String],
+    allow_post: bool,
 ) -> Option<JsonValue> {
     let field = point.body_field.as_ref()?;
-    if !is_stored_xss_content_field(field) {
+    if !is_stored_xss_content_field(field) || !allow_post {
         return None;
     }
-    let digest = format!("{:x}", Sha256::digest(point.label.as_bytes()));
-    let marker = format!("<ovrx{}>", &digest[..8]);
-    let (post_status, post_body) = sweep_send(client, point, &marker)?;
-    // Some apps echo the created record straight back — that counts as stored+unencoded.
-    if stored_xss_marker_persisted(&post_body, &marker) {
-        return Some(serde_json::json!({
-            "point": point.label, "field": field, "marker": marker,
-            "surface": "post_response", "postStatus": post_status,
-        }));
-    }
-    // Otherwise read the display surfaces (the same collection's listing, discovered
-    // GET endpoints) and look for the persisted marker.
-    for url in display_urls.iter().take(40) {
-        let Ok(resp) = client.get(url).header(reqwest::header::USER_AGENT, "oviraptor-sweep/1.0").send() else { continue };
-        let mut buf = Vec::new();
-        let _ = std::io::Read::take(resp, 262_144).read_to_end(&mut buf);
-        if stored_xss_marker_persisted(&String::from_utf8_lossy(&buf), &marker) {
-            return Some(serde_json::json!({
-                "point": point.label, "field": field, "marker": marker,
-                "surface": url, "postStatus": post_status,
-            }));
-        }
-    }
+    // Markers are not planted here. replay_http sends one only after the frontend
+    // sink is classified as HTML and the operator confirms that write.
+    let _ = (client, display_urls);
     None
 }
 
@@ -418,9 +404,9 @@ fn cmdi_output_present(body: &str) -> bool {
 /// Command-injection probe: a small canonical set of shell break-outs running `id`
 /// (echo signal), then a time-based fallback (`; sleep 5`). Detection only — it runs
 /// the harmless `id` / `sleep`, never a destructive command.
-fn sweep_probe_cmdi(client: &reqwest::blocking::Client, point: &InjectionPoint) -> Option<JsonValue> {
+fn sweep_probe_cmdi(client: &reqwest::blocking::Client, point: &InjectionPoint, allow_post: bool) -> Option<JsonValue> {
     for payload in [";id", "|id", "$(id)", "`id`", "&&id"] {
-        if let Some((_status, body)) = sweep_send(client, point, payload) {
+        if let Some((_status, body)) = sweep_send(client, point, payload, allow_post) {
             if cmdi_output_present(&body) {
                 return Some(serde_json::json!({
                     "point": point.label, "method": point.method, "url": point.url,
@@ -433,7 +419,7 @@ fn sweep_probe_cmdi(client: &reqwest::blocking::Client, point: &InjectionPoint) 
     // injection even with no echoed output.
     let timed_ms = |payload: &str| -> Option<i64> {
         let started = std::time::Instant::now();
-        let _ = sweep_send(client, point, payload)?;
+        let _ = sweep_send(client, point, payload, allow_post)?;
         Some(started.elapsed().as_millis() as i64)
     };
     let base = timed_ms("")?;
@@ -478,9 +464,9 @@ fn mass_assign_accepted(resp_body: &str) -> bool {
         || l.contains("\"ispremium\":true")
 }
 
-fn sweep_probe_mass_assignment(client: &reqwest::blocking::Client, point: &InjectionPoint) -> Option<JsonValue> {
+fn sweep_probe_mass_assignment(client: &reqwest::blocking::Client, point: &InjectionPoint, allow_post: bool) -> Option<JsonValue> {
     let base = point.base_body.as_ref()?;
-    if !matches!(point.method.as_str(), "POST" | "PUT" | "PATCH") {
+    if !allow_post || !matches!(point.method.as_str(), "POST" | "PUT" | "PATCH") {
         return None;
     }
     let body = mass_assign_probe_body(base);
@@ -516,7 +502,10 @@ fn is_business_value_field(field: &str) -> bool {
     BUSINESS_VALUE_FIELDS.iter().any(|k| l == *k || l.ends_with(k))
 }
 
-fn sweep_probe_business_numeric(client: &reqwest::blocking::Client, point: &InjectionPoint) -> Option<JsonValue> {
+fn sweep_probe_business_numeric(client: &reqwest::blocking::Client, point: &InjectionPoint, allow_post: bool) -> Option<JsonValue> {
+    if !allow_post && matches!(point.method.to_ascii_uppercase().as_str(), "POST" | "PUT" | "PATCH" | "DELETE") {
+        return None;
+    }
     let field = point.body_field.as_ref()?;
     let base = point.base_body.as_ref()?;
     if !is_business_value_field(field) {
@@ -559,7 +548,10 @@ fn auth_enum_differs(a: (u16, usize), b: (u16, usize)) -> bool {
     a.0 != b.0 || (a.1 as i64 - b.1 as i64).abs() > 24.max((a.1 / 8) as i64)
 }
 
-fn sweep_probe_auth_enum(client: &reqwest::blocking::Client, point: &InjectionPoint) -> Option<JsonValue> {
+fn sweep_probe_auth_enum(client: &reqwest::blocking::Client, point: &InjectionPoint, allow_post: bool) -> Option<JsonValue> {
+    if !allow_post && matches!(point.method.to_ascii_uppercase().as_str(), "POST" | "PUT" | "PATCH" | "DELETE") {
+        return None;
+    }
     let field = point.body_field.as_ref()?;
     let base = point.base_body.as_ref()?;
     let path = reqwest::Url::parse(&point.url).ok()?.path().to_string();
@@ -593,6 +585,70 @@ fn sweep_probe_auth_enum(client: &reqwest::blocking::Client, point: &InjectionPo
         }))
     } else {
         None
+    }
+}
+
+fn readonly_model_url(connection: &rusqlite::Connection, blocked_url: &str, status: u16, body: &str) -> Option<String> {
+    let profile = crate::model_configuration::gateway_profile_on(connection, None).ok()?;
+    let snippet: String = body.chars().take(300).collect();
+    let prompt = format!("上一发只读请求被拦截。url={blocked_url} status={status} body={snippet}。只给出同主机的下一发 GET 用于对照。不要 POST，不要标签，不要绕过清单。只输出 JSON：{{\"url\":\"\"}}，应停止时 url 为空。");
+    let body = serde_json::json!({
+        "model": profile.model,
+        "messages": [
+            {"role":"system","content":"你只安排同主机的只读对照请求。只输出 JSON {\"url\":\"\"}。"},
+            {"role":"user","content":prompt}
+        ],
+        "temperature": 0.1,
+        "max_tokens": 200,
+        "stream": false
+    });
+    let request_body = serde_json::to_vec(&body).ok()?;
+    let mut request = TransportRequest::post(&profile.endpoint, request_body).header("content-type", "application/json");
+    if let Some(bearer) = profile.bearer() {
+        request = request.header("authorization", format!("Bearer {bearer}"));
+    }
+    request.total_timeout = Some(Duration::from_secs(30));
+    request.proxy = profile.proxy.clone();
+    let response = transport::send(request, std::sync::Arc::new(|| false), Box::new(|_| true)).ok()?;
+    if !(200..300).contains(&response.status) {
+        return None;
+    }
+    let parsed: JsonValue = serde_json::from_slice(&response.body).ok()?;
+    let text = parsed.pointer("/choices/0/message/content").and_then(JsonValue::as_str)?;
+    let start = text.find('{')?;
+    let end = text.rfind('}')?;
+    let value: JsonValue = serde_json::from_str(&text[start..=end]).ok()?;
+    let url = value.get("url").and_then(JsonValue::as_str).unwrap_or("").trim().to_string();
+    if url.is_empty() || url.contains('<') || !same_host(blocked_url, &url) {
+        return None;
+    }
+    Some(url)
+}
+
+fn readonly_blocked_followups(
+    client: &reqwest::blocking::Client,
+    connection: &rusqlite::Connection,
+    scan_id: &str,
+    points: &[InjectionPoint],
+) {
+    let mut used = 0usize;
+    for point in points {
+        if used >= 3 || !matches!(point.method.to_ascii_uppercase().as_str(), "GET" | "HEAD") {
+            continue;
+        }
+        let Some((status, body)) = sweep_send(client, point, "", true) else { continue };
+        if !looks_like_waf(status, &body) {
+            continue;
+        }
+        used += 1;
+        let next = readonly_model_url(connection, &point.url, status, &body);
+        let note = if let Some(url) = next {
+            let followed = client.get(&url).send().ok().map(|response| response.status().as_u16());
+            format!("拦截 {} {}。只读对照 {} → {:?}", point.url, status, url, followed)
+        } else {
+            format!("拦截 {} {}。模型没有给出同主机只读对照", point.url, status)
+        };
+        record_pending_observation(connection, scan_id, "拦截后的只读对照", &note);
     }
 }
 
@@ -630,6 +686,7 @@ pub fn run_attack_sweep(
     if !scan_capability_class_authorized(&connection, &scan_id, attempt, "target_write").unwrap_or(false) {
         return Err("攻击扫荡需先为该任务授权 target_write 能力并完成合法授权声明(强制开关)".into());
     }
+    let allow_post = agent_post_write_enabled(&connection, &scan_id);
 
     let client = reqwest::blocking::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
@@ -712,7 +769,7 @@ pub fn run_attack_sweep(
     // Pass 3a — reflected XSS: kept, but LOW severity (many SRC don't accept it).
     let mut reflected_findings = 0usize;
     for point in &points {
-        let Some(evidence) = sweep_probe_xss(&client, point) else { continue };
+        let Some(evidence) = sweep_probe_xss(&client, point, allow_post) else { continue };
         reflected_findings += 1;
         let record = serde_json::json!({
             "evidence": evidence, "cwe": "CWE-79",
@@ -732,7 +789,7 @@ pub fn run_attack_sweep(
     // endpoints). This is the XSS class that actually matters.
     let mut xss_findings = 0usize;
     for point in &points {
-        let Some(evidence) = sweep_probe_stored_xss(&client, point, &get_urls) else { continue };
+        let Some(evidence) = sweep_probe_stored_xss(&client, point, &get_urls, allow_post) else { continue };
         xss_findings += 1;
         let record = serde_json::json!({
             "evidence": evidence, "cwe": "CWE-79",
@@ -751,7 +808,7 @@ pub fn run_attack_sweep(
     // time-based blind fallback. Detection only (runs id / sleep, nothing destructive).
     let mut cmdi_findings = 0usize;
     for point in &points {
-        let Some(evidence) = sweep_probe_cmdi(&client, point) else { continue };
+        let Some(evidence) = sweep_probe_cmdi(&client, point, allow_post) else { continue };
         cmdi_findings += 1;
         let record = serde_json::json!({
             "evidence": evidence, "cwe": "CWE-78",
@@ -774,7 +831,7 @@ pub fn run_attack_sweep(
         if point.base_body.is_none() || !ma_seen.insert(point.url.clone()) {
             continue; // one probe per endpoint
         }
-        let Some(evidence) = sweep_probe_mass_assignment(&client, point) else { continue };
+        let Some(evidence) = sweep_probe_mass_assignment(&client, point, allow_post) else { continue };
         mass_assign_findings += 1;
         let record = serde_json::json!({
             "evidence": evidence, "cwe": "CWE-915",
@@ -789,6 +846,7 @@ pub fn run_attack_sweep(
         );
     }
 
+    readonly_blocked_followups(&client, &connection, &scan_id, &points);
     let total = injectable + access_findings + reflected_findings + xss_findings + cmdi_findings + mass_assign_findings;
     Ok(serde_json::json!({
         "probed": probed,
@@ -832,6 +890,7 @@ pub(crate) fn attack_sweep_for_scan(db_path: &std::path::Path, scan_id: &str, ba
     if !scan_capability_class_authorized(&connection, scan_id, attempt, "target_write").unwrap_or(false) {
         return skip("target_write 未授权，跳过主动攻击 sweep");
     }
+    let allow_post = agent_post_write_enabled(&connection, scan_id);
     let Ok(client) = reqwest::blocking::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .no_proxy()
@@ -864,21 +923,21 @@ pub(crate) fn attack_sweep_for_scan(db_path: &std::path::Path, scan_id: &str, ba
         }
     }
     for point in &points {
-        if let Some(ev) = sweep_probe_xss(&client, point) {
+        if let Some(ev) = sweep_probe_xss(&client, point, allow_post) {
             xssr += 1;
             write("reflected_xss", &point.label, &format!("反射型 XSS(低危)：{}", point.label), "low",
                 &serde_json::json!({"evidence": ev, "cwe": "CWE-79"}));
         }
     }
     for point in &points {
-        if let Some(ev) = sweep_probe_stored_xss(&client, point, &get_urls) {
+        if let Some(ev) = sweep_probe_stored_xss(&client, point, &get_urls, allow_post) {
             xsss += 1;
             write("stored_xss", &point.label, &format!("存储型 XSS：{}", point.label), "high",
                 &serde_json::json!({"evidence": ev, "cwe": "CWE-79"}));
         }
     }
     for point in &points {
-        if let Some(ev) = sweep_probe_cmdi(&client, point) {
+        if let Some(ev) = sweep_probe_cmdi(&client, point, allow_post) {
             cmdi += 1;
             write("command_injection", &point.label, &format!("命令注入：{}", point.label), "critical",
                 &serde_json::json!({"evidence": ev, "cwe": "CWE-78"}));
@@ -889,12 +948,13 @@ pub(crate) fn attack_sweep_for_scan(db_path: &std::path::Path, scan_id: &str, ba
         if point.base_body.is_none() || !ma_seen.insert(point.url.clone()) {
             continue;
         }
-        if let Some(ev) = sweep_probe_mass_assignment(&client, point) {
+        if let Some(ev) = sweep_probe_mass_assignment(&client, point, allow_post) {
             ma += 1;
             write("mass_assignment", &point.url, &format!("批量赋值/权限提升：{}", point.url), "high",
                 &serde_json::json!({"evidence": ev, "cwe": "CWE-915"}));
         }
     }
+    readonly_blocked_followups(&client, &connection, scan_id, &points);
     for url in get_urls.iter().take(80) {
         let Ok(resp) = client.get(url).header(reqwest::header::USER_AGENT, "oviraptor-sweep/1.0").send() else { continue };
         if resp.status().as_u16() != 200 {
@@ -920,14 +980,14 @@ pub(crate) fn attack_sweep_for_scan(db_path: &std::path::Path, scan_id: &str, ba
     // VOLUME (1 / 2 packets per eligible point), never batch-fuzzed.
     let (mut biz, mut authe) = (0usize, 0usize);
     for point in &points {
-        if let Some(ev) = sweep_probe_business_numeric(&client, point) {
+        if let Some(ev) = sweep_probe_business_numeric(&client, point, allow_post) {
             biz += 1;
             write("business_logic", &point.label, &format!("业务逻辑(数值篡改候选)：{}", point.label), "medium",
                 &serde_json::json!({"evidence": ev, "cwe": "CWE-840"}));
         }
     }
     for point in &points {
-        if let Some(ev) = sweep_probe_auth_enum(&client, point) {
+        if let Some(ev) = sweep_probe_auth_enum(&client, point, allow_post) {
             authe += 1;
             write("account_enumeration", &point.label, &format!("账号枚举：{}", point.label), "medium",
                 &serde_json::json!({"evidence": ev, "cwe": "CWE-204"}));

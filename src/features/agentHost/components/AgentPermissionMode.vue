@@ -2,6 +2,7 @@
 import { refreshFeedback as vRefreshFeedback } from '../../../shared/directives/refreshFeedback';
 import { onBeforeUnmount, ref, watch } from 'vue';
 import { ShieldCheck } from '@lucide/vue';
+import { invoke } from '@tauri-apps/api/core';
 import { useI18n } from '../../../i18n';
 import type { AgentHostChatClient } from '../chatClient';
 import type { AgentAccessMode, AgentAccessPolicy } from '../types';
@@ -23,6 +24,9 @@ async function change(event:Event){
  if(!current||!projectId||saving.value||props.disabled||mode===current.mode)return;
  const seq=epoch;saving.value=true;error.value='';
  try{const value=await props.client.setAccessPolicy({projectId,mode,expectedRevision:current.revision,expectedRuntimeIdentity:current.runtimeIdentity,operatorConfirmed:mode!=='ask'});
+  // The host picker is axis 1. Mirror the same tier into the scan database so
+  // the high-risk gate uses it. A failure here does not roll back the host mode.
+  void invoke('set_operator_permission_tier',{tier:mode}).catch(()=>{});
  if(disposed||seq!==epoch||projectId!==props.projectId)return;policy.value=value;select.value=value.mode;emit('changed',value);
  if(typeof window!=='undefined'&&typeof CustomEvent!=='undefined')window.dispatchEvent(new CustomEvent('oviraptor:access-policy-changed',{detail:{projectId}}));
  }catch(e){if(seq===epoch)error.value=tr('权限模式未保存，请刷新后重试','Permission mode was not saved. Refresh and retry.')+` (${String((e as Error).message||e)})`;}
@@ -36,8 +40,8 @@ onBeforeUnmount(()=>{disposed=true;++epoch;if(typeof window!=='undefined')window
 <template>
  <div class="agent-permission-mode" :class="{compact}" data-testid="agent-permission-mode">
   <label><ShieldCheck :size="14"/><span v-if="!compact">{{tr('Agent 权限模式','Agent permission mode')}}</span><select :value="policy?.mode||'ask'" :disabled="disabled||loading||saving||!policy" :aria-label="tr('Agent 权限模式','Agent permission mode')" @change="change"><option value="ask">{{tr('询问审批','Ask each time')}}</option><option value="auto">{{tr('自动审批','Auto-approve')}}</option><option value="full">{{tr('完全访问','Full access')}}</option></select><small v-if="saving">{{tr('保存中…','Saving…')}}</small></label>
-  <p v-if="!compact" class="mode-summary">{{policy?.mode==='full'?tr('自动允许当前已启用应用、会话文件读写及隔离脚本执行。','Allows enabled apps, conversation file access and isolated script execution.'):policy?.mode==='auto'?tr('自动允许只读与隔离脚本执行；写入文件、应用操作等仍逐次确认。','Auto-allows read and isolated script runs; file writes and app actions still confirm each time.'):tr('未授权操作逐次确认；已保存的应用授权继续生效。','Confirms ungranted operations; saved app grants remain active.')}}</p>
- <details v-if="!compact" class="mode-details"><summary>{{tr('作用范围与模式说明','Scope and mode details')}}</summary><p class="mode-help">{{tr('对本工作空间的所有对话生效，配置中心与聊天同步，重启后保留。询问审批：未授权操作逐次确认，已保存的应用授权继续生效。自动审批：自动放行只读与隔离脚本执行等非破坏操作，写入文件和应用操作仍逐次确认。完全访问：自动允许当前已启用应用及会话文件读写及隔离脚本执行。三档都不改变目标授权、范围/SSRF 守卫与回路断路——这些是安全底线。','Shared by Configuration and every chat in this workspace, and retained after restart. Ask confirms every ungranted operation. Auto-approve auto-allows non-destructive ops (read and isolated script runs); file writes and app actions still confirm. Full access permits enabled apps, conversation file read/write and isolated scripts. None of the three changes target authorization, scope/SSRF guards, or the loop breaker — those are the safety floor.')}}</p></details>
+  <p v-if="!compact" class="mode-summary">{{policy?.mode==='full'?tr('完全放开：抓取、浏览器、发请求、本机命令、源码读取和探测都直接执行。你判定合理并下了指令后，Agent 不得拒绝。','Full access runs fetch, browser, requests, shell, source reading and probes. After you judge an instruction reasonable, the agent must not refuse.'):policy?.mode==='auto'?tr('自动审批：上述操作直接执行，不再逐次弹窗。你下了指令后，Agent 不得拒绝。','Auto-approve runs those operations without a popup. After you give an instruction, the agent must not refuse.'):tr('每次询问：第一次访问网址或文件会请你确认。确认后必须执行，不得拒绝。','Ask each time: the first URL or file access asks you. After you confirm, it must run and must not refuse.')}}</p>
+ <details v-if="!compact" class="mode-details"><summary>{{tr('作用范围与模式说明','Scope and mode details')}}</summary><p class="mode-help">{{tr('对本工作空间的所有对话生效，配置中心与聊天同步，重启后保留。询问审批：第一次访问会确认，确认后执行你的指令。自动审批：抓取、浏览器、请求、命令、源码和探测直接执行。完全放开：同样直接执行，并且你判定合理后的指令不得拒绝。链路本地地址仍然不访问。','Shared by Configuration and every chat in this workspace, and retained after restart. Ask confirms the first access, then runs your instruction. Auto-approve runs fetch, browser, requests, shell, source and probes. Full access does the same, and must not refuse an instruction you judged reasonable. Link-local addresses stay blocked.')}}</p></details>
   <p v-if="policy?.needsReview" class="mode-help">{{tr('模型接收方已变化，请重新选择权限模式。','The model recipient changed. Select the mode again.')}}</p>
   <p v-if="error" class="mode-error" role="alert">{{error}} <button v-refresh-feedback="{scope:projectId,busy:loading,error}" type="button" @click="load">{{tr('刷新','Refresh')}}</button></p>
  </div>

@@ -212,6 +212,43 @@ fn sqli_inject_url(url: &str, param: &str, placeholder: &str, payload: &str) -> 
 
 /// Stable per-injection-point fingerprint for the single-use approval, so approving
 /// one injection point never approves a different url/param.
+struct SqliStep { stop: bool, payload: String, difference: bool, reason: String }
+
+fn sqli_model_step(connection: &rusqlite::Connection, param: &str, transcript: &str) -> Option<SqliStep> {
+    let profile = crate::model_configuration::gateway_profile_on(connection, None).ok()?;
+    let prompt = format!("参数 {param}。目前的对照：{transcript}。根据响应决定下一发只读 GET 的参数值。只输出 JSON {{\"stop\":false,\"payload\":\"\",\"difference\":false,\"reason\":\"\"}}。difference 仅在你已经看到稳定差异时为 true。不要导出数据，不要写库，不要一次给多条。应停止则 stop=true。");
+    let body = serde_json::json!({
+        "model": profile.model,
+        "messages": [
+            {"role":"system","content":"你根据响应决定下一次只读 SQL 对照，不使用固定 payload 清单。只输出 JSON。"},
+            {"role":"user","content":prompt}
+        ],
+        "temperature": 0.1,
+        "max_tokens": 220,
+        "stream": false
+    });
+    let bytes = serde_json::to_vec(&body).ok()?;
+    let mut request = TransportRequest::post(&profile.endpoint, bytes).header("content-type", "application/json");
+    if let Some(bearer) = profile.bearer() {
+        request = request.header("authorization", format!("Bearer {bearer}"));
+    }
+    request.total_timeout = Some(Duration::from_secs(30));
+    let response = transport::send(request, std::sync::Arc::new(|| false), Box::new(|_| true)).ok()?;
+    let parsed: JsonValue = serde_json::from_slice(&response.body).ok()?;
+    let text = parsed.pointer("/choices/0/message/content").and_then(JsonValue::as_str)?;
+    let start = text.find('{')?;
+    let end = text.rfind('}')?;
+    let value: JsonValue = serde_json::from_str(&text[start..=end]).ok()?;
+    let payload = value.get("payload").and_then(JsonValue::as_str).unwrap_or("").trim().to_string();
+    if payload.len() > 180 { return None; }
+    Some(SqliStep {
+        stop: value.get("stop").and_then(JsonValue::as_bool).unwrap_or(false),
+        payload,
+        difference: value.get("difference").and_then(JsonValue::as_bool).unwrap_or(false),
+        reason: value.get("reason").and_then(JsonValue::as_str).unwrap_or("").chars().take(240).collect(),
+    })
+}
+
 fn sqli_action_fingerprint(method: &str, url: &str, param: &str) -> String {
     let digest = Sha256::digest(format!("sqli:{method}:{url}:{param}").as_bytes());
     format!("{digest:x}")
@@ -271,6 +308,7 @@ fn agent_tool_probe_sql_injection(
         &summary,
         &context.target_url,
         true, // reversible: non-destructive SELECT-inference, no write
+        Some("probe_sql_injection"),
     ) {
         Ok(gate) => gate,
         Err(error) => return agent_tool_error(&error, "high_risk_gate_unavailable"),
@@ -290,78 +328,67 @@ fn agent_tool_probe_sql_injection(
         HighRiskGate::Allow => {}
     }
 
-    // Pick the sleep trigger for the hinted DB family (default MySQL).
-    let sleep = SQLI_SLEEP_PROBES
-        .iter()
-        .find(|p| p.family == family)
-        .unwrap_or(&SQLI_SLEEP_PROBES[0]);
-
-    // The fixed differential probe set. Baseline first (clean), then the signals.
-    let probes: [(&str, &str); 5] = [
-        ("baseline", ""),
-        ("error", "'"),
-        ("boolean_true", "' AND '1'='1"),
-        ("boolean_false", "' AND '1'='2"),
-        ("time", sleep.payload),
-    ];
-
-    let mut responses: Vec<(&str, JsonValue)> = Vec::new();
-    let mut request_ids: Vec<String> = Vec::new();
-    for (label, payload) in probes {
-        let injected = match sqli_inject_url(&url, &param, &placeholder, payload) {
-            Ok(value) => value,
-            Err(error) => return agent_tool_error(&error, "invalid_arguments"),
-        };
-        let response = match agent_http_request(
-            context,
-            runtime,
-            &identity,
-            method,
-            &injected,
-            Vec::new(),
-            None,
-            None,
-            "",
-            "sql_injection",
-            ScopeSource::HttpReplay,
-            "probe_sql_injection",
-        ) {
-            Ok(value) => value,
-            Err(error) => return error,
-        };
-        if let Err(error) = persist_agent_evidence(context, &response, "probe_sql_injection") {
-            return serde_json::json!({"error": error, "code": "evidence_write_failed"});
-        }
-        request_ids.push(value_first(&response, &["requestId"]));
-        responses.push((label, response));
-    }
-
-    let get = |name: &str| -> &JsonValue {
-        responses
-            .iter()
-            .find(|(label, _)| *label == name)
-            .map(|(_, value)| value)
-            .unwrap_or(&JsonValue::Null)
+    let baseline_url = match sqli_inject_url(&url, &param, &placeholder, "") {
+        Ok(value) => value,
+        Err(error) => return agent_tool_error(&error, "invalid_arguments"),
     };
-    let verdict = classify_sqli(
-        get("baseline"),
-        get("error"),
-        get("boolean_true"),
-        get("boolean_false"),
-        get("time"),
+    let baseline = match agent_http_request(
+        context, runtime, &identity, method, &baseline_url, Vec::new(), None, None, "",
+        "sql_injection", ScopeSource::HttpReplay, "probe_sql_injection",
+    ) {
+        Ok(value) => value,
+        Err(error) => return error,
+    };
+    let _ = persist_agent_evidence(context, &baseline, "probe_sql_injection");
+    let mut request_ids = vec![value_first(&baseline, &["requestId"])];
+    let mut transcript = format!(
+        "基线 status={} preview={}",
+        baseline.get("status").and_then(JsonValue::as_u64).unwrap_or(0),
+        value_first(&baseline, &["preview", "body"]).chars().take(400).collect::<String>()
     );
+    let mut injectable = false;
+    let mut reason = String::new();
+    let mut steps = Vec::new();
+    for _ in 0..6 {
+        let Some(step) = sqli_model_step(&connection, &param, &transcript) else { break };
+        if step.stop {
+            reason = step.reason;
+            break;
+        }
+        let Ok(injected) = sqli_inject_url(&url, &param, &placeholder, &step.payload) else { break };
+        if !same_host(&url, &injected) {
+            break;
+        }
+        let Ok(response) = agent_http_request(
+            context, runtime, &identity, "GET", &injected, Vec::new(), None, None, "",
+            "sql_injection", ScopeSource::HttpReplay, "probe_sql_injection",
+        ) else { break };
+        let _ = persist_agent_evidence(context, &response, "probe_sql_injection");
+        request_ids.push(value_first(&response, &["requestId"]));
+        let status = response.get("status").and_then(JsonValue::as_u64).unwrap_or(0);
+        let preview = value_first(&response, &["preview", "body"]).chars().take(400).collect::<String>();
+        steps.push(serde_json::json!({"payload": step.payload, "status": status, "reason": step.reason}));
+        transcript = format!("上一发 payload={} status={status} preview={preview}", step.payload);
+        if step.difference {
+            injectable = true;
+            reason = step.reason;
+            break;
+        }
+    }
+    record_pending_observation(&connection, &context.scan_id, "SQL 注入判断", &format!("injectable={injectable} {reason}"));
 
     serde_json::json!({
         "accepted": true,
-        "injectable": verdict.any(),
-        "techniques": verdict.techniques(),
-        "dbmsHint": sleep.family,
+        "injectable": injectable,
+        "readonlyFollowup": steps,
+        "techniques": [],
+        "dbmsHint": family,
         "injectionPoint": {"method": method, "url": url, "param": param},
         "evidenceRequestIds": request_ids,
-        "hint": if verdict.any() {
-            "已发现注入差异证据；请用 record_hypothesis_result 以这些 requestId 作为控制/测试请求登记 sql_injection 结论，并给出复现步骤与影响。不要导出数据。"
+        "hint": if injectable {
+            "模型根据对照响应判断存在差异。请用 record_hypothesis_result 登记，不要导出数据。"
         } else {
-            "未发现注入差异；记录 insufficient_evidence 或换注入点/上下文(numeric vs string)再试。"
+            "模型未确认差异，或已停止。不要改用固定 payload 清单。"
         },
     })
 }

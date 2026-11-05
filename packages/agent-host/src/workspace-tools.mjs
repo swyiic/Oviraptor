@@ -1,6 +1,9 @@
 import { constants } from 'node:fs';
 import {recordVersion,privateDirectory} from './workspace-versions.mjs';
 import {executeWorkspaceScript} from './workspace-execution.mjs';
+import { saveFetchedUrl } from './cited-pages.mjs';
+import { readFileRange } from './cited-files.mjs';
+import { browsePage, runHostShell, sourceList, sourceSearch } from './chat-tools.mjs';
 import { mkdir, readdir, lstat, realpath, open, rename, unlink, readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -36,6 +39,61 @@ export const WORKSPACE_TOOL_SPECS = [
     inputSchema: { type: 'object', properties: { pattern: { type: 'string' }, path: { type: 'string' }, include: { type: 'string' }, caseInsensitive: { type: 'boolean' }, literal: { type: 'boolean' }, maxResults: { type: 'integer', minimum: 1, maximum: 1000 } }, required: ['pattern'], additionalProperties: false },
   },
   {
+    name: 'workspace_read_path',
+    description: 'Read a window of a local file that was left at its original path because it is larger than 1MB. offset is a byte offset. length is at most 262144. Does not copy the file into the workspace.',
+    inputSchema: { type: 'object', properties: { path: { type: 'string' }, offset: { type: 'integer', minimum: 0 }, length: { type: 'integer', minimum: 1, maximum: 262144 } }, required: ['path'], additionalProperties: false },
+  },
+  {
+    name: 'workspace_fetch',
+    description: 'After the user confirms material access, fetch an http(s) URL and save it. Small responses land in the workspace. Responses over 8MB are stored outside the workspace and returned as absolutePath; read them with workspace_read_path. Do not ask the user to download files.',
+    inputSchema: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'], additionalProperties: false },
+  },
+  {
+    name: 'workspace_http',
+    description: 'Send one http(s) request with method, headers and body after material access is confirmed. Saves the response like workspace_fetch. Use this for a request the user pasted, including POST. Does not scan ranges.',
+    inputSchema: { type: 'object', properties: { url: { type: 'string' }, method: { type: 'string' }, headers: { type: 'object', additionalProperties: { type: 'string' } }, body: { type: 'string' } }, required: ['url'], additionalProperties: false },
+  },
+  {
+    name: 'workspace_browser',
+    description: 'Open one http(s) page in headless Chrome after material access is confirmed. Records the requests the page actually makes and saves same-page script bodies under cited-web. Use this when encryption is loaded only after the page runs.',
+    inputSchema: { type: 'object', properties: { url: { type: 'string' }, timeoutMs: { type: 'integer', minimum: 1000, maximum: 30000 } }, required: ['url'], additionalProperties: false },
+  },
+  {
+    name: 'workspace_probe_sql',
+    description: 'After access is allowed, compare one GET parameter. Sends the original URL, then up to 6 values supplied in `values`, and saves each response. Use this when the user judged a SQL comparison reasonable and told you to run it. Do not invent a range scan.',
+    inputSchema: { type: 'object', properties: { url: { type: 'string' }, param: { type: 'string' }, values: { type: 'array', maxItems: 6, items: { type: 'string' } } }, required: ['url', 'param', 'values'], additionalProperties: false },
+  },
+  {
+    name: 'workspace_probe_command',
+    description: 'After access is allowed, send one request that places `command` in a query parameter or header on the user-authorized URL. Saves the response. Do not run the command on this machine; use workspace_shell for local commands.',
+    inputSchema: { type: 'object', properties: { url: { type: 'string' }, method: { type: 'string' }, param: { type: 'string' }, header: { type: 'string' }, command: { type: 'string' } }, required: ['url', 'command'], additionalProperties: false },
+  },
+  {
+    name: 'workspace_source_list',
+    description: 'List one directory the user named, after access is allowed. Does not copy the tree.',
+    inputSchema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'], additionalProperties: false },
+  },
+  {
+    name: 'workspace_source_search',
+    description: 'Search a literal string under a directory the user named, after access is allowed. Skips symlinks and files over 8MB. Returns a short snippet and byte offset.',
+    inputSchema: { type: 'object', properties: { path: { type: 'string' }, query: { type: 'string' } }, required: ['path', 'query'], additionalProperties: false },
+  },
+  {
+    name: 'workspace_chain_read',
+    description: 'Read this conversation analysis chain. The next action must use the latest fact whose opensNext is true. File identification and file excerpts are part of the same chain.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'workspace_chain_add',
+    description: 'Record one typed fact on the chain after you have evidence. factType is request_captured, crypto_function, plaintext_field, identity, endpoint, internal_address, file_identified, or file_excerpt. source is the file path with offset, or the saved request path. Set opensNext false when this fact does not unlock another step. Do this for file analysis as well as pages.',
+    inputSchema: { type: 'object', properties: { factType: { type: 'string' }, factValue: { type: 'string' }, source: { type: 'string' }, opensNext: { type: 'boolean' } }, required: ['factType', 'factValue', 'source'], additionalProperties: false },
+  },
+  {
+    name: 'workspace_shell',
+    description: 'Run one shell command on this machine after material access is confirmed. Working directory is the conversation workspace. Timeout at most 60 seconds. Output is capped. Use it for curl, formatters and local inspection; do not claim a command succeeded without its exit code.',
+    inputSchema: { type: 'object', properties: { command: { type: 'string' }, timeoutMs: { type: 'integer', minimum: 100, maximum: 60000 } }, required: ['command'], additionalProperties: false },
+  },
+  {
     name: 'workspace_glob',
     description: 'List files in the conversation workspace whose path matches a glob (e.g. **/*.mjs, src/*.js, test/**). Read-only. Returns matching relative paths, sorted and bounded. Use this to find files before reading or editing them.',
     inputSchema: { type: 'object', properties: { pattern: { type: 'string' }, path: { type: 'string' }, maxResults: { type: 'integer', minimum: 1, maximum: 2000 } }, required: ['pattern'], additionalProperties: false },
@@ -45,11 +103,19 @@ export const WORKSPACE_TOOL_SPECS = [
 export function workspacePermission(toolName) {
   if (toolName === 'workspace_run') return 'workspace.run';
   if (toolName === 'workspace_write' || toolName === 'workspace_edit') return 'workspace.write';
-  if (toolName === 'workspace_list' || toolName === 'workspace_read' || toolName === 'workspace_grep' || toolName === 'workspace_glob') return 'workspace.read';
+  if (toolName === 'workspace_list' || toolName === 'workspace_read' || toolName === 'workspace_grep' || toolName === 'workspace_glob' || toolName === 'workspace_fetch' || toolName === 'workspace_read_path' || toolName === 'workspace_http' || toolName === 'workspace_browser' || toolName === 'workspace_shell' || toolName === 'workspace_probe_sql' || toolName === 'workspace_probe_command' || toolName === 'workspace_source_list' || toolName === 'workspace_source_search' || toolName === 'workspace_chain_read' || toolName === 'workspace_chain_add') return 'workspace.read';
   throw workspaceError('workspace_tool_unknown');
 }
 
 function workspaceError(code, message = code) { return Object.assign(Error(message), { code, retryable: false }); }
+
+function lineWindows(line) {
+  const width = 8000;
+  if (line.length <= width) return [line];
+  const windows = [];
+  for (let start = 0; start < line.length && windows.length < 64; start += width / 2) windows.push(line.slice(start, start + width));
+  return windows;
+}
 
 export function resolveInside(root, inputPath = '.') {
   const base = resolve(root);
@@ -184,11 +250,102 @@ export async function runWorkspaceTool(root,name,args={},options={}){
  const key=resolve(root),previous=locks.get(key)??Promise.resolve();let release;const wait=new Promise(r=>{release=r});const tail=previous.catch(()=>{}).then(()=>wait);locks.set(key,tail);await previous.catch(()=>{});
  try{return await runTool(root,name,args,options);}finally{release();if(locks.get(key)===tail)locks.delete(key);}
 }
-async function runTool(root, name, args = {}, { anchor, historyRoot, context={}, executionRoot, assertAuthorized = () => {} } = {}) {
+async function runTool(root, name, args = {}, { anchor, historyRoot, context={}, executionRoot, assertAuthorized = () => {}, allowedHosts, fetchImpl, lookupImpl, materialOpen = false, materialRoot = '', readRoots = [], readChain = () => [], recordHop } = {}) {
   if (!WORKSPACE_TOOL_SPECS.some(tool => tool.name === name)) throw workspaceError('workspace_tool_unknown');
   root = await workspaceRoot(root, anchor, assertAuthorized);
   assertAuthorized();
-  if(name==='workspace_run')return executeWorkspaceScript(root,args,{executionRoot,assertAuthorized,write:async(path,content)=>runTool(root,'workspace_write',{path,content},{anchor,historyRoot,context,assertAuthorized})});
+  if(name==='workspace_run')return executeWorkspaceScript(root,args,{executionRoot,assertAuthorized,readRoots,write:async(path,content)=>runTool(root,'workspace_write',{path,content},{anchor,historyRoot,context,assertAuthorized})});
+  if (name === 'workspace_read_path') {
+    if (!materialOpen) throw workspaceError('workspace_material_closed');
+    try { return await readFileRange(args.path, args.offset, args.length); }
+    catch (error) {
+      const code = error.code === 'range_invalid' || error.code === 'range_not_file' ? 'workspace_read_path_invalid' : 'workspace_read_path_failed';
+      throw workspaceError(code);
+    }
+  }
+  if (name === 'workspace_fetch') {
+    const target = args.url;
+    if (typeof target !== 'string' || !target.trim()) throw workspaceError('workspace_fetch_invalid');
+    try {
+      return await saveFetchedUrl(root, target, { allowedHosts, openNetwork: materialOpen, materialRoot, fetchImpl, lookupImpl });
+    } catch (error) {
+      const code = error.code === 'blocked_address' ? 'workspace_fetch_blocked'
+        : error.code === 'fetch_host_not_allowed' || error.code === 'redirect_left_host' ? 'workspace_fetch_host_denied'
+        : error.code === 'fetch_url_invalid' ? 'workspace_fetch_invalid'
+        : 'workspace_fetch_failed';
+      throw workspaceError(code);
+    }
+  }
+  if (name === 'workspace_http') {
+    if (!materialOpen) throw workspaceError('workspace_material_closed');
+    if (typeof args.url !== 'string' || !args.url.trim()) throw workspaceError('workspace_fetch_invalid');
+    try {
+      return await saveFetchedUrl(root, args.url, { allowedHosts, openNetwork: true, materialRoot, fetchImpl, lookupImpl, method: args.method, headers: args.headers, body: args.body });
+    } catch (error) {
+      const code = error.code === 'blocked_address' ? 'workspace_fetch_blocked' : 'workspace_fetch_failed';
+      throw workspaceError(code);
+    }
+  }
+  if (name === 'workspace_browser') {
+    if (!materialOpen) throw workspaceError('workspace_material_closed');
+    try { return await browsePage(args.url, { workspaceRoot: root, timeoutMs: args.timeoutMs }); }
+    catch (error) { throw workspaceError(error.code === 'browser_missing' ? 'workspace_browser_missing' : error.code === 'browser_blocked' ? 'workspace_fetch_blocked' : 'workspace_browser_failed'); }
+  }
+  if (name === 'workspace_shell') {
+    if (!materialOpen) throw workspaceError('workspace_material_closed');
+    try { return await runHostShell(args.command, { cwd: root, timeoutMs: args.timeoutMs }); }
+    catch { throw workspaceError('workspace_shell_failed'); }
+  }
+  if (name === 'workspace_source_list') {
+    if (!materialOpen) throw workspaceError('workspace_material_closed');
+    try { return await sourceList(args.path); }
+    catch { throw workspaceError('workspace_source_failed'); }
+  }
+  if (name === 'workspace_source_search') {
+    if (!materialOpen) throw workspaceError('workspace_material_closed');
+    try { return await sourceSearch(args.path, args.query); }
+    catch { throw workspaceError('workspace_source_failed'); }
+  }
+  if (name === 'workspace_probe_sql') {
+    if (!materialOpen) throw workspaceError('workspace_material_closed');
+    const param = String(args.param || '');
+    const values = Array.isArray(args.values) ? args.values.filter(item => typeof item === 'string').slice(0, 6) : [];
+    let page;
+    try { page = new URL(String(args.url || '')); }
+    catch { throw workspaceError('workspace_fetch_invalid'); }
+    if (!param) throw workspaceError('workspace_fetch_invalid');
+    const shots = [];
+    const send = async (target, value) => {
+      const saved = await saveFetchedUrl(root, target, { openNetwork: true, materialRoot, fetchImpl, lookupImpl });
+      shots.push({ value: String(value).slice(0, 180), status: saved.status, path: saved.path || saved.absolutePath || '', bytes: saved.bytes });
+    };
+    await send(page.href, page.searchParams.get(param) ?? '');
+    for (const value of values) {
+      const next = new URL(page.href);
+      next.searchParams.set(param, value);
+      await send(next.href, value);
+    }
+    return { url: page.href, param, shots };
+  }
+  if (name === 'workspace_probe_command') {
+    if (!materialOpen) throw workspaceError('workspace_material_closed');
+    const command = String(args.command || '').slice(0, 512);
+    if (!command) throw workspaceError('workspace_fetch_invalid');
+    let page;
+    try { page = new URL(String(args.url || '')); }
+    catch { throw workspaceError('workspace_fetch_invalid'); }
+    if (args.param) page.searchParams.set(String(args.param), command);
+    const headers = args.header ? { [String(args.header)]: command } : undefined;
+    try {
+      return await saveFetchedUrl(root, page.href, { openNetwork: true, materialRoot, fetchImpl, lookupImpl, method: args.method, headers });
+    } catch { throw workspaceError('workspace_fetch_failed'); }
+  }
+  if (name === 'workspace_chain_read') return { hops: readChain() };
+  if (name === 'workspace_chain_add') {
+    if (typeof recordHop !== 'function') throw workspaceError('workspace_chain_failed');
+    try { return recordHop({ factType: args.factType, factValue: args.factValue, source: args.source, opensNext: args.opensNext, action: 'judge' }); }
+    catch (error) { throw workspaceError(error.code === 'chain_fact_invalid' ? 'workspace_chain_invalid' : 'workspace_chain_failed'); }
+  }
   if (name === 'workspace_list') {
     const dir = await checkedPath(root, args.path || '.');
     assertAuthorized();
@@ -267,7 +424,7 @@ async function runTool(root, name, args = {}, { anchor, historyRoot, context={},
     for (const { rel, size } of files) {
       if (matches.length >= maxResults) { truncated = true; break; }
       if (includeRe && !includeRe.test(rel)) continue;
-      if (size > 1024 * 1024) continue;
+      if (size > 8 * 1024 * 1024) { truncated = true; continue; }
       assertAuthorized();
       const handle = await open(join(root, rel), constants.O_RDONLY | constants.O_NOFOLLOW);
       let content;
@@ -275,17 +432,22 @@ async function runTool(root, name, args = {}, { anchor, historyRoot, context={},
         const info = await handle.stat();
         if (!info.isFile() || info.nlink > 1) continue;
         const buffer = await handle.readFile();
-        if (buffer.includes(0)) continue; // skip binary files
+        if (buffer.includes(0)) continue;
         content = buffer.toString('utf8');
       } finally { await handle.close(); }
       filesScanned++;
       const lines = content.split('\n');
       for (let i = 0; i < lines.length; i++) {
         if (matches.length >= maxResults) { truncated = true; break; }
-        // Bound the tested string so a pathological pattern cannot run away on a
-        // minified line; report a likewise-bounded snippet.
-        const probe = lines[i].length > 2000 ? lines[i].slice(0, 2000) : lines[i];
-        if (re.test(probe)) matches.push({ file: rel, line: i + 1, text: probe.length > 1000 ? probe.slice(0, 1000) : probe });
+        const windows = lineWindows(lines[i]);
+        for (const probe of windows) {
+          if (matches.length >= maxResults) { truncated = true; break; }
+          re.lastIndex = 0;
+          const found = re.exec(probe);
+          if (!found) continue;
+          const at = found.index;
+          matches.push({ file: rel, line: i + 1, text: probe.slice(Math.max(0, at - 80), at + 160) });
+        }
       }
     }
     return { path: relative(root, base) || '.', matches, filesScanned, truncated };

@@ -578,7 +578,7 @@ async function main() {
   cdpTransport = transportMode;
   const tcpPort = 42000 + Math.floor(Math.random() * 12000);
   const childArgs = [
-    "--headless=new",
+    ...(input.headed === true || process.env.OVIRAPTOR_BROWSER_HEADED === "1" ? [] : ["--headless=new"]),
     transportMode === "port" ? `--remote-debugging-port=${tcpPort}` : "--remote-debugging-pipe",
     `--user-data-dir=${profileDir}`,
     "--no-first-run",

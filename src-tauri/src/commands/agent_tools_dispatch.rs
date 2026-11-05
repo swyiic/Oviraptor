@@ -90,6 +90,14 @@ fn agent_execute_tool_inner(
     if let Err(code) = agent_authorize_tool(context, name) {
         return agent_tool_error("当前 run 没有此工具的有效权限", code);
     }
+    if let Ok(connection) = db::open(&context.db_path) {
+        if matches!(
+            tool_permission_decision(&connection, name),
+            ToolPermissionDecision::Deny
+        ) {
+            return agent_tool_error("该工具被权限规则拒绝", "tool_permission_denied");
+        }
+    }
     if let Err(reason) = agent_single_require_fresh(context) {
         return agent_http_claim_error(reason);
     }
@@ -149,7 +157,7 @@ fn agent_execute_tool_inner(
             "request_budget_exhausted",
         );
     }
-    if name != "finish_target" {
+    if name != "finish_target" && name != "ask_operator" && name != "call_mcp_tool" {
         if let Err(reason) = agent_target_budget_preflight(context, runtime, name) {
             return agent_http_claim_error(reason);
         }
@@ -171,6 +179,7 @@ fn agent_execute_tool_inner(
         "compare_identities" => agent_tool_compare_identities(context, runtime, arguments),
         "targeted_discovery" => agent_tool_targeted_discovery(context, runtime, arguments),
         "browser_action" => agent_tool_browser_action(context, runtime, arguments),
+        "plan_ssrf_channel" => agent_tool_plan_ssrf_channel(context, runtime, arguments),
         "record_hypothesis_result" => {
             agent_tool_record_hypothesis_result(context, runtime, arguments)
         }
@@ -179,6 +188,8 @@ fn agent_execute_tool_inner(
         "run_analysis_script" => agent_tool_run_analysis_script(context, runtime, arguments),
         "probe_sql_injection" => agent_tool_probe_sql_injection(context, runtime, arguments),
         "run_target_poc" => agent_tool_run_target_poc(context, runtime, arguments),
+        "ask_operator" => agent_tool_ask_operator(context, runtime, arguments),
+        "call_mcp_tool" => agent_tool_call_mcp_tool(context, runtime, arguments),
         other => agent_tool_error(&format!("未知工具 {other}"), "unknown_tool"),
     }
 }
@@ -292,6 +303,9 @@ fn agent_authorize_tool_on(
     // broad 'any child' rule. The lane and capability are checked in storage.
     crate::agent_runtime::multi_agent::attempts::require_live_for_run(connection, &run.run_id)
         .map_err(|_| "tool_capability_or_fencing_denied")?;
+    if name == "ask_operator" || name == "call_mcp_tool" {
+        return agent_require_bound_identities(connection, context);
+    }
     let authorized: bool = connection
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM agent_runs r \

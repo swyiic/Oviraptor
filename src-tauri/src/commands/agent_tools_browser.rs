@@ -220,6 +220,7 @@ fn agent_browser_action_run(
             &[],
             false,
             Some(filter.as_str()),
+            std::env::var("OVIRAPTOR_BROWSER_HEADED").ok().as_deref() == Some("1"),
             &thread_control,
         );
         let _ = sender.send(result);

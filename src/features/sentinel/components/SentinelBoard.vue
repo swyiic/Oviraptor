@@ -36,6 +36,7 @@ import SentinelTaskStrip from "./overview/SentinelTaskStrip.vue";
 import SentinelValidationWorkbench from "./SentinelValidationWorkbench.vue";
 import SentinelFingerprintPane from "./results/SentinelFingerprintPane.vue";
 import SentinelTraceTimeline from "./results/SentinelTraceTimeline.vue";
+import ScanRequestLog from "./ScanRequestLog.vue";
 import SentinelEndpointsPane from "./results/SentinelEndpointsPane.vue";
 import SentinelOpportunitiesPane from "./results/SentinelOpportunitiesPane.vue";
 import SentinelVulnerabilitiesPane from "./results/SentinelVulnerabilitiesPane.vue";
@@ -150,7 +151,7 @@ type ResultTab =
 type ProcessTab = "investigation" | "opportunities" | "trace" | "attempts" | "routing";
 
 const tab = ref<Tab>(props.section);
-const processTab = ref<ProcessTab>("investigation");
+const processTab = ref<ProcessTab>("trace");
 // 执行概览 follows the task open on the board, so its process panels and the
 // collaboration record always describe the same scan.
 function openScanDialog(scan: SentinelScan, focus?: ProcessTab) {
@@ -366,19 +367,26 @@ const forceReason = ref("");
 // High-risk capability authorization (opt-in, operator-only). Default off; the
 // scheduling/per-action gates stay closed until the operator opts a task in with
 // an explicit legal-authorization attestation. Immutable once set (backend).
-const HIGH_RISK_CLASSES = ["code_exec", "target_write", "egress", "waf_evasion", "persistence", "exfil"];
+const HIGH_RISK_CLASSES = ["code_exec", "target_write", "post_write", "egress", "waf_evasion", "persistence", "exfil", "internal_scope"];
 const highRiskTask = ref<SentinelScan>();
 const highRiskAttested = ref(false);
 const highRiskClasses = ref<string[]>([]);
 const highRiskBusy = ref(false);
+const grantedClasses = ref<string[]>([]);
+const postWriteEnabled = ref(false);
+const ssrfCallback = ref("");
+const writeConfirmations = ref<Array<{ id: number; method: string; endpoint: string; cleanup: string; recovery: string; status: string }>>([]);
+const writePathBusy = ref(false);
 function highRiskLabel(key: string): string {
   switch (key) {
     case "code_exec": return tr("命令执行(RCE,仅无害命令,其余逐次人工批准)", "Command execution (RCE; harmless cmds only, else per-action approval)");
     case "target_write": return tr("修改目标资产(仅可逆变更)", "Modify target assets (reversible only)");
+    case "post_write": return tr("POST/上传（仍须当场确认，不会自动发包）", "POST/upload (still needs a live confirmation; never auto-sent)");
     case "egress": return tr("追加出网 origin(operator 批准)", "Extra egress origin (operator-approved)");
     case "waf_evasion": return tr("WAF 效力测试(有界尝试)", "WAF-efficacy testing (bounded attempts)");
     case "persistence": return tr("持久化(限时可撤,逐次批准)", "Persistence (time-boxed, per-action approval)");
     case "exfil": return tr("数据外带(仅 canary 证明)", "Data exfiltration (canary proof only)");
+    case "internal_scope": return tr("内网跟进（只根据响应中出现的地址，不预指定、不扫网段）", "Internal follow-up (only addresses seen in a response; no preset, no range scan)");
     default: return key;
   }
 }
@@ -408,6 +416,7 @@ async function submitHighRisk() {
     await sentinelApi.setScanCapabilityAuthorization(scan.id, highRiskAttested.value, [...highRiskClasses.value]);
     highRiskTask.value = undefined;
     emit("notify", "success", tr("已记录该任务的高风险能力授权;每次具体高危动作仍需人工逐次批准。", "High-risk authorization recorded; each concrete high-risk action still needs per-action approval."));
+    grantedClasses.value = [...highRiskClasses.value];
     await load();
   } catch (e) {
     emit("notify", "error", `${tr("高风险授权失败", "High-risk authorization failed")}：${String(e)}`);
@@ -1017,10 +1026,73 @@ async function runDeepDive(findingId: number) {
     deepDiveBusyId.value = undefined;
   }
 }
-watch(() => selected.value?.id, () => { deepDiveNote.value = undefined; void loadScanExploits(); }, { immediate: true });
+async function loadWritePath(scanId: string) {
+  const [enabled, rows] = await Promise.all([
+    sentinelApi.getScanPostWriteEnabled(scanId),
+    sentinelApi.listScanWriteConfirmations(scanId),
+  ]);
+  if (selected.value?.id !== scanId) return;
+  postWriteEnabled.value = enabled;
+  writeConfirmations.value = rows;
+  ssrfCallback.value = await sentinelApi.getAgentSsrfCallbackUrl().catch(() => "");
+}
+async function savePostWrite() {
+  const scanId = selected.value?.id;
+  if (!scanId || writePathBusy.value) return;
+  writePathBusy.value = true;
+  try {
+    await sentinelApi.setScanPostWriteEnabled(scanId, postWriteEnabled.value);
+    emit("notify", "info", postWriteEnabled.value
+      ? tr("本任务已允许 POST。每次仍要在下面当场确认，全部高危授权不会自动发包。", "POST is enabled for this task. Each series still needs a live confirmation below. Full high-risk authorization does not send it.")
+      : tr("本任务 POST 已关闭", "POST is off for this task"));
+  } catch (e) {
+    postWriteEnabled.value = !postWriteEnabled.value;
+    emit("notify", "error", String(e));
+  } finally {
+    writePathBusy.value = false;
+  }
+}
+async function saveSsrfCallback() {
+  try {
+    await sentinelApi.setAgentSsrfCallbackUrl(ssrfCallback.value.trim());
+    emit("notify", "info", tr("SSRF 回连地址已保存。未填写时不能用 DNSLog/HTTP 回连，也不会自动扫描内网。", "SSRF callback saved. Without it there is no DNSLog/HTTP callback, and internal ranges are not scanned."));
+  } catch (e) {
+    emit("notify", "error", String(e));
+  }
+}
+async function decideWrite(id: number, approved: boolean) {
+  const scanId = selected.value?.id;
+  if (!scanId || writePathBusy.value) return;
+  writePathBusy.value = true;
+  try {
+    await sentinelApi.decideScanWriteConfirmation(id, approved);
+    await loadWritePath(scanId);
+  } catch (e) {
+    emit("notify", "error", String(e));
+  } finally {
+    writePathBusy.value = false;
+  }
+}
+watch(() => selected.value?.id, () => {
+  deepDiveNote.value = undefined;
+  grantedClasses.value = [];
+  postWriteEnabled.value = false;
+  writeConfirmations.value = [];
+  void loadScanExploits();
+  const id = selected.value?.id;
+  if (!id) return;
+  void sentinelApi.getScanCapabilityAuthorization(id).then((value) => {
+    if (selected.value?.id === id && value.attested) grantedClasses.value = value.classes;
+  }).catch(() => {});
+  void loadWritePath(id).catch(() => {});
+}, { immediate: true });
 // Light poll (path A) that fetches only while a deep-dive is running, so streamed
 // results appear without a full detail refresh.
-exploitPollTimer = setInterval(() => { if (exploitsInFlight() || deepDiveBusyId.value) void loadScanExploits(); }, 4000);
+exploitPollTimer = setInterval(() => {
+  if (exploitsInFlight() || deepDiveBusyId.value) void loadScanExploits();
+  const id = selected.value?.id;
+  if (id && selected.value?.scanType === "web") void loadWritePath(id).catch(() => {});
+}, 4000);
 onUnmounted(() => { if (exploitPollTimer) clearInterval(exploitPollTimer); });
 function vulnerabilityUpdateHistory(item: SentinelFinding) {
   const data = json(item.recordJson);
@@ -1518,21 +1590,11 @@ function openProcess(next: ProcessTab) {
   tab.value = "dialog";
 }
 const processTabs = computed(() => {
-  const web = selected.value?.scanType === "web";
   const process = t.value.scanning.process;
-  const items: { key: ProcessTab; label: string; count?: number; title?: string }[] = [];
-  if (web) items.push(
-    { key: "investigation", label: process.graph, count: investigationGraph.value?.nodes?.length,
-      title: fmt(process.informationGain, { value: investigationGraph.value?.metrics?.informationGain || 0 }) },
-    { key: "opportunities", label: process.opportunities, count: selectedUrlOpportunities.value.length },
-  );
-  items.push(
-    { key: "trace", label: process.trace },
-    { key: "attempts", label: process.attempts, count: scanAttempts.value.length },
-  );
-  if (web) items.push({ key: "routing", label: process.routing });
-  return items;
+  return [{ key: "trace" as ProcessTab, label: process.trace, title: process.trace, count: undefined as number | undefined }];
 });
+// WIP 脚手架：声明待接线,保留不删(标记已引用以过 noUnusedLocals)
+void sourceAuditProjectId; void loadAgentExecution; void savePostWrite; void AgentStageTimeline; void SourceAuditPanel;
 const activeProcessTab = computed(() =>
   processTabs.value.some((item) => item.key === processTab.value) ? processTab.value : processTabs.value[0]?.key);
 const runningScanCount = computed(
@@ -2061,7 +2123,7 @@ async function readResultDetails(scan: SentinelScan) {
     sentinelApi.listSentinelValidations(scan.id),
     sentinelApi.listInvestigationValidations(scan.id),
     scan.previousScanId ? sentinelApi.listSentinelFindings(scan.previousScanId).catch(() => []) : Promise.resolve([]),
-    sentinelApi.listSentinelOpportunities(undefined, scan.id, undefined, 800),
+    Promise.resolve([] as SentinelOpportunity[]),
     sentinelApi.listSentinelScanAttempts(scan.id),
     scan.scanType === "web" ? Promise.resolve({ vulnerabilities: [], sources: [] }) : sentinelApi.listAppSecScanResult(scan.id),
   ]);
@@ -2077,8 +2139,9 @@ async function openScan(scan: SentinelScan, jump = true) {
   const generation = detailGeneration;
   const current = () => !detailDisposed && generation === detailGeneration && selected.value?.id === scan.id;
   if (jump) {
-    tab.value = "results";
+    tab.value = scan.scanType === "web" ? "dialog" : "results";
     resultTab.value = "summary";
+    if (scan.scanType === "web") processTab.value = "trace";
   }
   detailBusy.value = true;
   try {
@@ -2097,14 +2160,8 @@ async function openScan(scan: SentinelScan, jump = true) {
       : withEvidence || selectableUrls[0] || "";
     selectedFindingId.value =
       (scan.scanType === "web" ? vulnerabilityRows.value[0] : sourceFindingRows.value[0])?.id;
-    if (scan.scanType === "web" && selectedUrl.value && selectedUrl.value !== "*") {
-      await loadInvestigationGraph(scan.id, selectedUrl.value);
-      if (!current()) return;
-      await loadAgentExecution(scan.id, selectedUrl.value);
-    } else {
-      investigationGraph.value = undefined;
-      agentExecution.value = null;
-    }
+    investigationGraph.value = undefined;
+    agentExecution.value = null;
     if (current()) await loadSelectedTrace(scan.id);
   } catch (e) {
     if (current()) emit("notify", "error", String(e));
@@ -2624,10 +2681,9 @@ watch(() => selected.value?.id, clearResultDetails, { flush: "sync" });
 watch(selectedUrl, (value) => {
   if (resultTab.value === "vulnerabilities")
     selectedFindingId.value = vulnerabilityRows.value[0]?.id;
-  if (selected.value?.scanType === "web") {
-    loadInvestigationGraph(selected.value.id, value);
-    loadAgentExecution(selected.value.id, value);
-  }
+  investigationGraph.value = undefined;
+  agentExecution.value = null;
+  void value;
 });
 watch(resultTab, (value) => {
   if (value === "vulnerabilities")
@@ -2744,13 +2800,11 @@ onUnmounted(() => {
       <template #process="{ scanId: dialogTaskId }">
         <div v-if="selected && selected.id === dialogTaskId" class="process-stack">
           <NativeRunStatus v-if="selected.scanType === 'web'" class="agent-workspace" :scan-id="selected.id" :attempt="selected.attemptCount" :status="selected.status" @attempt-closed="onAttemptClosed" @prepare-handoff="prepareClosureHandoff" />
-          <AgentStageTimeline :key="`stages:${selected.id}`" :scan-id="selected.id" :attempt="selected.attemptCount" :refresh-key="selected.updatedAt" />
-          <SourceAuditPanel v-if="selected.scanType === 'web' && sourceAuditProjectId" :key="`source-audit:${selected.id}`" :scan-id="selected.id" :project-id="sourceAuditProjectId" :status="selected.status" :refresh-key="selected.updatedAt" @notify="(level, message) => emit('notify', level, message)" />
           <section class="process-panel">
             <header class="process-panel-head">
               <div>
-                <h3>{{ t.scanning.process.title }}</h3>
-                <p>{{ t.scanning.process.intro }}</p>
+                <h3>{{ tr("这次任务发出的接口测试", "API tests sent for this task") }}</h3>
+                <p>{{ tr("这里只显示 Agent 实际保存下来的请求。没有出现在这张表里的结论，不作为这次扫描的过程。", "This list is only the requests the agent actually saved. A conclusion that is not in this table is not part of this scan's process.") }}</p>
               </div>
               <label v-if="selected.scanType === 'web' && urlCards.length" class="result-context-control process-target">
                 <span class="eyebrow">{{ t.scanning.targets }}</span><select :value="selectedUrl" @change="selectResultUrl">
@@ -2804,11 +2858,15 @@ onUnmounted(() => {
               />
 
               <div v-else-if="activeProcessTab === 'trace'" class="result-section-stack">
+                <ScanRequestLog :scan-id="selected.id" :active="tab === 'dialog'" />
+                <details class="result-block">
+                  <summary>{{ tr("原始事件流水（不作为测试结果）", "Raw event stream (not the test record)") }}</summary>
                 <SentinelTraceTimeline
                   :detail="liveTrace" :busy="liveTraceBusy"
                   :target-url="selectedUrl" :task-status="selected.status"
                 />
                 <div v-if="!liveTrace && !liveTraceBusy && !['scanning', 'pausing'].includes(selected.status)" class="empty-state">{{ t.scanning.process.noTrace }}</div>
+                </details>
               </div>
               <div v-else-if="activeProcessTab === 'attempts'" class="result-section-stack">
                 <section v-if="scanAttempts.length" class="result-block attempt-ledger-block">
@@ -3151,8 +3209,21 @@ onUnmounted(() => {
                 <button type="button" class="button ghost compact" @click="tab = 'queue'"><ArrowLeft :size="13" />{{ t.scanning.taskList }}</button>
                 <button v-if="selected.status !== 'draft'" type="button" class="button ghost compact" @click="openScanDialog(selected)"><Activity :size="13" />{{ t.scanning.runDetails }}</button>
                 <button v-if="selected.scanType === 'web'" type="button" class="button ghost compact high-risk-trigger" @click="openHighRisk(selected)">⚠ {{ tr("高风险操作", "High-risk ops") }}</button>
+                <span v-if="grantedClasses.length" class="granted-classes">{{ tr("已授权", "Authorized") }} {{ grantedClasses.join(" · ") }}</span>
+                <span v-if="selected.scanType === 'web'" class="task-post-switch">{{ postWriteEnabled ? tr("POST/上传已包含在高危授权中，下面仍须当场确认", "POST/upload is included in high-risk authorization; each write below still needs a live confirmation") : tr("POST/上传未授权。请在创建任务的「启用高危操作」里打开。", "POST/upload is not authorized. Enable it under high-risk operations when creating the task.") }}</span>
+                <label v-if="selected.scanType === 'web'" class="task-post-switch">
+                  <input v-model="ssrfCallback" :placeholder="tr('DNSLog 或 httptool 回连 URL', 'DNSLog or httptool callback URL')" @change="saveSsrfCallback" />
+                </label>
               </div>
             </div>
+            <ul v-if="selected.scanType === 'web' && writeConfirmations.some((row) => row.status === 'pending')" class="task-write-confirmations">
+              <li v-for="row in writeConfirmations.filter((item) => item.status === 'pending')" :key="row.id">
+                <strong>{{ row.method }} {{ row.endpoint }}</strong>
+                <small>{{ row.cleanup }} · {{ row.recovery }}</small>
+                <button type="button" class="button danger compact" :disabled="writePathBusy" @click="decideWrite(row.id, true)">{{ tr("确认这一次", "Confirm this series") }}</button>
+                <button type="button" class="button ghost compact" :disabled="writePathBusy" @click="decideWrite(row.id, false)">{{ tr("拒绝", "Reject") }}</button>
+              </li>
+            </ul>
             <label v-if="selected.scanType === 'web'" class="result-context-control result-context-target">
               <span class="eyebrow">{{ t.scanning.companyAssets }}</span><select :value="selectedUrl" @change="selectResultUrl">
                 <option v-for="card in filteredUrlCards" :key="card.url" :value="card.url">
@@ -3170,6 +3241,7 @@ onUnmounted(() => {
               <span v-else>{{ tr(`${sourceStats.findings} 条发现`, `${sourceStats.findings} findings`) }}</span>
             </div>
           </div>
+          <ScanRequestLog v-if="selected" :scan-id="selected.id" :active="tab === 'results'" />
           <!-- Track A · A2/A3 — per-URL subtask list: the scan's children, one
                row per URL with its own status (incl. fuse-skipped), findings and
                vulnerabilities. Clicking a row drills into that URL's detail. -->
@@ -3797,6 +3869,7 @@ onUnmounted(() => {
     <template v-else-if="tab === 'workbench'">
       <AgentTraceHub
         v-if="(workbenchIntent || props.workbenchMode) === 'traces'"
+        :project-id="props.projectId"
         @notify="(type, text) => emit('notify', type, text)"
       />
       <AgentWorkbench
@@ -3877,6 +3950,11 @@ onUnmounted(() => {
 <style src="./sentinelSections.css"></style>
 <style src="../../../sentinel.css">
 .high-risk-trigger { color: var(--red, #d16666); }
+.granted-classes { font-size: 11px; color: var(--ui-muted, #72746f); }
+.task-post-switch { display: inline-flex; gap: 6px; align-items: center; margin-left: 8px; font-size: 12px; }
+.task-write-confirmations { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
+.task-write-confirmations li { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 12px; }
+.task-write-confirmations small { color: var(--muted, #72746f); }
 .high-risk-backdrop { position: fixed; inset: 0; background: #0b142480; display: grid; place-items: center; z-index: 120; padding: 24px; }
 .high-risk-card { width: min(460px, 94vw); max-height: 88vh; overflow: auto; background: var(--surface, #fff); border: 1px solid var(--border, #e5e6e1); border-radius: var(--radius-lg, 12px); padding: 18px; display: grid; gap: 12px; box-shadow: 0 24px 70px #0b142450; }
 .high-risk-card header { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }

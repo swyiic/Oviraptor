@@ -1591,6 +1591,7 @@ export class OpenAiCompatibleRuntime {
     const failedExecutions = new Map();
     let forcedToolHint = false;
     let forcedEmptyBlock = false;
+    let lengthContinued = false;
     let forcedVerifier = false;
     let injectedReview = false;
     let countAnswerHint = false;
@@ -1893,6 +1894,13 @@ export class OpenAiCompatibleRuntime {
             emitInner('hold', '正在处理你刚补充的要求');
             continue;
           }
+          if (turn.finishReason === 'length' && !usedToolThisPrompt && !lengthContinued) {
+            lengthContinued = true;
+            options.maxTokens = Math.max(options.maxTokens || 0, 16384);
+            emitInner('hold', '思考被长度截断，改为直接抓取');
+            session.messages.push({ role: 'user', content: 'Host: 上一轮输出被长度截断，没有工具结果，用户还看不到分析。停止长篇思考。用户给了网址就立刻调用 workspace_fetch；给了本地文件就调用 workspace_read_path。抓到或读到之后再写解密脚本。' });
+            continue;
+          }
           if (turn.finishReason === 'length' || turn.finishReason === 'content_filter') {
             return { stopReason: turn.finishReason === 'length' ? 'max_tokens' : 'refusal', harness: session.harness, metrics: { toolSelection, firstTextMs, firstToolMs, totalMs: performance.now() - started, api: apiUsed } };
           }
@@ -2058,6 +2066,13 @@ export class OpenAiCompatibleRuntime {
         const invalidResults = calls.filter(call => call.code).map(call => ({ id: call.id, name: call.name, ok: false, code: call.code, content: JSON.stringify({ error: call.code, hint: strategyHint(call.code) }) }));
         appendResults(invalidResults);
         const executable = calls.filter(call => !call.code);
+        if (turn.finishReason === 'length' && !executable.length && !lengthContinued) {
+          lengthContinued = true;
+          options.maxTokens = Math.max(options.maxTokens || 0, 16384);
+          emitInner('hold', '工具调用被截断，重新抓取');
+          session.messages.push({ role: 'user', content: 'Host: 上一轮工具调用不完整。不要继续思考。立刻重新调用 workspace_fetch 或 workspace_read_path，参数必须是完整 JSON。' });
+          continue;
+        }
         if (turn.finishReason === 'length' || turn.finishReason === 'content_filter') {
           return { stopReason: turn.finishReason === 'length' ? 'max_tokens' : 'refusal', harness: session.harness, metrics: { toolSelection, firstTextMs, firstToolMs, totalMs: performance.now() - started, api: apiUsed } };
         }

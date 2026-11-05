@@ -59,7 +59,7 @@ pub(crate) fn web_start_capability_refusal(db_path: &Path, scan_id: &str) -> Res
     Ok(())
 }
 
-fn start_web_scan_with_environment(
+pub(crate) fn start_web_scan_with_environment(
     environment: &dyn ScanEnvironment,
     db_path: &Path,
     app_data_dir: &Path,

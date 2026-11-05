@@ -244,6 +244,9 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
           const input = await body(request);
           return json({ accepted: host.resolveAuthorization(input.conversationId, input.accepted === true, { requestId: input.requestId, runId: input.runId, remember: input.remember === true }) });
         }
+        if (parts[1] === 'conversations' && parts[3] === 'chain' && parts.length === 4 && method === 'GET') {
+          return json({ hops: host.chain(decodeURIComponent(parts[2]), url.searchParams.get('projectId')) });
+        }
         if (path === '/api/runtime/access-policy' && method === 'GET') return json(host.accessPolicyView(url.searchParams.get('projectId')));
         if (path === '/api/runtime/access-policy' && method === 'POST') return json(host.setAccessPolicy(await body(request)));
         if (path === '/api/runtime/workspace-grants' && method === 'GET') {

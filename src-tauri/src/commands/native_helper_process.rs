@@ -102,6 +102,9 @@ fn run_native_json_helper_capture(
         .env("PATH", runtime_path)
         .env("NO_PROXY", no_proxy)
         .env("no_proxy", no_proxy);
+    if std::env::var("OVIRAPTOR_BROWSER_HEADED").ok().as_deref() == Some("1") {
+        command.env("OVIRAPTOR_BROWSER_HEADED", "1");
+    }
     // Same FD_CLOEXEC-atomic capture pipes as native_pipeline::process::run: a
     // concurrent spawn elsewhere can never inherit (and hold open) these ends.
     #[cfg(unix)]

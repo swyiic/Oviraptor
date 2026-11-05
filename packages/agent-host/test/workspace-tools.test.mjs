@@ -56,6 +56,12 @@ test('workspace_edit inserts newString literally (no $-pattern reinterpretation)
   assert.equal((await call(root, 'workspace_read', { path: 'a.txt' })).content, 'keep $& $1 $$ keep\n');
 }));
 
+test('workspace_grep finds a match past the first 2000 characters of one line', async () => withRoot(async root => {
+  await call(root, 'workspace_write', { path: 'app.js', content: `${'a'.repeat(5000)}AES.decrypt(data,key)` });
+  const found = await call(root, 'workspace_grep', { pattern: 'AES\\.decrypt', literal: false });
+  assert.ok(found.matches.some(item => /AES\.decrypt/.test(item.text)));
+}));
+
 test('workspace_grep: regex, literal, caseInsensitive, include filter', async () => withRoot(async root => {
   await call(root, 'workspace_write', { path: 'src/a.mjs', content: 'const TODO = 1\nok\nTODO again\n' });
   await call(root, 'workspace_write', { path: 'src/b.txt', content: 'TODO here\n' });

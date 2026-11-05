@@ -1,4 +1,5 @@
 import { computed, onUnmounted, ref, watch } from "vue";
+import { invoke } from "@tauri-apps/api/core";
 import type { Project } from "../workspaces/types";
 import type { ConversationApi } from "./api";
 import type { Conversation, ConversationLinksInput, ConversationScope, ConversationSendInput, ConversationSnapshot, ConversationToolActivity } from "./types";
@@ -29,6 +30,7 @@ export function useConversationWorkspace(deps: { project: () => Project | undefi
   const steerSaving = ref(false);
   const steerSupported = computed(() => Boolean(deps.locks === undefined ? globalThis.navigator?.locks : deps.locks));
   const steerNotice = ref("");
+  const scanLaunchNotice = ref("");
   let autoSteerId: string | undefined;
   const loadingList = ref(false);
   const loading = ref(false);
@@ -346,6 +348,23 @@ export function useConversationWorkspace(deps: { project: () => Project | undefi
     // A failed/uncertain request keeps its exact payload and idempotency key.
     // Resolve the original request before changing its payload; reads never dispatch a reply.
     const content = draft.value.trim();
+    const testedUrl = content.match(/(?:测|test)\s+(https?:\/\/\S+)/i)?.[1]?.replace(/[),.;]+$/, "");
+    if (testedUrl && projectId && !pendingSend.value) {
+      try {
+        const started = await invoke<{ snapshot?: { scanId?: string; status?: string } }>("run_headless_url_scan", {
+          projectId,
+          taskName: testedUrl,
+          urls: [testedUrl],
+          scanMode: "standard",
+          wait: false,
+        });
+        const scanId = started.snapshot?.scanId || "";
+        const status = started.snapshot?.status || "scanning";
+        scanLaunchNotice.value = scanId ? `${scanId} · ${status}` : status;
+      } catch (error) {
+        actionError.value = `URL 扫描未能启动：${String(error)}`;
+      }
+    }
     if (pendingSend.value && pendingSend.value.content !== content) {
       actionError.value = "Check the saved conversation and retry the original message before sending edited text";
       return;
@@ -474,7 +493,7 @@ export function useConversationWorkspace(deps: { project: () => Project | undefi
     projectEpoch++; selectionEpoch++; listRequest++; readRequest++; actionRequest++;
     stopPoll(); if (searchTimer) clearTimeout(searchTimer); searchTimer = undefined; conversations.value = []; total.value = 0; selectedId.value = ""; snapshot.value = undefined;
     draft.value = ""; steerDraft.value = ""; queuedSteer.value = undefined; steerNotice.value = ""; steering.value = false; steerSaving.value = false; titleDraft.value = ""; pendingCreate = undefined; pendingSend.value = undefined; pendingDelete.value = undefined;
-    listError.value = ""; readError.value = ""; actionError.value = "";
+    listError.value = ""; readError.value = ""; actionError.value = ""; scanLaunchNotice.value = "";
     loadingList.value = false; loading.value = false; loadingEarlier.value = false; busy.value = false; cancelling.value = false; hasListSnapshot.value = false;
     void loadList();
   }, { immediate: true, flush: "sync" });
@@ -493,5 +512,5 @@ export function useConversationWorkspace(deps: { project: () => Project | undefi
     searchTimer = setTimeout(() => { searchTimer = undefined; void loadList(); }, 250);
   }, { flush: "sync" });
   onUnmounted(() => { pauseSteer("reopened"); disposed = true; projectEpoch++; selectionEpoch++; actionRequest++; stopPoll(); if (searchTimer) clearTimeout(searchTimer); });
-  return { viewActive, steerSupported, steerSaving, steerDraft, composerDraft, composerBytes, composerTooLong, queuedSteer, steering, steerNotice, canSteer, canSendSteer, queueSteer, sendQueuedSteer, discardQueuedSteer, conversations, total, includeArchived, query, selectedId, snapshot, draft, titleDraft, loadingList, loading, loadingEarlier, busy, cancelling, listError, readError, actionError, hasListSnapshot, pendingSend, pendingDelete, project, writable, replyActive, messageBytes, messageTooLong, canSend, canDelete, requestDelete, cancelDelete, confirmDelete, loadList, readSelected, selectConversation, createConversation, send, updateConversation, setLinks, cancelReply, loadEarlier };
+  return { viewActive, steerSupported, steerSaving, steerDraft, composerDraft, composerBytes, composerTooLong, queuedSteer, steering, steerNotice, scanLaunchNotice, canSteer, canSendSteer, queueSteer, sendQueuedSteer, discardQueuedSteer, conversations, total, includeArchived, query, selectedId, snapshot, draft, titleDraft, loadingList, loading, loadingEarlier, busy, cancelling, listError, readError, actionError, hasListSnapshot, pendingSend, pendingDelete, project, writable, replyActive, messageBytes, messageTooLong, canSend, canDelete, requestDelete, cancelDelete, confirmDelete, loadList, readSelected, selectConversation, createConversation, send, updateConversation, setLinks, cancelReply, loadEarlier };
 }

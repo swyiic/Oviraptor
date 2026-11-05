@@ -72,6 +72,7 @@ export class HostStore {
     if(!this.db.prepare("SELECT sql FROM sqlite_master WHERE name='conversation_workspace_grants'").get().sql.includes('workspace.run')){
       this.db.exec("BEGIN IMMEDIATE; ALTER TABLE conversation_workspace_grants RENAME TO workspace_grants_before_run; CREATE TABLE conversation_workspace_grants(conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,runtime_identity TEXT NOT NULL,permission TEXT NOT NULL CHECK(permission IN ('workspace.read','workspace.write','workspace.run')),PRIMARY KEY(conversation_id,runtime_identity,permission)); INSERT INTO conversation_workspace_grants SELECT * FROM workspace_grants_before_run; DROP TABLE workspace_grants_before_run; COMMIT;");
     }
+    this.db.exec(`CREATE TABLE IF NOT EXISTS conversation_material_grants(conversation_id TEXT NOT NULL,runtime_identity TEXT NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(conversation_id,runtime_identity));`);
     this.db.exec(`CREATE TABLE IF NOT EXISTS conversation_tasks(id TEXT PRIMARY KEY,conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,payload TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS conversation_tasks_conversation ON conversation_tasks(conversation_id);`);
     for (const row of this.db.prepare('SELECT id,payload FROM conversation_tasks').all()) {
