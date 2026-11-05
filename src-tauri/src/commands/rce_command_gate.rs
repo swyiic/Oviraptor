@@ -17,7 +17,6 @@
 // sibling source units include!'d into the same `scanning` module.
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[allow(dead_code)] // Consumed by the probe_command_execution tool (next Track C increment); exercised by tests now.
 enum RceCommandClass {
     /// Identity / read-only network safelist (id, whoami, ifconfig, …). Proves
     /// code execution with no side effect; auto-allowed once code_exec is authorized.
@@ -96,7 +95,8 @@ fn rce_action_fingerprint(command: &str) -> String {
 /// The gate the probe tool calls before executing a command. Returns an
 /// `Allow` only when code_exec is authorized AND the command is harmless, or a
 /// single-use approval exists; otherwise Pending (awaiting the operator) or Denied.
-#[allow(dead_code)] // Wired into the probe_command_execution dispatch in the next increment.
+// Live: called by agent_tool_probe_command_execution, which is dispatched in
+// agent_tools_dispatch.rs and offered only when code_exec is authorized.
 fn rce_command_gate_on(
     connection: &rusqlite::Connection,
     scan_id: &str,

@@ -8,11 +8,17 @@
 // page can drive the agent, so the decision is the operator's, never the
 // model's; the agent has no tool that writes this table.
 //
-// Wiring: `high_risk_action_gate_on` is the hook the per-call chokepoint
-// (agent_authorize_tool_on) calls once a high-risk tool actually exists (Track
-// C). It is intentionally not wired into that intricate path yet — there is no
-// high-risk tool to gate — but the subsystem and its operator commands are
-// complete and tested so the gate is ready to drop in.
+// Wiring (LIVE): `high_risk_action_gate_on` is called by each high-risk probe's
+// own deterministic gate right before it acts — the RCE proof
+// (rce_command_gate_on), the no-network analysis sandbox (agent_analysis_script.rs
+// and agent_finding_deep_dive.rs), the target-scoped network PoC
+// (target_egress_sandbox.rs), the SQL-injection differential (agent_sqli_tester.rs)
+// and brokered MCP calls (agent_mcp_client.rs). Those tools are dispatched in
+// agent_tools_dispatch.rs and advertised only to a scan that authorized the
+// matching high-risk class (agent_tools_specs.rs), so this per-action gate (B3)
+// sits on top of B1 (default-closed) and B2 (per-task opt-in) and actually runs in
+// production. It is reached from each tool's implementation, not from
+// agent_authorize_tool_on.
 const HIGH_RISK_APPROVAL_SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS high_risk_action_approvals (
     request_id TEXT PRIMARY KEY,
@@ -36,7 +42,6 @@ CREATE TABLE IF NOT EXISTS high_risk_action_approvals (
 // and shared here (both are include!'d into the same `scanning` module).
 
 #[derive(Clone, PartialEq, Eq, Debug)]
-#[allow(dead_code)] // Consumed by the per-call chokepoint once a high-risk tool exists (Track C); exercised by tests now.
 enum HighRiskGate {
     /// An approval existed and was just consumed (single-use); the action runs.
     Allow,
@@ -158,7 +163,9 @@ fn consume_high_risk_approval_on(
 /// The gate the per-call chokepoint calls for a high-risk action: consume an
 /// existing approval (→ Allow, once), else surface the pending/ rejected state.
 #[allow(clippy::too_many_arguments)]
-#[allow(dead_code)] // Called by agent_authorize_tool_on once a high-risk tool exists (Track C).
+// Live: called by each high-risk probe's gate (rce_command_gate_on,
+// agent_analysis_script.rs, target_egress_sandbox.rs, agent_sqli_tester.rs,
+// agent_finding_deep_dive.rs, agent_mcp_client.rs) before the action runs.
 fn high_risk_action_gate_on(
     connection: &rusqlite::Connection,
     scan_id: &str,
