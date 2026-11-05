@@ -44,12 +44,12 @@ export function useTaskExecutionDetails(props: { readonly preview?: SentinelScan
   });
   const isSelected = (scanId: string, attemptNumber: number) => !disposed
     && props.preview?.id === scanId && selectedAttempt.value === attemptNumber;
-  async function loadTools(scanId: string, attemptNumber: number, older = false) {
+  async function loadTools(scanId: string, attemptNumber: number, older = false, retainSnapshot = false) {
     if (!isSelected(scanId, attemptNumber)) return;
     const prior = older ? toolPage.value : undefined;
     if (older && (!prior?.hasOlder || !prior.olderCursor || toolLoading.value)) return;
     const serial = ++toolRequestSerial;
-    if (!older) {
+    if (!older && !retainSnapshot) {
       toolPage.value = undefined;
       toolCounts.value = undefined;
     }
@@ -132,6 +132,18 @@ export function useTaskExecutionDetails(props: { readonly preview?: SentinelScan
     () => runnerLogLoading.value,
     ({ scanId, attempt }) => loadAttemptLog(scanId, attempt, true),
     (unavailable) => { runnerLogConnectionError.value = unavailable ? tr("实时日志连接不可用，暂以定时校对恢复", "Live log connection unavailable; falling back to periodic refresh") : ""; },
+  );
+  // The runner-log event fires throughout the agent loop; reuse it to pull the
+  // semantic tool timeline live too, so tool steps surface as the agent runs
+  // (随产随显) instead of only on attempt-select / tab-switch. Refresh in place
+  // (retainSnapshot) so the list never blanks mid-run; the runner-log
+  // subscription above already owns the connection banner.
+  useLiveRunnerLog(
+    () => detailTab.value === "execution" && props.preview && selectedAttempt.value !== undefined
+      ? { scanId: props.preview.id, attempt: selectedAttempt.value } : undefined,
+    () => toolLoading.value,
+    ({ scanId, attempt }) => loadTools(scanId, attempt, false, true),
+    () => { /* connection state is surfaced by the runner-log subscription */ },
   );
   function chooseAttempt(attemptNumber: number) {
     if (disposed || !props.preview || !attempts.value.some((attempt) => attempt.attemptNumber === attemptNumber)) return;
