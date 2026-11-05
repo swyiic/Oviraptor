@@ -113,6 +113,15 @@ fn persist_agent_vulnerability(
         "cvss": value_first(arguments, &["cvss"]),
         "confidence": arguments.get("confidence").and_then(JsonValue::as_f64).unwrap_or(0.9),
         "confidenceRationale": value_first(arguments, &["confidenceRationale"]),
+        // Display columns the finding card reads directly. description/technical
+        // analysis are the model's words; evidence is derived from the executed
+        // requests, not typed prose, so a confirmed card is never a wall of "—".
+        "description": value_first(arguments, &["description"]),
+        "technical_analysis": value_first(arguments, &["technicalAnalysis"]),
+        "evidence": format!(
+            "控制请求 {} · 测试请求 {} · 响应差异记录 {}",
+            bound.control_request_id, bound.test_request_id, bound.difference_artifact_id
+        ),
         // §10.1: the finding is its two executed requests plus the difference
         // record between them, not a paragraph the model typed.
         "controlRequestId": bound.control_request_id,
@@ -181,6 +190,8 @@ fn persist_agent_observation(
         "cwe": cwe,
         "confidence": 0.9,
         "confidenceRationale": "由本轮已执行请求/静态特征直接观测，不依赖模型叙述",
+        "description": format!("自动观测（{observation_kind}）"),
+        "evidence": evidence,
         "controlRequestId": request_id,
         "testRequestId": request_id,
         "responseDifferenceArtifactId": "",

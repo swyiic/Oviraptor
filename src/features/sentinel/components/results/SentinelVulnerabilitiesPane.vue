@@ -99,18 +99,12 @@ async function copyText(value: string) {
               }}</strong
               ><small
                 >{{ tr(
-                  `原始记录 · 未经原生 Reviewer 审核 · ${json(item.recordJson).type || "vulnerability"} · 原始等级 ${severityLabel(safeSeverity(item.severity))} · CVSS ${json(item.recordJson).cvss ?? "—"} · 置信度 ${json(item.recordJson).confidence || "未说明"} · ${json(item.recordJson).method || "GET"} ${json(item.recordJson).url || "/"}`,
-                  `Raw record · not reviewed by the native Reviewer · ${json(item.recordJson).type || "vulnerability"} · Original severity ${severityLabel(safeSeverity(item.severity))} · CVSS ${json(item.recordJson).cvss ?? "—"} · Confidence ${json(item.recordJson).confidence || "not stated"} · ${json(item.recordJson).method || "GET"} ${json(item.recordJson).url || "/"}`
+                  `原始记录 · 未经原生 Reviewer 审核 · 原始等级 ${severityLabel(safeSeverity(item.severity))}${json(item.recordJson).cvss ? ` · CVSS ${json(item.recordJson).cvss}` : ""} · 置信度 ${json(item.recordJson).confidence || "未说明"} · ${json(item.recordJson).method || "GET"} ${json(item.recordJson).url || "/"}`,
+                  `Raw record · not reviewed by the native Reviewer · Original severity ${severityLabel(safeSeverity(item.severity))}${json(item.recordJson).cvss ? ` · CVSS ${json(item.recordJson).cvss}` : ""} · Confidence ${json(item.recordJson).confidence || "not stated"} · ${json(item.recordJson).method || "GET"} ${json(item.recordJson).url || "/"}`
                 ) }}</small
               ><small
-                v-if="
-                  json(item.recordJson).cve ||
-                  json(item.recordJson).cwe
-                "
-                >{{ tr(
-                  `${json(item.recordJson).cve || "无 CVE"} · ${json(item.recordJson).cwe || "无 CWE"} · 修复工作量 ${json(item.recordJson).fix_effort || "未知"}`,
-                  `${json(item.recordJson).cve || "No CVE"} · ${json(item.recordJson).cwe || "No CWE"} · Fix effort ${json(item.recordJson).fix_effort || "unknown"}`
-                ) }}</small
+                v-if="json(item.recordJson).cwe || json(item.recordJson).cve"
+                >{{ [json(item.recordJson).cwe, json(item.recordJson).cve].filter(Boolean).join(" · ") }}</small
               >
             </div>
             <span
@@ -123,49 +117,45 @@ async function copyText(value: string) {
             >
           </header>
           <div class="vuln-columns">
-            <div>
+            <div v-if="json(item.recordJson).description">
               <span>{{ tr('漏洞描述', 'Description') }}</span>
-              <p>{{ json(item.recordJson).description || "—" }}</p>
+              <p>{{ json(item.recordJson).description }}</p>
             </div>
-            <div>
+            <div v-if="json(item.recordJson).technical_analysis">
               <span>{{ tr('技术分析', 'Technical analysis') }}</span>
-              <p>
-                {{
-                  json(item.recordJson).technical_analysis || "—"
-                }}
-              </p>
+              <p>{{ json(item.recordJson).technical_analysis }}</p>
             </div>
-            <div>
+            <div v-if="json(item.recordJson).evidence">
               <span>{{ tr('证据', 'Evidence') }}</span>
               <pre>{{ text(json(item.recordJson).evidence) }}</pre>
             </div>
-            <div>
+            <div v-if="json(item.recordJson).impact || json(item.recordJson).detail">
               <span>{{ tr('影响', 'Impact') }}</span>
-              <p>
-                {{
-                  json(item.recordJson).impact ||
-                  json(item.recordJson).detail ||
-                  "—"
-                }}
-              </p>
+              <p>{{ json(item.recordJson).impact || json(item.recordJson).detail }}</p>
             </div>
-            <div>
+            <div v-if="json(item.recordJson).recommendation || json(item.recordJson).remediation_steps">
               <span>{{ tr('修复建议', 'Remediation') }}</span>
-              <p>
-                {{
-                  json(item.recordJson).recommendation ||
-                  json(item.recordJson).remediation_steps ||
-                  "—"
-                }}
-              </p>
+              <p>{{ json(item.recordJson).recommendation || json(item.recordJson).remediation_steps }}</p>
             </div>
-            <div>
+            <div v-if="json(item.recordJson).pocRequest || json(item.recordJson).poc_description">
               <span>{{ tr('PoC / 复现', 'PoC / reproduction') }}</span>
-              <pre>{{
-                json(item.recordJson).pocRequest ||
-                json(item.recordJson).poc_description ||
-                "—"
-              }}</pre>
+              <pre>{{ json(item.recordJson).pocRequest || json(item.recordJson).poc_description }}</pre>
+            </div>
+            <div
+              v-if="
+                !json(item.recordJson).description &&
+                !json(item.recordJson).technical_analysis &&
+                !json(item.recordJson).evidence &&
+                !json(item.recordJson).impact &&
+                !json(item.recordJson).detail &&
+                !json(item.recordJson).recommendation &&
+                !json(item.recordJson).remediation_steps &&
+                !json(item.recordJson).pocRequest &&
+                !json(item.recordJson).poc_description
+              "
+              class="vuln-empty-detail"
+            >
+              <p>{{ tr('这条记录暂无结构化详情。点下方「开始人工验证」补充，或等待 Agent 回写。', 'This record has no structured detail yet. Use “Start manual validation” below, or wait for the agent to write it back.') }}</p>
             </div>
             <div
               v-if="
@@ -448,4 +438,5 @@ async function copyText(value: string) {
 .deep-field > span > button { margin-left: 0; }
 .deep-field > pre { margin: 0; padding: 8px 10px; border: 1px solid var(--ui-line, #ddd); border-radius: 8px; background: var(--ui-surface-raised, #f7f7f7); overflow-x: auto; white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.5; }
 .deep-dive-note { font-size: 11px; color: var(--ui-muted, #777); margin: 0; }
+.vuln-empty-detail > p { font-size: 12px; color: var(--ui-muted, #777); margin: 0; }
 </style>
