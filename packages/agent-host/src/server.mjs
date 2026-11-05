@@ -174,6 +174,16 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
           const input = await body(request);
           return json(host.commitInsight(parts[2], input));
         }
+        // Agent cross-session memory: user review / revoke boundary.
+        if (parts[1] === 'projects' && parts.length === 4 && parts[3] === 'memory' && method === 'GET') {
+          return json({ items: host.store.projectMemory(parts[2]) });
+        }
+        if (parts[1] === 'projects' && parts.length === 4 && parts[3] === 'memory' && method === 'DELETE') {
+          return json({ ok: true, removed: host.store.clearProjectMemory(parts[2]) });
+        }
+        if (parts[1] === 'projects' && parts.length === 5 && parts[3] === 'memory' && method === 'DELETE') {
+          return json({ ok: true, removed: host.store.deleteProjectMemory(parts[2], decodeURIComponent(parts[4])) });
+        }
         // Opens the conversation a scan task reports to, creating and binding one when none exists.
         if (parts[1] === 'projects' && parts[3] === 'scan-tasks' && parts[5] === 'conversation' && parts.length === 6 && method === 'POST') {
           return json(await host.openScanTaskConversation(parts[2], parts[4]));

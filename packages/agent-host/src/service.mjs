@@ -16,7 +16,7 @@ import { AppManager } from './apps.mjs';
 import { ensureBundledApps, bundledAppsStatus } from './bundled-apps.mjs';
 import { shellCatalog as buildShellCatalog } from './shell-apps.mjs';
 import { buildDiscoverySummary, formatDiscoveryPromptBlock } from './discovery.mjs';
-import { formatMemoryPromptBlock, readConversationMemory, recordTurn, summarizeToolEvent, pinFact } from './memory.mjs';
+import { formatMemoryPromptBlock, readConversationMemory, recordTurn, summarizeToolEvent, pinFact, MEMORY_TOOL_SPECS, readProjectMemory, writeProjectMemoryEntry, forgetProjectMemory, formatProjectMemoryPromptBlock } from './memory.mjs';
 import { ProviderStore, OpenAiCompatibleRuntime, truncateMcpResult } from './provider.mjs';
 import { buildTurnPrompt, exposureTaskIntent, discoveryAssistIntent, discoveryEnrichmentIntent, looksLikeDataQuestion, isProjectReadQuestion, isReadOnlyDataRequest, certificateTaskIntent, scanningTaskIntent, scanningHandoffIntent, humanizeToolTitle, normalizeAnswerMode, answerModeOptions, prefersResponsesApi, scrubSecrets, scrubbedModelText } from './quality-prompt.mjs';
 import {
@@ -1130,6 +1130,8 @@ export class AgentHost {
       run.discoveryFingerprint = discovery.fingerprint;
       const memory = readConversationMemory(this.store, conversation.id);
       const memoryBlock = formatMemoryPromptBlock(memory);
+      // Cross-session, project-scoped agent memory: advisory reference text only.
+      const projectMemoryBlock = formatProjectMemoryPromptBlock(readProjectMemory(this.store, conversation.projectId));
       run.toolMemory = [];
       const pendingSteers = this.store.pendingSteers(conversation.id);
       if (pendingSteers.length) text += `\n此前已接收、尚未交付的补充要求：\n${pendingSteers.map(message => message.content).join('\n')}`;
@@ -1163,6 +1165,7 @@ export class AgentHost {
         project,
         discoveryBlock: formatDiscoveryPromptBlock(discovery),
         memoryBlock,
+        projectMemoryBlock,
         userText: text,
         answerMode,
         permissionMode: run.permissionMode,
@@ -1515,8 +1518,17 @@ export class AgentHost {
     const conversation = this.store.conversation(conversationId);
     if (method === 'initialize') return { protocolVersion: '2025-06-18', capabilities: { tools: { listChanged: true } }, serverInfo: { name: 'oviraptor-apps', version: '1.0.0' } };
     const skillTools = run.skillScope && this.skillAccess ? this.skillAccess.toolSpecs(conversationId, run.skillScope) : [];
-    if (method === 'tools/list') return { tools: [...this.apps.capabilities(conversation.projectId, { runtimeIdentity: this.runtimeIdentity() }).map(tool => ({ name: tool.name.replace('::', '__'), description: tool.description, inputSchema: tool.inputSchema })), ...WORKSPACE_TOOL_SPECS, ...TASK_TOOL_SPECS, ...(this.runtimeId === 'xai-api' ? SUBAGENT_TOOL_SPECS : []), ...VERIFIER_TOOL_SPECS, ...skillTools] };
+    if (method === 'tools/list') return { tools: [...this.apps.capabilities(conversation.projectId, { runtimeIdentity: this.runtimeIdentity() }).map(tool => ({ name: tool.name.replace('::', '__'), description: tool.description, inputSchema: tool.inputSchema })), ...WORKSPACE_TOOL_SPECS, ...MEMORY_TOOL_SPECS, ...TASK_TOOL_SPECS, ...(this.runtimeId === 'xai-api' ? SUBAGENT_TOOL_SPECS : []), ...VERIFIER_TOOL_SPECS, ...skillTools] };
     if (method === 'tools/call') {
+      if (params.name === 'remember' || params.name === 'forget') {
+        if (params.name === 'remember') {
+          const written = writeProjectMemoryEntry(this.store, conversation.projectId, { ...(params.arguments ?? {}), sourceConversationId: conversation.id });
+          if (!written.ok) return { isError: true, content: [{ type: 'text', text: JSON.stringify({ error: 'remember_rejected', reason: written.reason }) }] };
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: true, entryId: written.entryId, ...(written.deduped ? { deduped: true } : {}) }) }], _meta: { hostEvidence: 'advisory' } };
+        }
+        const removed = forgetProjectMemory(this.store, conversation.projectId, (params.arguments ?? {}).entryId);
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, removed }) }], _meta: { hostEvidence: 'advisory' } };
+      }
       if (String(params.name || '').startsWith('workspace_')) {
         try {
           if (!WORKSPACE_TOOL_SPECS.some(tool => tool.name === params.name)) {
