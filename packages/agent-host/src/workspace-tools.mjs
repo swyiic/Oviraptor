@@ -250,11 +250,11 @@ export async function runWorkspaceTool(root,name,args={},options={}){
  const key=resolve(root),previous=locks.get(key)??Promise.resolve();let release;const wait=new Promise(r=>{release=r});const tail=previous.catch(()=>{}).then(()=>wait);locks.set(key,tail);await previous.catch(()=>{});
  try{return await runTool(root,name,args,options);}finally{release();if(locks.get(key)===tail)locks.delete(key);}
 }
-async function runTool(root, name, args = {}, { anchor, historyRoot, context={}, executionRoot, assertAuthorized = () => {}, allowedHosts, fetchImpl, lookupImpl, materialOpen = false, materialRoot = '', readRoots = [], readChain = () => [], recordHop } = {}) {
+async function runTool(root, name, args = {}, { anchor, historyRoot, context={}, executionRoot, assertAuthorized = () => {}, allowedHosts, fetchImpl, lookupImpl, materialOpen = false, materialRoot = '', readRoots = [], readChain = () => [], recordHop, onProgress } = {}) {
   if (!WORKSPACE_TOOL_SPECS.some(tool => tool.name === name)) throw workspaceError('workspace_tool_unknown');
   root = await workspaceRoot(root, anchor, assertAuthorized);
   assertAuthorized();
-  if(name==='workspace_run')return executeWorkspaceScript(root,args,{executionRoot,assertAuthorized,readRoots,write:async(path,content)=>runTool(root,'workspace_write',{path,content},{anchor,historyRoot,context,assertAuthorized})});
+  if(name==='workspace_run')return executeWorkspaceScript(root,args,{executionRoot,assertAuthorized,readRoots,onProgress,write:async(path,content)=>runTool(root,'workspace_write',{path,content},{anchor,historyRoot,context,assertAuthorized})});
   if (name === 'workspace_read_path') {
     if (!materialOpen) throw workspaceError('workspace_material_closed');
     try { return await readFileRange(args.path, args.offset, args.length); }

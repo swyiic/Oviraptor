@@ -1474,7 +1474,9 @@ export class AgentHost {
     if (!readOnly) this.inflightEffects.set(effectId, { conversationId, runId: run.id, taskId: run.taskId });
     const { _hostToolCallId, ...toolParams } = params;
     try {
-      let result = await this.#mcpRequest(token, conversationId, method, toolParams, operationId, readOnly);
+      // Live running-tool output preview: a transient event (no task mutation/revision).
+      const onToolProgress = p => { try { this.emit({ type: 'runtime.toolProgress', conversationId, runId: run.id, evidenceId, toolName: params.name, outputLines: p?.outputLines ?? 0, previewText: String(p?.previewText ?? '').slice(-400) }); } catch { /* best effort */ } };
+      let result = await this.#mcpRequest(token, conversationId, method, toolParams, operationId, readOnly, onToolProgress);
       // The desktop's operation lookup is a read of its original durable start
       // receipt. Bind it to the Host's immutable argument witness, never to a
       // model-supplied digest or an unrelated latest-task status.
@@ -1536,7 +1538,7 @@ export class AgentHost {
       throw error;
     } finally { this.inflightEffects.delete(effectId); this.activeMcpCalls.delete(completion); settled(); }
   }
-  async #mcpRequest(token, conversationId, method, params = {}, operationId, readOnly = true) {
+  async #mcpRequest(token, conversationId, method, params = {}, operationId, readOnly = true, onProgress = null) {
     const { scope, run } = this.validateMcpScope(token, conversationId);
     const conversation = this.store.conversation(conversationId);
     if (method === 'initialize') return { protocolVersion: '2025-06-18', capabilities: { tools: { listChanged: true } }, serverInfo: { name: 'oviraptor-apps', version: '1.0.0' } };
@@ -1581,6 +1583,7 @@ export class AgentHost {
             materialOpen: run.materialOpen === true,
             materialRoot: run.materialRoot || '',
             readRoots: run.materialRoots || [],
+            onProgress,
             readChain: () => listHops(this.store.db, conversation.id),
             recordHop: hop => this.#recordHop(conversation.id, hop),
             assertAuthorized: () => {
