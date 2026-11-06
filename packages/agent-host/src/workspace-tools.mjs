@@ -1,7 +1,7 @@
 import { constants } from 'node:fs';
 import {recordVersion,privateDirectory} from './workspace-versions.mjs';
 import {executeWorkspaceScript} from './workspace-execution.mjs';
-import { saveFetchedUrl } from './cited-pages.mjs';
+import { saveFetchedUrl, assertWsTarget } from './cited-pages.mjs';
 import { readFileRange } from './cited-files.mjs';
 import { browsePage, runHostShell, sourceList, sourceSearch } from './chat-tools.mjs';
 import { mkdir, readdir, lstat, realpath, open, rename, unlink, readFile } from 'node:fs/promises';
@@ -59,6 +59,11 @@ export const WORKSPACE_TOOL_SPECS = [
     inputSchema: { type: 'object', properties: { url: { type: 'string' }, timeoutMs: { type: 'integer', minimum: 1000, maximum: 30000 } }, required: ['url'], additionalProperties: false },
   },
   {
+    name: 'workspace_ws',
+    description: 'After material access is confirmed, open one WebSocket (ws/wss) to an authorized/cited host, optionally send text frames, and capture the frames exchanged as evidence. Scope-locked to cited hosts and blocked from private/loopback addresses. Bounded: at most 30s, 100 frames, 2MB total; each frame capped to 64KB. Returns the captured frames (direction, type, text/base64, timing) to attach to record_finding. Does not retry or fuzz.',
+    inputSchema: { type: 'object', properties: { url: { type: 'string' }, send: { type: 'array', maxItems: 32, items: { type: 'string' } }, headers: { type: 'object', additionalProperties: { type: 'string' } }, timeoutMs: { type: 'integer', minimum: 100, maximum: 30000 } }, required: ['url'], additionalProperties: false },
+  },
+  {
     name: 'workspace_probe_sql',
     description: 'After access is allowed, compare one GET parameter. Sends the original URL, then up to 6 values supplied in `values`, and saves each response. Use this when the user judged a SQL comparison reasonable and told you to run it. Do not invent a range scan.',
     inputSchema: { type: 'object', properties: { url: { type: 'string' }, param: { type: 'string' }, values: { type: 'array', maxItems: 6, items: { type: 'string' } } }, required: ['url', 'param', 'values'], additionalProperties: false },
@@ -103,11 +108,73 @@ export const WORKSPACE_TOOL_SPECS = [
 export function workspacePermission(toolName) {
   if (toolName === 'workspace_run') return 'workspace.run';
   if (toolName === 'workspace_write' || toolName === 'workspace_edit') return 'workspace.write';
-  if (toolName === 'workspace_list' || toolName === 'workspace_read' || toolName === 'workspace_grep' || toolName === 'workspace_glob' || toolName === 'workspace_fetch' || toolName === 'workspace_read_path' || toolName === 'workspace_http' || toolName === 'workspace_browser' || toolName === 'workspace_shell' || toolName === 'workspace_probe_sql' || toolName === 'workspace_probe_command' || toolName === 'workspace_source_list' || toolName === 'workspace_source_search' || toolName === 'workspace_chain_read' || toolName === 'workspace_chain_add') return 'workspace.read';
+  if (toolName === 'workspace_list' || toolName === 'workspace_read' || toolName === 'workspace_grep' || toolName === 'workspace_glob' || toolName === 'workspace_fetch' || toolName === 'workspace_read_path' || toolName === 'workspace_http' || toolName === 'workspace_browser' || toolName === 'workspace_ws' || toolName === 'workspace_shell' || toolName === 'workspace_probe_sql' || toolName === 'workspace_probe_command' || toolName === 'workspace_source_list' || toolName === 'workspace_source_search' || toolName === 'workspace_chain_read' || toolName === 'workspace_chain_add') return 'workspace.read';
   throw workspaceError('workspace_tool_unknown');
 }
 
 function workspaceError(code, message = code) { return Object.assign(Error(message), { code, retryable: false }); }
+
+const WS_MAX_MS = 30000;
+const WS_MAX_FRAMES = 100;
+const WS_MAX_FRAME_BYTES = 64 * 1024;
+const WS_MAX_TOTAL_BYTES = 2 * 1024 * 1024;
+
+// Open one WebSocket, optionally send text frames, and capture the exchange,
+// bounded by time / frame count / total bytes. Host scope + SSRF are already
+// enforced by assertWsTarget before this is called; this only moves data and
+// caps it. The captured frames are evidence, never an authorization.
+async function captureWebSocket(url, { send = [], headers, timeoutMs } = {}) {
+  if (typeof WebSocket !== 'function') throw workspaceError('workspace_ws_unsupported');
+  const budget = Math.min(Math.max(Number(timeoutMs) || 10000, 100), WS_MAX_MS);
+  const toSend = Array.isArray(send) ? send.filter(frame => typeof frame === 'string').slice(0, 32) : [];
+  const frames = [];
+  let totalBytes = 0;
+  let truncated = false;
+  let sentCount = 0;
+  let opened = false;
+  const started = Date.now();
+  return await new Promise(resolve => {
+    let ws;
+    let timer;
+    let settled = false;
+    const finish = extra => {
+      if (settled) return; settled = true;
+      clearTimeout(timer);
+      try { if (ws) ws.close(); } catch { /* ignore */ }
+      resolve({ url: String(url), opened, frames, sent: sentCount, truncated, ...extra });
+    };
+    try {
+      ws = headers && typeof headers === 'object' ? new WebSocket(url, { headers }) : new WebSocket(url);
+    } catch { resolve({ url: String(url), opened: false, frames, sent: 0, truncated: false, error: 'ws_open_failed' }); return; }
+    ws.binaryType = 'arraybuffer';
+    timer = setTimeout(() => finish({ closed: 'timeout' }), budget);
+    ws.addEventListener('open', () => {
+      opened = true;
+      for (const text of toSend) {
+        try { ws.send(text); sentCount++; frames.push({ dir: 'send', type: 'text', at: Date.now() - started, text: text.slice(0, WS_MAX_FRAME_BYTES), bytes: Buffer.byteLength(text) }); }
+        catch { /* a send that fails is not fatal */ }
+      }
+    });
+    ws.addEventListener('message', ev => {
+      if (frames.length >= WS_MAX_FRAMES) { truncated = true; finish({ closed: 'frame_cap' }); return; }
+      let frame;
+      if (typeof ev.data === 'string') {
+        const bytes = Buffer.byteLength(ev.data);
+        frame = { dir: 'recv', type: 'text', at: Date.now() - started, text: ev.data.slice(0, WS_MAX_FRAME_BYTES), bytes };
+        totalBytes += bytes;
+      } else {
+        const buf = Buffer.from(ev.data);
+        frame = { dir: 'recv', type: 'binary', at: Date.now() - started, base64: buf.subarray(0, WS_MAX_FRAME_BYTES).toString('base64'), bytes: buf.length };
+        totalBytes += buf.length;
+      }
+      if (frame.bytes > WS_MAX_FRAME_BYTES) { frame.frameTruncated = true; truncated = true; }
+      frames.push(frame);
+      if (totalBytes >= WS_MAX_TOTAL_BYTES) { truncated = true; finish({ closed: 'byte_cap' }); }
+    });
+    ws.addEventListener('close', ev => finish({ closeCode: ev?.code, closeReason: String(ev?.reason || '').slice(0, 200), closed: 'remote' }));
+    ws.addEventListener('error', () => { if (!opened) finish({ error: 'ws_open_failed' }); });
+  });
+}
 
 function lineWindows(line) {
   const width = 8000;
@@ -285,6 +352,23 @@ async function runTool(root, name, args = {}, { anchor, historyRoot, context={},
       const code = error.code === 'blocked_address' ? 'workspace_fetch_blocked' : 'workspace_fetch_failed';
       throw workspaceError(code);
     }
+  }
+  if (name === 'workspace_ws') {
+    if (!materialOpen) throw workspaceError('workspace_material_closed');
+    if (typeof args.url !== 'string' || !args.url.trim()) throw workspaceError('workspace_ws_invalid');
+    let url;
+    try {
+      // openNetwork:false → scope-locked to cited/authorized hosts + SSRF wall.
+      url = await assertWsTarget(args.url, { allowedHosts, openNetwork: false, lookupImpl });
+    } catch (error) {
+      const code = error.code === 'blocked_address' ? 'workspace_ws_blocked'
+        : error.code === 'ws_host_not_allowed' ? 'workspace_ws_host_denied'
+        : error.code === 'dns' ? 'workspace_ws_unreachable'
+        : 'workspace_ws_invalid';
+      throw workspaceError(code);
+    }
+    try { return await captureWebSocket(url.href, { send: args.send, headers: args.headers, timeoutMs: args.timeoutMs }); }
+    catch (error) { throw workspaceError(/^workspace_[a-z_]+$/u.test(error?.code ?? '') ? error.code : 'workspace_ws_failed'); }
   }
   if (name === 'workspace_browser') {
     if (!materialOpen) throw workspaceError('workspace_material_closed');

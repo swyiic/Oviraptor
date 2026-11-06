@@ -67,7 +67,7 @@ export function citedPageUrls(text) {
   return urls.slice(0, MAX_PAGES);
 }
 
-async function assertReachable(url, lookupImpl) {
+export async function assertReachable(url, lookupImpl) {
   if (isIP(url.hostname)) {
     if (blockedAddress(url.hostname)) throw Object.assign(Error('blocked'), { code: 'blocked_address' });
     return;
@@ -75,6 +75,22 @@ async function assertReachable(url, lookupImpl) {
   const records = await lookupImpl(url.hostname, { all: true, verbatim: true });
   if (!records.length) throw Object.assign(Error('dns'), { code: 'dns' });
   if (records.some(record => blockedAddress(record.address))) throw Object.assign(Error('blocked'), { code: 'blocked_address' });
+}
+
+// Gate a WebSocket target with the SAME wall saveFetchedUrl uses for http:
+// url validity → host scope-lock (allowedHosts, unless openNetwork) → SSRF
+// reachability (blocks private/loopback/link-local). Returns the parsed URL.
+export async function assertWsTarget(rawUrl, { allowedHosts = [], openNetwork = false, lookupImpl = lookup } = {}) {
+  let url;
+  try { url = new URL(String(rawUrl)); }
+  catch { throw Object.assign(Error('ws_url_invalid'), { code: 'ws_url_invalid' }); }
+  if (url.username || url.password || (url.protocol !== 'ws:' && url.protocol !== 'wss:')) {
+    throw Object.assign(Error('ws_url_invalid'), { code: 'ws_url_invalid' });
+  }
+  const allowed = new Set(allowedHosts.map(host => String(host).toLowerCase()));
+  if (!openNetwork && !allowed.has(url.hostname.toLowerCase())) throw Object.assign(Error('ws_host_not_allowed'), { code: 'ws_host_not_allowed' });
+  await assertReachable(url, lookupImpl);
+  return url;
 }
 
 async function readBody(response, max) {
