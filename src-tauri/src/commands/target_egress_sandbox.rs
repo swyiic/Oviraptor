@@ -195,6 +195,20 @@ fn agent_tool_run_target_poc(
         Ok(value) => value,
         Err(error) => return agent_tool_error(&error, "target_scope_rejected"),
     };
+    // Gate 5 (§4d(三) 执行前复扫): PoC code must not call out to anything but the
+    // vetted target. Flags external callback URLs / IPs (host ∉ allowed_origins and
+    // ≠ the target) + fetch-exec + dep-install; never blobs/keys (legit crypto). The
+    // fixed-target egress proxy is still the hard boundary; this catches intent and
+    // poisoned material early, before the operator is asked to approve.
+    let poison = poison_scan_egress_code(&script, &context.execution_plan.allowed_origins, &target_host);
+    if !poison.is_empty() {
+        let found = poison.iter().map(|a| format!("{}（{}）", a.kind, a.preview)).collect::<Vec<_>>().join("；");
+        return serde_json::json!({
+            "accepted": false,
+            "code": "poison_blocked",
+            "error": format!("PoC 含对目标之外的回连 / 取-执行 / 依赖拉取，已拒绝（防供应链投毒）。只对授权目标发请求、用 stdlib 自己写：{found}"),
+        });
+    }
     // Gate 2: single-use operator approval, bound to this exact script, on egress.
     let fencing = current_coordinator_fencing_token(&connection, context);
     let fingerprint = format!("{:x}", Sha256::digest(format!("target_poc:{}", script.trim()).as_bytes()));
