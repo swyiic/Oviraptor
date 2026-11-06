@@ -114,7 +114,23 @@ fn agent_http_exchange_inner(
         }
     }
     if let Some(body) = request.body.as_deref().filter(|value| !value.is_empty()) {
-        call = call.body(body.to_string());
+        // D6 Stage 2: when the per-request transform splice is enabled AND an encode
+        // transform is registered for this scan, the WIRE carries encode(body) (fresh
+        // one-time key/IV + signature, computed in the no-network sandbox). The sealed
+        // claim + request parameters below still journal the logical (plaintext)
+        // request. Default OFF (env unset) → this is one env check and the original
+        // body; the transform only reshapes bytes to the ALREADY-authorized target.
+        let encoded = if super::request_transform_enabled() {
+            db::open(&context.db_path)
+                .ok()
+                .and_then(|db| super::apply_request_encode(&db, &context.scan_id, body.as_bytes()))
+        } else {
+            None
+        };
+        call = match encoded {
+            Some(bytes) => call.body(bytes),
+            None => call.body(body.to_string()),
+        };
     }
     // Commit the request claim before any send. The journal is authoritative
     // even if the process dies before finish_tool or the Native checkpoint.
@@ -243,7 +259,18 @@ fn agent_http_exchange_inner(
     let mut hasher = Sha256::new();
     hasher.update(&body);
     let digest = format!("{:x}", hasher.finalize());
-    let text = String::from_utf8_lossy(&body).to_string();
+    // D6 Stage 2: present decode(body) when enabled + a decode transform is registered;
+    // the evidence digest above stays over the RAW wire bytes (integrity unchanged).
+    // Default OFF → one env check and the raw body, byte-identical to before.
+    let text = if super::request_transform_enabled() {
+        db::open(&context.db_path)
+            .ok()
+            .and_then(|db| super::apply_response_decode(&db, &context.scan_id, &body))
+            .map(|plain| String::from_utf8_lossy(&plain).to_string())
+            .unwrap_or_else(|| String::from_utf8_lossy(&body).to_string())
+    } else {
+        String::from_utf8_lossy(&body).to_string()
+    };
     let structure = agent_response_structure(&text, &content_type);
     agent_single_require_fresh(context).map_err(agent_http_claim_error)?;
     runtime.record_request(AgentRequestTrace {

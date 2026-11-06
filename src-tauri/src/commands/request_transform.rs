@@ -110,10 +110,9 @@ fn run_request_transform(
 }
 
 /// Stage-2 hook: encode an outgoing request body. No-op (None) unless the live splice
-/// is enabled AND an encode transform is registered for the scan. Wired into the
-/// broker in Stage 2; harmless until then.
-#[allow(dead_code)]
-fn apply_request_encode(
+/// is enabled AND an encode transform is registered for the scan. Called from the
+/// broker send path (exchange.rs) behind the same flag.
+pub(crate) fn apply_request_encode(
     connection: &rusqlite::Connection,
     scan_id: &str,
     body: &[u8],
@@ -129,9 +128,8 @@ fn apply_request_encode(
 }
 
 /// Stage-2 hook: decode an incoming response body. No-op (None) unless enabled AND a
-/// decode transform is registered. Wired into the broker in Stage 2.
-#[allow(dead_code)]
-fn apply_response_decode(
+/// decode transform is registered. Called from the broker response path (exchange.rs).
+pub(crate) fn apply_response_decode(
     connection: &rusqlite::Connection,
     scan_id: &str,
     body: &[u8],
