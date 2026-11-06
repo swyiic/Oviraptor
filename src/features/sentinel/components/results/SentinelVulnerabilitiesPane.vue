@@ -133,6 +133,10 @@ async function copyText(value: string) {
               <span>{{ tr('真实业务危害（给开发看）', 'Real business impact (for developers)') }}</span>
               <p>{{ json(item.recordJson).business_impact }}</p>
             </div>
+            <div v-if="json(item.recordJson).chain_context" class="vuln-chain-context">
+              <span>{{ tr('在攻击链中的位置', 'Position in the attack chain') }}</span>
+              <p>{{ json(item.recordJson).chain_context }}</p>
+            </div>
             <div v-if="json(item.recordJson).impact || json(item.recordJson).detail">
               <span>{{ tr('技术影响', 'Technical impact') }}</span>
               <p>{{ json(item.recordJson).impact || json(item.recordJson).detail }}</p>
@@ -446,4 +450,6 @@ async function copyText(value: string) {
 .vuln-business-impact { border-left: 3px solid color-mix(in srgb, #b4332f 55%, transparent); padding-left: 10px; }
 .vuln-business-impact > span { color: color-mix(in srgb, #b4332f 80%, var(--ui-ink, #1a1a1a)); font-weight: 600; }
 .vuln-business-impact > p { font-size: 13px; line-height: 1.6; }
+.vuln-chain-context { border-left: 3px solid color-mix(in srgb, #7a5bbf 55%, transparent); padding-left: 10px; }
+.vuln-chain-context > span { color: color-mix(in srgb, #7a5bbf 80%, var(--ui-ink, #1a1a1a)); font-weight: 600; }
 </style>
