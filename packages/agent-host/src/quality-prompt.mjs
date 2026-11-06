@@ -415,7 +415,11 @@ export function answerModeOptions(mode) {
   return {
     answerMode: 'quality',
     temperature: 0.3,
-    maxSteps: 32,
+    // 取消武断步数闸(用户单主脑哲学):深任务常要多步"写脚本→跑→改→再跑→深挖→入库",
+    // 32 步会把真实工作切断("已停止继续规划")。真正的刹车保留在"无进展才停"
+    // (tool_loop_stalled:提议的调用全被去重/重复、没有新的→停)和 isDeadEnd 复盘上;
+    // 这里只留一个很高的 runaway 兜底,让在推进的 agent 不被切断。speed 档仍是快档(10 步)。
+    maxSteps: 256,
     maxTokens: 16384,
     systemAddon: '',
     toolHintGuard: true,
