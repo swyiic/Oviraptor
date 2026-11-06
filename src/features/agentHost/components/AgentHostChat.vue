@@ -382,6 +382,19 @@ async function updateHistoryConversation(id: string, patch: { title?: string; pi
     ...(item.lastActivityAt && (!updated.lastActivityAt || item.lastActivityAt > updated.lastActivityAt) ? { lastActivityAt: item.lastActivityAt } : {}),
   } : item);
 }
+/** List of named workspaces a direct-chat conversation can be re-homed to (personal space excluded). */
+async function attachTargets() {
+  return (await props.client.projects()).filter(item => item.kind !== 'personal');
+}
+async function attachHistoryConversation(id: string, targetProjectId: number) {
+  const projectId = hostProjectId.value, generation = projectGeneration;
+  if (projectId === undefined || loadingProject.value || !conversations.value.some(item => item.id === id)) throw Error('host_conversation_not_found');
+  const updated = await props.client.attachConversation(id, targetProjectId);
+  if (disposed || generation !== projectGeneration || projectId !== hostProjectId.value) return;
+  if (updated.id !== id || updated.projectId !== targetProjectId) throw Error('host_conversation_scope_mismatch');
+  conversations.value = conversations.value.filter(item => item.id !== id);
+  if (selectedId.value === id) selectedId.value = conversations.value[conversations.value.length - 1]?.id;
+}
 async function revealHistoryConversation(id: string) {
   const projectId = hostProjectId.value, generation = projectGeneration;
   if (projectId === undefined || loadingProject.value || !conversations.value.some(item => item.id === id)) throw Error('host_conversation_not_found');
@@ -565,6 +578,8 @@ function handleEvent(event: AgentHostEvent) {
   }
   if(event.type==='conversation.message'&&event.conversationId){if(event.conversationId===selectedId.value&&!running.value)void loadMessages(true);else void refreshConversationMetadata();return;}
   if(event.type==='conversation.deleted'&&event.conversationId){conversations.value=conversations.value.filter(item=>item.id!==event.conversationId);if(selectedId.value===event.conversationId)selectedId.value=visibleConversations.value[0]?.id;return;}
+  // Re-homed to another workspace (agent-at-top §5): drop it from this project's list, same as a delete.
+  if(event.type==='conversation.attached'&&event.conversationId&&event.projectId!==hostProjectId.value){conversations.value=conversations.value.filter(item=>item.id!==event.conversationId);if(selectedId.value===event.conversationId)selectedId.value=visibleConversations.value[0]?.id;return;}
   if (event.type === "conversation.updated" && event.conversationId) {
     conversations.value = conversations.value.map(item => (item.id === event.conversationId && (typeof event.metadataRevision!=='number'||event.metadataRevision>=(item.metadataRevision??0)) ? { ...item,
       ...(typeof event.metadataRevision==='number'?{metadataRevision:event.metadataRevision}:{}),
@@ -621,7 +636,7 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
       <button type="button" class="ahc-side-new" :disabled="loadingProject" @click="newConversation"><Plus :size="16" />{{ tr('新对话', 'New chat') }}</button>
       <label class="ahc-history-search"><Search :size="14" /><input v-model="historyQuery" type="search" :placeholder="tr('搜索对话', 'Search chats')" :aria-label="tr('搜索对话', 'Search chats')" /><button type="button" :aria-label="tr('查找全部会话','Find all conversations')" title="⌘K / Ctrl+K" @click="finderOpen=true">⌘K</button></label>
       <div class="ahc-history-heading"><span>{{ tr('对话', 'Chats') }}</span><button type="button" @click="finderOpen=true">{{tr(`全部 ${conversations.length}`,`All ${conversations.length}`)}}</button></div>
-      <ConversationHistoryList :items="recentConversations" :selected-id="selectedId" :project-id="hostProjectId" :loading="loadingProject" :deleting-disabled="running||continuingTask" :empty-label="historyQuery?tr('没有匹配的对话','No matching chats'):tr('新对话会显示在这里','Your chats appear here')" :update-conversation="updateHistoryConversation" :reveal-conversation="revealHistoryConversation" :remove-conversation="removeConversation" @select="selectedId=$event"/>
+      <ConversationHistoryList :items="recentConversations" :selected-id="selectedId" :project-id="hostProjectId" :loading="loadingProject" :deleting-disabled="running||continuingTask" :empty-label="historyQuery?tr('没有匹配的对话','No matching chats'):tr('新对话会显示在这里','Your chats appear here')" :update-conversation="updateHistoryConversation" :reveal-conversation="revealHistoryConversation" :remove-conversation="removeConversation" :personal="personal" :attach-conversation="attachHistoryConversation" :attach-targets="attachTargets" @select="selectedId=$event"/>
     </nav>
   </Teleport>
   <ConversationFinder v-model:open="finderOpen" v-model:query="historyQuery" :items="finderConversations" :selected-id="selectedId" :project-name="projectName" :loading="loadingProject" @select="findConversation"/>

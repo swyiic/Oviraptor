@@ -78,13 +78,16 @@ export function createAgentHostChatClient(endpoint: AgentHostEndpoint, fetchImpl
     /** The conversation a scan task reports to; the Host creates and binds one when none exists. */
     openScanTaskConversation: (projectId: number, taskId: string) => request<{ conversation: AgentHostConversation; created: boolean; bound: boolean }>(`/api/projects/${projectId}/scan-tasks/${encodeURIComponent(taskId)}/conversation`, { method: "POST", body: "{}" }),
     updateConversation: (conversationId: string, projectId: number, patch: { title?: string; pinned?: boolean }) => request<AgentHostConversation>(`/api/conversations/${encodeURIComponent(conversationId)}`, { method: "PATCH", body: JSON.stringify({ projectId, ...patch }) }),
+    /** Re-home a conversation to a named workspace (agent-at-top §5, forward-only):
+     *  future turns use the target's workspace/memory/budget; past evidence stays put. */
+    attachConversation: (conversationId: string, projectId: number) => request<AgentHostConversation>(`/api/conversations/${encodeURIComponent(conversationId)}/attach`, { method: "POST", body: JSON.stringify({ projectId }) }),
     conversationWorkspace: (conversationId: string, projectId: number) => request<AgentConversationWorkspace>(`/api/conversations/${encodeURIComponent(conversationId)}/workspace?projectId=${projectId}`),
     conversationFile: (id:string,pid:number,path:string)=>request<AgentConversationFile>(`/api/conversations/${encodeURIComponent(id)}/files/info?projectId=${pid}&path=${encodeURIComponent(path)}`),
     fileVersions:(id:string,pid:number,path:string,after?:string)=>request<{items:Array<{versionId:string;createdAt:string;size:number;kind:string;sha256:string}>;hasMore:boolean;nextCursor:string|null}>(`/api/conversations/${encodeURIComponent(id)}/files/versions?projectId=${pid}&path=${encodeURIComponent(path)}${after?`&after=${encodeURIComponent(after)}`:''}`),
     conversationFiles: (conversationId: string, projectId: number, after?:string) => request<AgentConversationFiles>(`/api/conversations/${encodeURIComponent(conversationId)}/files?projectId=${projectId}${after?`&after=${encodeURIComponent(after)}`:''}`),
     previewConversationFile: (conversationId: string, projectId: number, path: string, versionId?:string, offset=0) => request<AgentConversationFilePreview>(`/api/conversations/${encodeURIComponent(conversationId)}/files/preview?projectId=${projectId}&path=${encodeURIComponent(path)}${versionId?`&versionId=${encodeURIComponent(versionId)}`:''}&offset=${offset}`),
     deleteConversation: (conversationId: string, projectId: number) => request<unknown>(`/api/conversations/${encodeURIComponent(conversationId)}?projectId=${projectId}`, { method: "DELETE" }),
-    projects: () => request<{ items: { id: number; name: string }[] }>("/api/projects").then(r => r.items),
+    projects: () => request<{ items: { id: number; name: string; kind?: string }[] }>("/api/projects").then(r => r.items),
     projectMemory: (projectId: number) => request<{ items: AgentProjectMemoryEntry[] }>(`/api/projects/${projectId}/memory`).then(r => r.items),
     forgetMemory: (projectId: number, entryId: string) => request<{ ok: boolean; removed: boolean }>(`/api/projects/${projectId}/memory/${encodeURIComponent(entryId)}`, { method: "DELETE" }),
     clearMemory: (projectId: number) => request<{ ok: boolean; removed: number }>(`/api/projects/${projectId}/memory`, { method: "DELETE" }),
