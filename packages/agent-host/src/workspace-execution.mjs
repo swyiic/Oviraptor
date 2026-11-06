@@ -34,7 +34,7 @@ function sandbox(work,runtime,script,args,readRoots=[]){
  }
  throw error('workspace_execution_unsupported');
 }
-export async function executeWorkspaceScript(root,input,{executionRoot,assertAuthorized,write,readRoots=[]}){
+export async function executeWorkspaceScript(root,input,{executionRoot,assertAuthorized,write,readRoots=[],onProgress}){
  if(!input||!['node','python'].includes(input.runtime)||typeof input.path!=='string'||!input.path||isAbsolute(input.path)||input.path.split('/').some(p=>p==='..'||p==='.'||!p)||/[\\\u0000-\u001f]/u.test(input.path)||!Array.isArray(input.args??[])||(input.args??[]).length>32||(input.args??[]).some(a=>typeof a!=='string'||a.length>4096)||Object.keys(input).some(k=>!['path','runtime','args','timeoutMs'].includes(k)))throw error('workspace_execution_invalid');
  const timeoutMs=input.timeoutMs??30000;if(!Number.isSafeInteger(timeoutMs)||timeoutMs<100||timeoutMs>1800000)throw error('workspace_execution_invalid');
  if(!executionRoot)throw error('workspace_execution_unsupported');
@@ -52,7 +52,8 @@ export async function executeWorkspaceScript(root,input,{executionRoot,assertAut
    const stop=()=>{try{process.kill(-child.pid,'SIGKILL')}catch{child.kill('SIGKILL')}};
    child=spawn(command,argv,{cwd:work,detached:true,stdio:['ignore','pipe','pipe'],env:{PATH:'/usr/bin:/bin',HOME:work,TMPDIR:join(work,'.tmp'),LANG:'en_US.UTF-8',OPENSSL_CONF:'/dev/null',PYTHONDONTWRITEBYTECODE:'1'}});
    child.stdout.on('data',b=>append('out',b));child.stderr.on('data',b=>append('err',b));
-   const timer=setTimeout(()=>{timedOut=true;stop()},timeoutMs),check=setInterval(()=>{try{assertAuthorized()}catch{cancelled=true;stop()}},100);
+   let progressTick=0;
+   const timer=setTimeout(()=>{timedOut=true;stop()},timeoutMs),check=setInterval(()=>{try{assertAuthorized()}catch{cancelled=true;stop();return;}if(onProgress&&++progressTick%10===0){try{const o=boundedScrubbedOutput(Buffer.concat(stdoutChunks).toString('utf8'));onProgress({outputLines:o.text?o.text.split('\n').length:0,previewText:o.text.slice(-400)});}catch{/* best effort */}}},100);
    const finish=()=>{clearTimeout(timer);clearInterval(check)};
    child.on('error',e=>{finish();if(!settled){settled=true;reject(error('workspace_execution_launch_failed'))}});
    child.on('close',(exitCode,signal)=>{finish();if(settled)return;settled=true;const out=boundedScrubbedOutput(Buffer.concat(stdoutChunks).toString('utf8')),err=boundedScrubbedOutput(Buffer.concat(stderrChunks).toString('utf8'));resolveResult({exitCode,signal,stdout:out.text,stderr:err.text,truncated:out.truncated||err.truncated,timedOut,cancelled,success:exitCode===0&&!timedOut&&!cancelled});});
