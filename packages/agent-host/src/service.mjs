@@ -18,6 +18,8 @@ import { shellCatalog as buildShellCatalog } from './shell-apps.mjs';
 import { buildDiscoverySummary, formatDiscoveryPromptBlock } from './discovery.mjs';
 import { formatMemoryPromptBlock, readConversationMemory, recordTurn, summarizeToolEvent, pinFact, MEMORY_TOOL_SPECS, readProjectMemory, writeProjectMemoryEntry, forgetProjectMemory, formatProjectMemoryPromptBlock, readGlobalMemory, formatGlobalMemoryPromptBlock } from './memory.mjs';
 import { readApprovedResearchCards, formatResearchCardsPromptBlock } from './research-cards.mjs';
+import { allAgentTools, matchAgentTools, formatAgentToolsPromptBlock, recallAgentToolCode, AGENT_TOOL_RECALL_SPEC } from './agent-tools.mjs';
+import { JevConnector } from './jev-connector.mjs';
 import { ProviderStore, OpenAiCompatibleRuntime, truncateMcpResult } from './provider.mjs';
 import { buildTurnPrompt, exposureTaskIntent, discoveryAssistIntent, discoveryEnrichmentIntent, looksLikeDataQuestion, isProjectReadQuestion, isReadOnlyDataRequest, certificateTaskIntent, scanningTaskIntent, scanningHandoffIntent, humanizeToolTitle, normalizeAnswerMode, answerModeOptions, prefersResponsesApi, scrubSecrets, scrubbedModelText } from './quality-prompt.mjs';
 import {
@@ -70,6 +72,8 @@ export class AgentHost {
     this.dataDir = dataDir; this.store = store ?? new HostStore(join(dataDir, 'host.sqlite'));
     this.desktopAssetSynchronizer = new DesktopAssetSynchronizer();
     this.apps = apps ?? new AppManager(this.store, join(dataDir, 'applications'));
+    // External MCP decision connector (jev-studio). Disabled by default; graceful.
+    this.jev = new JevConnector(this.store); this.jev.start().catch(() => {});
     this.runtimeFactory = runtimeFactory; this.providerStore = new ProviderStore(dataDir);
     this.networkStore = new HostNetworkSettings(dataDir, { ...(networkEnvironment ? { env: networkEnvironment } : {}) });
     this.networkTransportInjected = Boolean(providerFetch);
@@ -1138,6 +1142,9 @@ export class AgentHost {
       // Operator-approved technique cards (D4): advisory reasoning only, same wall as memory;
       // read-only from the Tauri app DB, never feeds any auth/scope/settlement/capability gate.
       const researchCardsBlock = formatResearchCardsPromptBlock(readApprovedResearchCards(process.env.OVIRAPTOR_APP_DB));
+      // Tool library (P2b): advisory recall of parameterized skeletons matched to this target.
+      const _agentTools = allAgentTools(process.env.OVIRAPTOR_APP_DB);
+      const agentToolsBlock = formatAgentToolsPromptBlock(matchAgentTools(_agentTools, text), { total: _agentTools.length });
       run.toolMemory = [];
       const pendingSteers = this.store.pendingSteers(conversation.id);
       if (pendingSteers.length) text += `\n此前已接收、尚未交付的补充要求：\n${pendingSteers.map(message => message.content).join('\n')}`;
@@ -1174,6 +1181,7 @@ export class AgentHost {
         projectMemoryBlock,
         globalMemoryBlock,
         researchCardsBlock,
+        agentToolsBlock,
         userText: text,
         answerMode,
         permissionMode: run.permissionMode,
@@ -1436,6 +1444,7 @@ export class AgentHost {
     const conversation = this.store.conversation(conversationId);
     const capability = this.apps.capabilities(conversation.projectId, { runtimeIdentity: this.runtimeIdentity() }).find(tool => tool.name.replace('::', '__') === params.name);
     const readOnly = ['workspace_read', 'workspace_list', 'workspace_grep', 'workspace_glob', 'workspace_fetch', 'workspace_read_path', 'workspace_http', 'workspace_browser', 'workspace_shell', 'workspace_probe_sql', 'workspace_probe_command', 'workspace_source_list', 'workspace_source_search', 'workspace_chain_read', 'workspace_chain_add'].includes(params.name)
+      || (typeof params.name === 'string' && params.name.startsWith('jev_'))
       || Boolean(run.skillScope && this.skillAccess?.toolSpecs(conversationId, run.skillScope).some(tool => tool.name === params.name))
       || typeof capability?.permission === 'string' && (capability.permission === 'read' || capability.permission.endsWith('.read'));
     const operationId = randomUUID();
@@ -1526,8 +1535,17 @@ export class AgentHost {
     const conversation = this.store.conversation(conversationId);
     if (method === 'initialize') return { protocolVersion: '2025-06-18', capabilities: { tools: { listChanged: true } }, serverInfo: { name: 'oviraptor-apps', version: '1.0.0' } };
     const skillTools = run.skillScope && this.skillAccess ? this.skillAccess.toolSpecs(conversationId, run.skillScope) : [];
-    if (method === 'tools/list') return { tools: [...this.apps.capabilities(conversation.projectId, { runtimeIdentity: this.runtimeIdentity() }).map(tool => ({ name: tool.name.replace('::', '__'), description: tool.description, inputSchema: tool.inputSchema })), ...WORKSPACE_TOOL_SPECS, ...MEMORY_TOOL_SPECS, ...TASK_TOOL_SPECS, ...(this.runtimeId === 'xai-api' ? SUBAGENT_TOOL_SPECS : []), ...VERIFIER_TOOL_SPECS, ...skillTools] };
+    if (method === 'tools/list') return { tools: [...this.apps.capabilities(conversation.projectId, { runtimeIdentity: this.runtimeIdentity() }).map(tool => ({ name: tool.name.replace('::', '__'), description: tool.description, inputSchema: tool.inputSchema })), ...WORKSPACE_TOOL_SPECS, ...MEMORY_TOOL_SPECS, ...TASK_TOOL_SPECS, ...(this.runtimeId === 'xai-api' ? SUBAGENT_TOOL_SPECS : []), ...VERIFIER_TOOL_SPECS, ...AGENT_TOOL_RECALL_SPEC, ...this.jev.toolSpecs(), ...skillTools] };
     if (method === 'tools/call') {
+      if (params.name === 'recall_agent_tool') {
+        const code = recallAgentToolCode(process.env.OVIRAPTOR_APP_DB, (params.arguments ?? {}).id);
+        return { content: [{ type: 'text', text: JSON.stringify(code ? { ok: true, code } : { ok: false, error: '没有该已批准骨架(或 id 不对)' }) }], _meta: { hostEvidence: 'advisory' } };
+      }
+      if (this.jev.owns(params.name)) {
+        const result = await this.jev.callTool(params.name, params.arguments ?? {});
+        const shaped = result && typeof result === 'object' && Array.isArray(result.content) ? result : { content: [{ type: 'text', text: JSON.stringify(result ?? null) }] };
+        return { ...shaped, _meta: { hostEvidence: 'advisory' } };
+      }
       if (params.name === 'remember' || params.name === 'forget') {
         if (params.name === 'remember') {
           const written = writeProjectMemoryEntry(this.store, conversation.projectId, { ...(params.arguments ?? {}), sourceConversationId: conversation.id });
@@ -1672,7 +1690,7 @@ export class AgentHost {
     this.#cancelOAuthPoll();
     for (const run of this.runs.values()) await this.cancel(run.conversationId);
     await this.runtime?.close(); await Promise.allSettled([...this.runs.values()].map(run => run.completion));
-    await this.apps.close(); await Promise.allSettled([...this.activeMcpCalls]); await this.desktopAssetSynchronizer.close(); this.store.close();
+    await this.jev?.stop(); await this.apps.close(); await Promise.allSettled([...this.activeMcpCalls]); await this.desktopAssetSynchronizer.close(); this.store.close();
     this.library?.close();
   }
 }
