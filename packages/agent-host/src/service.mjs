@@ -1479,7 +1479,7 @@ export class AgentHost {
     }
     const conversation = this.store.conversation(conversationId);
     const capability = this.apps.capabilities(conversation.projectId, { runtimeIdentity: this.runtimeIdentity() }).find(tool => tool.name.replace('::', '__') === params.name);
-    const readOnly = ['workspace_read', 'workspace_list', 'workspace_grep', 'workspace_glob', 'workspace_fetch', 'workspace_read_path', 'workspace_http', 'workspace_browser', 'workspace_shell', 'workspace_probe_sql', 'workspace_probe_command', 'workspace_source_list', 'workspace_source_search', 'workspace_chain_read', 'workspace_chain_add'].includes(params.name)
+    const readOnly = ['workspace_read', 'workspace_list', 'workspace_grep', 'workspace_glob', 'workspace_fetch', 'workspace_read_path', 'workspace_http', 'workspace_browser', 'workspace_ws', 'workspace_shell', 'workspace_probe_sql', 'workspace_probe_command', 'workspace_source_list', 'workspace_source_search', 'workspace_chain_read', 'workspace_chain_add'].includes(params.name)
       || (typeof params.name === 'string' && (params.name.startsWith('jev_') || params.name === 'record_finding'))
       || Boolean(run.skillScope && this.skillAccess?.toolSpecs(conversationId, run.skillScope).some(tool => tool.name === params.name))
       || typeof capability?.permission === 'string' && (capability.permission === 'read' || capability.permission.endsWith('.read'));

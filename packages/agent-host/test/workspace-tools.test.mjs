@@ -95,3 +95,53 @@ test('new tools keep path confinement', async () => withRoot(async root => {
   assert.equal(await code(call(root, 'workspace_grep', { pattern: 'x', path: '../..' })), 'workspace_path_denied');
   assert.equal(await code(call(root, 'workspace_glob', { pattern: '*', path: '../..' })), 'workspace_path_denied');
 }));
+
+// --- workspace_ws (增量4): gating + bounded capture ---
+import { createServer } from 'node:http';
+import { createHash } from 'node:crypto';
+
+function wsAccept(key) { return createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64'); }
+function wsEncodeText(str) { const p = Buffer.from(str); return Buffer.concat([Buffer.from([0x81, p.length]), p]); } // assumes <126 bytes
+function wsDecode(buf) { const len = buf[1] & 0x7f; const mask = buf.subarray(2, 6); const data = buf.subarray(6, 6 + len); const out = Buffer.alloc(len); for (let i = 0; i < len; i++) out[i] = data[i] ^ mask[i % 4]; return out.toString(); }
+
+function startWsEcho() {
+  const server = createServer();
+  const sockets = new Set();
+  server.on('upgrade', (req, socket) => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+    socket.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + wsAccept(req.headers['sec-websocket-key']) + '\r\n\r\n');
+    socket.write(wsEncodeText('hello-from-server'));
+    socket.on('data', chunk => { try { socket.write(wsEncodeText('echo:' + wsDecode(chunk))); } catch { /* ignore */ } });
+    socket.on('error', () => {});
+  });
+  const close = () => { for (const s of sockets) { try { s.destroy(); } catch { /* ignore */ } } server.close(); };
+  return new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve({ server, port: server.address().port, close })));
+}
+
+const wsCode = async (root, args, opts) => { try { await runWorkspaceTool(root, 'workspace_ws', args, opts); return null; } catch (e) { return e.code; } };
+
+test('workspace_ws: closed material, bad protocol, un-cited host, SSRF address are all rejected', async () => withRoot(async root => {
+  // no material access → closed
+  assert.equal(await wsCode(root, { url: 'ws://127.0.0.1:1/x' }, {}), 'workspace_material_closed');
+  // material open but http(s)/garbage → invalid
+  assert.equal(await wsCode(root, { url: 'https://example.com' }, { materialOpen: true, allowedHosts: ['example.com'] }), 'workspace_ws_invalid');
+  // host not among cited/authorized → host denied (scope lock)
+  assert.equal(await wsCode(root, { url: 'ws://evil.example/x' }, { materialOpen: true, allowedHosts: ['good.example'] }), 'workspace_ws_host_denied');
+  // link-local metadata address, even if "allowed", is blocked by the SSRF wall
+  assert.equal(await wsCode(root, { url: 'ws://169.254.169.254/latest' }, { materialOpen: true, allowedHosts: ['169.254.169.254'] }), 'workspace_ws_blocked');
+}));
+
+test('workspace_ws: captures server frames and records sent frames, bounded by timeout', async () => withRoot(async root => {
+  const { port, close } = await startWsEcho();
+  try {
+    const res = await runWorkspaceTool(root, 'workspace_ws', { url: `ws://127.0.0.1:${port}/live`, send: ['ping'], timeoutMs: 500 },
+      { materialOpen: true, allowedHosts: ['127.0.0.1'] });
+    assert.equal(res.opened, true);
+    assert.equal(res.sent, 1);
+    const recv = res.frames.filter(f => f.dir === 'recv').map(f => f.text);
+    assert.ok(recv.includes('hello-from-server'), `server greeting captured: ${JSON.stringify(recv)}`);
+    assert.ok(recv.includes('echo:ping'), `echo of sent frame captured: ${JSON.stringify(recv)}`);
+    assert.ok(res.frames.some(f => f.dir === 'send' && f.text === 'ping'), 'sent frame recorded as evidence');
+  } finally { close(); }
+}));

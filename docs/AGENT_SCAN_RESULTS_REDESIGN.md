@@ -43,7 +43,7 @@
 ### §D 漏洞 + HTTP/WS 证据记录
 - **agent 产结构化漏洞入库**:新增 host 工具 `record_finding`(agent 调用)→ 写 `sentinel_findings`(kind='vulnerability', record_json 含 title/severity/cvss/confidence/cwe-cve/evidence/**chain_context 组合链**/business_impact/poc)。复用现有 `SentinelVulnerabilitiesPane` 渲染。
 - **HTTP 证据**:把 agent 的 `workspace_http`/`workspace_browser` 捕获的 req/resp 作为 finding 的证据落库(复用 `InvestigationValidation` 的 method/url/headers/body/responseStatus/headers/body/decodedBody 形状,或 finding record_json 内嵌 requestResponse)。
-- **WS 证据(补缺口)**:现仅 realtime_endpoint finding 无 req/resp。新增 WS 帧记录(方向/opcode/payload/时间戳)作为 finding 证据;agent 侧需要一个能抓 WS 的工具(`workspace_ws`,受授权与 B4 约束)——这是本设计里新增能力,**单列评估**(见 §9 Q2)。
+- **WS 证据(补缺口)**:现仅 realtime_endpoint finding 无 req/resp。新增 WS 帧记录(方向/类型/payload/时间戳)作为 finding 证据。**已落地(增量4)**:host 工具 `workspace_ws`(workspace-tools.mjs)——`materialOpen`(授权)+ `allowedHosts` 锁定到 cited/已授权主机 + `blockedAddress` SSRF 硬墙(复用 saveFetchedUrl 的同一道墙,见 cited-pages.mjs `assertWsTarget`);打开 ws/wss、发可选文本帧、抓收发帧,上限 30s/100 帧/2MB、单帧 64KB;返回帧经 `record_finding` 的新 `wsFrames` 字段入库(findings.mjs `boundWsFrames`)。read-class,与 workspace_http 同类门禁;深度指引已提示 agent 用它。
 - **硬墙**:record_finding/证据只是记录,不授予任何权限;实际发请求仍走授权+审批。
 ### §E MD 报告汇总
 - 现在没有 MD 报告。**agent 用 `workspace_write` 把 `report.md` 写进工作区**(深度指引末句已要求它落结构化发现)——零后端即可产出。

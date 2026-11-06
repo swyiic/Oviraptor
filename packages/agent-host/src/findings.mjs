@@ -27,11 +27,28 @@ export const FINDING_TOOL_SPECS = [{
       recommendation: { type: 'string' },
       httpRequest: { type: 'object', description: '证明用的 HTTP 请求', properties: { method: { type: 'string' }, url: { type: 'string' }, headers: { type: 'object' }, body: { type: 'string' } } },
       httpResponse: { type: 'object', description: '对应响应', properties: { status: { type: 'integer' }, headers: { type: 'object' }, body: { type: 'string' } } },
+      wsFrames: { type: 'array', description: 'workspace_ws 抓到的 WebSocket 帧作证据', maxItems: 100, items: { type: 'object', properties: { dir: { type: 'string' }, type: { type: 'string' }, at: { type: 'integer' }, text: { type: 'string' }, base64: { type: 'string' }, bytes: { type: 'integer' } } } },
     },
     required: ['title', 'severity'],
     additionalProperties: false,
   },
 }];
+
+function boundWsFrames(frames) {
+  if (!Array.isArray(frames) || !frames.length) return undefined;
+  const out = frames.slice(0, 100).map(f => {
+    if (!f || typeof f !== 'object') return null;
+    const frame = {};
+    if (f.dir) frame.dir = clip(f.dir, 8);
+    if (f.type) frame.type = clip(f.type, 8);
+    if (Number.isInteger(f.at)) frame.at = f.at;
+    if (Number.isInteger(f.bytes)) frame.bytes = f.bytes;
+    if (f.text != null) frame.text = clip(f.text, 8000);
+    if (f.base64 != null) frame.base64 = clip(f.base64, 12000);
+    return Object.keys(frame).length ? frame : null;
+  }).filter(Boolean);
+  return out.length ? out : undefined;
+}
 
 function boundHttp(h, maxBody) {
   if (!h || typeof h !== 'object') return undefined;
@@ -57,6 +74,7 @@ export function recordFindingFromTool(store, conversationId, projectId, args = {
     poc_request: clip(args.pocRequest, 8000), poc_script: clip(args.pocScript, 16000), poc_output: clip(args.pocOutput, 8000),
     recommendation: clip(args.recommendation, 4000),
     http_request: boundHttp(args.httpRequest, 16000), http_response: boundHttp(args.httpResponse, 16000),
+    ws_frames: boundWsFrames(args.wsFrames),
   };
   const saved = store.recordFinding(conversationId, projectId, { title, severity, kind: 'vulnerability', recordJson: JSON.stringify(record) });
   return { ok: true, id: saved.id, status: saved.status };
