@@ -118,6 +118,7 @@ export class HostStore {
     this.db.exec(`CREATE TABLE IF NOT EXISTS application_retained(app_id TEXT PRIMARY KEY,version TEXT NOT NULL,digest TEXT NOT NULL,data_path TEXT,data_version TEXT NOT NULL,data_schema_version INTEGER NOT NULL,retained_at TEXT NOT NULL);`);
     this.db.exec(`CREATE TABLE IF NOT EXISTS project_memory(project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,entry_id TEXT NOT NULL,note TEXT NOT NULL,kind TEXT NOT NULL DEFAULT 'fact',tags TEXT NOT NULL DEFAULT '[]',source_conversation_id TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,scope TEXT NOT NULL DEFAULT 'project',PRIMARY KEY(project_id,entry_id));`);
     if (!columns('project_memory').has('scope')) this.db.exec("ALTER TABLE project_memory ADD COLUMN scope TEXT NOT NULL DEFAULT 'project'");
+    this.db.exec(`CREATE TABLE IF NOT EXISTS agent_findings(id TEXT PRIMARY KEY,conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,project_id INTEGER NOT NULL,title TEXT NOT NULL DEFAULT '',severity TEXT NOT NULL DEFAULT 'info',kind TEXT NOT NULL DEFAULT 'vulnerability',record_json TEXT NOT NULL DEFAULT '{}',status TEXT NOT NULL DEFAULT 'unverified' CHECK(status IN ('unverified','confirmed','rejected')),created_at TEXT NOT NULL,decided_at TEXT NOT NULL DEFAULT '');`);
     initializeNativeOwners(this.db);
     const recordColumns = columns('tool_records');
     if (recordColumns.size && !recordColumns.has('visibility')) this.db.exec("ALTER TABLE tool_records ADD COLUMN visibility TEXT NOT NULL DEFAULT 'available'");
@@ -340,6 +341,21 @@ export class HostStore {
     this.db.prepare('UPDATE conversations SET project_id=?,metadata_revision=metadata_revision+1 WHERE id=?').run(positiveId(projectId), String(id));
     return this.conversation(id);
   }
+  // Agent-recorded structured findings (authorized pentest evidence). Advisory
+  // record only — recording a finding grants no permission; real requests still
+  // go through authorization + approval. Default 'unverified' until operator review.
+  #findingRow(row) { let rec = {}; try { rec = JSON.parse(row.record_json ?? '{}'); } catch { /* advisory */ } return { id: row.id, conversationId: row.conversation_id, projectId: row.project_id, title: row.title, severity: row.severity, kind: row.kind, record: rec && typeof rec === 'object' ? rec : {}, status: row.status, createdAt: row.created_at, decidedAt: row.decided_at }; }
+  finding(id) { const row = this.db.prepare('SELECT * FROM agent_findings WHERE id=?').get(String(id)); if (!row) throw hostError('host_finding_unknown', 404); return this.#findingRow(row); }
+  findings(conversationId, status) { return this.db.prepare('SELECT * FROM agent_findings WHERE (?1 IS NULL OR conversation_id=?1) AND (?2 IS NULL OR status=?2) ORDER BY created_at DESC, id').all(conversationId != null ? String(conversationId) : null, status != null ? String(status) : null).map(r => this.#findingRow(r)); }
+  recordFinding(conversationId, projectId, { title, severity, kind, recordJson } = {}) {
+    this.conversation(conversationId);
+    const id = randomUUID();
+    const sev = ['critical','high','medium','low','info'].includes(severity) ? severity : 'info';
+    this.db.prepare("INSERT INTO agent_findings(id,conversation_id,project_id,title,severity,kind,record_json,created_at) VALUES(?,?,?,?,?,?,?,?)").run(id, String(conversationId), positiveId(projectId), boundedText(title || '', 256), sev, kind || 'vulnerability', String(recordJson ?? '{}'), stamp());
+    return this.finding(id);
+  }
+  decideFinding(id, confirm) { const changed = this.db.prepare("UPDATE agent_findings SET status=?2, decided_at=? WHERE id=?1 AND status='unverified'").run(String(id), confirm ? 'confirmed' : 'rejected', stamp()).changes; if (changed !== 1) throw hostError('host_finding_not_pending', 409); return this.finding(id); }
+  deleteFinding(id) { return this.db.prepare('DELETE FROM agent_findings WHERE id=?').run(String(id)).changes > 0; }
   updateConversationMetadata(id, input) {
     if (!input || typeof input !== 'object' || Array.isArray(input) || !Object.hasOwn(input, 'projectId')
       || Object.keys(input).some(key => !['projectId', 'title', 'pinned'].includes(key))

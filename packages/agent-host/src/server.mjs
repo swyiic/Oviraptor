@@ -194,6 +194,14 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
         if (parts[1] === 'memory' && parts[2] === 'global' && parts.length === 4 && method === 'DELETE') {
           return json({ ok: true, removed: host.store.deleteGlobalMemoryEntry(decodeURIComponent(parts[3])) });
         }
+        // Agent-recorded findings (authorized pentest evidence): operator review surface.
+        if (path === '/api/findings' && method === 'GET') return json({ items: host.store.findings(url.searchParams.get('conversationId'), url.searchParams.get('status')) });
+        if (parts[1] === 'findings' && parts.length === 4 && parts[3] === 'decide' && method === 'POST') {
+          return json(host.store.decideFinding(decodeURIComponent(parts[2]), (await body(request)).confirm === true));
+        }
+        if (parts[1] === 'findings' && parts.length === 3 && method === 'DELETE') {
+          return json({ ok: true, removed: host.store.deleteFinding(decodeURIComponent(parts[2])) });
+        }
         // Opens the conversation a scan task reports to, creating and binding one when none exists.
         if (parts[1] === 'projects' && parts[3] === 'scan-tasks' && parts[5] === 'conversation' && parts.length === 6 && method === 'POST') {
           return json(await host.openScanTaskConversation(parts[2], parts[4]));
@@ -202,6 +210,12 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
         if (path === '/api/conversations' && method === 'POST') {
           const input = await body(request);
           return json(host.createConversationFromRequest(input));
+        }
+        if (parts[1] === 'conversations' && parts.length === 4 && parts[3] === 'workspace' && method === 'GET') {
+          return json({ files: await host.workspaceFiles(decodeURIComponent(parts[2])) });
+        }
+        if (parts[1] === 'conversations' && parts.length === 5 && parts[3] === 'workspace' && parts[4] === 'file' && method === 'GET') {
+          return json(await host.workspaceFileContent(decodeURIComponent(parts[2]), url.searchParams.get('path') || ''));
         }
         if (parts[1] === 'conversations' && parts.length === 4 && parts[3] === 'attach' && method === 'POST') {
           return json(host.attachConversationToWorkspace(decodeURIComponent(parts[2]), (await body(request)).projectId));
