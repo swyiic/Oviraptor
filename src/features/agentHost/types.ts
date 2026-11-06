@@ -64,7 +64,7 @@ export type AgentNetworkSettings = {
 export type AgentNetworkUpdate = { mode: AgentNetworkMode; proxyUrl?: string; noProxy?: string; clearProxy?: boolean };
 
 export type AgentTaskStep = { id: string; revision: number; title: string; status: string; dependsOn: string[]; evidenceRefs: string[]; verified: boolean; outcomeUnknown?: boolean };
-export type AgentTaskEvidence = { id: string; runId: string; toolName: string; status: string; summary: string; provenance: string; outcomeUnknown?: boolean; startedAt: string; finishedAt?: string };
+export type AgentTaskEvidence = { id: string; runId: string; toolName: string; status: string; summary: string; /** First 200 chars of `summary`, whitespace-collapsed; empty while running. */ previewText?: string; provenance: string; outcomeUnknown?: boolean; startedAt: string; finishedAt?: string };
 export type AgentTaskChild = {
   id: string; runId: string; parentRunId: string; kind: "research" | "review"; goal: string;
   status: "running" | "reported" | "interrupted" | "cancelled";

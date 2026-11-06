@@ -63,7 +63,7 @@ const readOnlyAnswered = computed(() => {
 const taskDisplayGoal = computed(() => readOnlyAnswered.value
   ? messages.value.find(item => item.id === task.value?.readOnlyAnswer?.userMessageId)?.content || task.value?.goal
   : task.value?.goal);
-type InnerView = { goal: string; phase: string; phaseLabel: string; facts: string[]; hypotheses: string[]; compressed: boolean; hold: string };
+type InnerView = { goal: string; phase: string; phaseLabel: string; facts: string[]; hypotheses: string[]; compressed: boolean; hold: string; seq?: number; at?: number };
 const inner = ref<InnerView | null>(null);
 const activityRunId = ref<string>(), activityMessageId = ref<string>();
 const activityOpen = ref(false);
@@ -545,6 +545,8 @@ function handleEvent(event: AgentHostEvent) {
       facts: Array.isArray(event.facts) ? event.facts.map(item => String(item)).slice(-3) : [],
       hypotheses: Array.isArray(event.hypotheses) ? event.hypotheses.map(item => String(item)).slice(-2) : [],
       compressed: Boolean(event.compressed),
+      seq: typeof event.seq === "number" ? event.seq : undefined,
+      at: typeof event.at === "number" ? event.at : undefined,
       hold: String(event.hold ?? ""),
     };
     return;
