@@ -512,6 +512,9 @@ export class HostStore {
   deleteVisibleMemoryEntry(projectId, entryId) {
     return this.db.prepare("DELETE FROM project_memory WHERE entry_id=? AND (project_id=? OR scope='global')").run(String(entryId), Number(projectId)).changes > 0;
   }
+  deleteGlobalMemoryEntry(entryId) {
+    return this.db.prepare("DELETE FROM project_memory WHERE entry_id=? AND scope='global'").run(String(entryId)).changes > 0;
+  }
   pruneProjectMemory(projectId, maxEntries) {
     this.db.prepare("DELETE FROM project_memory WHERE project_id=? AND scope='project' AND entry_id NOT IN (SELECT entry_id FROM project_memory WHERE project_id=? AND scope='project' ORDER BY updated_at DESC LIMIT ?)")
       .run(Number(projectId), Number(projectId), Math.max(0, Number(maxEntries) || 0));
