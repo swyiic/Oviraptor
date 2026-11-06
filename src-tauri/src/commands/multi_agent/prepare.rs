@@ -364,6 +364,68 @@ fn multi_agent_prepare_owned(context:&mut AgentRunContext,owner:crate::agent_run
         .map(|spec| spec.name.to_string())
         .collect::<Vec<_>>();
     supervisor.check()?;
+    // D2 (single-controller execution takeover, flag-gated, default OFF; LIVE-ONLY
+    // and UNVERIFIED until operator + authorized-target validation): the ONE
+    // controller (coordinator root) run both decides AND executes target-touching.
+    // Instead of minting a child web_executor it enters the Web execution phase on
+    // its OWN run (leasing the executor tool capabilities to itself, bound to the
+    // live coordinator epoch+fencing, B1/B2/B4 unchanged) and reserves a SEGREGATED
+    // phase-exec budget window (isolated ledger; never agent_runs.used_*, never the
+    // hash-chained tick core). context.run becomes the root run, so the execution
+    // model-loop runs as the controller and authorizes via controller_phase_authorized
+    // (the chokepoint OR-branch). The window is settled in the controller-execution
+    // branch of multi_agent_finish_execution. OFF ⇒ the child path below runs
+    // byte-identically.
+    if scan_controller_execution_takeover_on(&connection, &context.scan_id, context.attempt_number)? {
+        // The Web execution phase supersedes the deliberation (Planner) phase that
+        // B3-2 may have opened; release it first so only one phase is held.
+        if controller_phase_leasing {
+            scheduler::coordinator_release_controller_phases(&connection, &coordinator_lease)?;
+        }
+        scheduler::coordinator_enter_web_execution_phase(
+            &connection,
+            &coordinator_lease,
+            &serde_json::json!({
+                "target": context.target_url,
+                "objective": "在授权范围内由单一控制器执行冻结计划中的验证合同，所有目标访问都必须经过工具 Broker",
+                "mapperAssignmentId": mapper.assignment_id,
+            }),
+            executor_revision,
+            &executor_capabilities,
+            executor_tokens,
+            executor_requests,
+        )?;
+        let root_start_usage =
+            NativeAgentState::read(&context.db_path, &context.scan_id, &context.target_url)
+                .map(|state| state.token_usage)
+                .unwrap_or_default();
+        context.run = Some(AgentRunLedger {
+            db_path: context.db_path.clone(),
+            run_id: root_run_id.clone(),
+        });
+        context.run_budget = Some(AgentRunBudgetWindow {
+            starting_tokens: root_start_usage.total_tokens.max(0),
+            starting_requests: root_start_usage.model_requests.max(0),
+            hard_tokens: executor_tokens,
+            hard_requests: executor_requests,
+        });
+        return Ok(MultiAgentSession {
+            supervisor,
+            lease: coordinator_lease,
+            mapper,
+            // The executor handle IS the root run, so downstream followups that key
+            // on executor.run_id (new-evidence / protection supervision) correctly
+            // attribute evidence authored BY the controller. The assignment id is a
+            // non-child marker; settlement never joins it through child_accounting —
+            // the finish branch settles the segregated phase-exec window instead.
+            executor: scheduler::ScheduledChild {
+                assignment_id: format!("controller-exec:{root_run_id}"),
+                run_id: root_run_id.clone(),
+                role: AgentRole::WebExecutor,
+            },
+            controller_execution: true,
+        });
+    }
     let executor = native_coordinator_schedule_decision(
         context,
         &coordinator_lease,
@@ -453,5 +515,6 @@ fn multi_agent_prepare_owned(context:&mut AgentRunContext,owner:crate::agent_run
         lease: coordinator_lease,
         mapper,
         executor,
+        controller_execution: false,
     })
 }

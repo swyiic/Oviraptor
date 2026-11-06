@@ -4,6 +4,16 @@ fn multi_agent_finish_execution(
     outcome: &AgentTargetOutcome,
 ) -> Result<(), String> {
     use crate::agent_runtime::multi_agent::scheduler;
+    // D2 (single-controller execution takeover, flag-gated, default OFF; LIVE-ONLY
+    // and UNVERIFIED until operator + authorized-target validation): when the
+    // executor IS the coordinator root run, there is no child to settle through
+    // child_accounting. The segregated phase-exec budget window is settled from the
+    // measured execution span and the Web phase released; the ordinary success
+    // followups still run (they key on executor.run_id == root). The entire child
+    // path below is left byte-identical for the default (controller_execution=false).
+    if session.controller_execution {
+        return multi_agent_finish_controller_execution(context, session, outcome);
+    }
     let connection = db::open(&context.db_path)?;
     let original_supervision =
         crate::agent_runtime::web_mode::root::read(&connection, &session.lease.root_run_id)?
@@ -199,6 +209,88 @@ fn multi_agent_finish_execution(
             .map_err(|error| format!("executor_followup_failed:input_parser:{error}"))?;
         multi_agent_business_logic_followup(context, session)
             .map_err(|error| format!("executor_followup_failed:business_logic:{error}"))?;
+    }
+    Ok(())
+}
+
+/// D2 controller-execution finish (flag-gated, LIVE-ONLY, UNVERIFIED): settle the
+/// SEGREGATED phase-exec budget window on the controller's own run from the
+/// measured execution span, then release the Web phase. A known terminal outcome
+/// settles to zero (consume actual, release remainder); an unknown / manual-
+/// reconciliation outcome FORFEITS the whole window (budget burned, never
+/// reclaimed). The isolated ledger never writes `agent_runs.used_*`, so the root
+/// `used_*=0` invariant holds. No child_accounting / expired-web / child-delivery
+/// path runs (there is no child). The success followups (protection / new-evidence
+/// / client-side / input-parser / business-logic) still run: they key on
+/// `executor.run_id`, which is the root run that authored the evidence.
+///
+/// WARNING: the execution model-loop running with `context.run == root` exercises
+/// budget-preflight / heartbeat / single-budget paths that were written for a
+/// distinct child run. This branch is NOT exercised by any default scan and is
+/// NOT validated by `cargo test`; it must be verified by one opt-in authorized
+/// live scan (see PENTEST_B3_SINGLE_BRAIN_DESIGN.md §3.5 / review point D) before
+/// the execution-takeover toggle is ever enabled for real work.
+fn multi_agent_finish_controller_execution(
+    context: &AgentRunContext,
+    session: &mut MultiAgentSession,
+    outcome: &AgentTargetOutcome,
+) -> Result<(), String> {
+    use crate::agent_runtime::multi_agent::scheduler;
+    let connection = db::open(&context.db_path)?;
+    let known = !outcome_requires_manual_execution_resolution(outcome);
+    if known {
+        // Measured execution span = root usage now − the snapshot taken when the
+        // controller entered the execution phase (context.run_budget.starting_*).
+        let (used_tokens, used_requests) = match &context.run_budget {
+            Some(window) => {
+                let current =
+                    NativeAgentState::read(&context.db_path, &context.scan_id, &context.target_url)
+                        .map(|state| state.token_usage)
+                        .unwrap_or_default();
+                (
+                    (current.total_tokens - window.starting_tokens).max(0),
+                    (current.model_requests - window.starting_requests).max(0),
+                )
+            }
+            None => (0, 0),
+        };
+        if let Err(error) = scheduler::coordinator_settle_web_execution_phase(
+            &connection,
+            &session.lease,
+            used_tokens,
+            used_requests,
+        ) {
+            // Over-span or any settlement failure forfeits the window rather than
+            // leaving it open — fail-closed on budget — and surfaces the error.
+            scheduler::coordinator_forfeit_web_execution_phase(&connection, &session.lease)?;
+            return Err(format!("controller_execution_settlement_failed:{error}"));
+        }
+    } else {
+        scheduler::coordinator_forfeit_web_execution_phase(&connection, &session.lease)?;
+    }
+    session.supervisor.check()?;
+    crate::agent_runtime::multi_agent::lease::validate_coordinator_lease(&connection, &session.lease)?;
+    crate::agent_runtime::multi_agent::lease::require_executable_coordinator(&connection, &session.lease)?;
+    let success = matches!(
+        outcome,
+        AgentTargetOutcome::Completed(_)
+            | AgentTargetOutcome::BoundedCompleted(_)
+            | AgentTargetOutcome::Incomplete(_)
+            | AgentTargetOutcome::Limited(_)
+    );
+    if success {
+        native_verify_delivered_protection_source(&connection, context, &session.lease, outcome)?;
+        multi_agent_protection_supervision(context, session, outcome)?;
+        if !outcome_requires_manual_execution_resolution(outcome) {
+            multi_agent_new_evidence_supervision(context, session)
+                .map_err(|error| format!("executor_followup_failed:new_evidence:{error}"))?;
+            multi_agent_client_side_readonly(context, session)
+                .map_err(|error| format!("executor_followup_failed:client_side:{error}"))?;
+            multi_agent_input_parser(context, session)
+                .map_err(|error| format!("executor_followup_failed:input_parser:{error}"))?;
+            multi_agent_business_logic_followup(context, session)
+                .map_err(|error| format!("executor_followup_failed:business_logic:{error}"))?;
+        }
     }
     Ok(())
 }

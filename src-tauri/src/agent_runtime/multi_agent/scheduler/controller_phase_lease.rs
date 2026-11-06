@@ -353,6 +353,50 @@ pub(crate) fn coordinator_forfeit_execution_phase(
     )
 }
 
+// Web-phase-specific entries for the live scan runner (prepare/finish), which
+// cannot name the module-private ControllerProfile. These are the D2 execution-
+// takeover seam: enter the Web execution phase on the controller's own run,
+// settle it from the measured span, or forfeit it on an unknown outcome.
+#[allow(dead_code, clippy::too_many_arguments)] // D2 execution-takeover cutover (flag-gated, live-only)
+pub(crate) fn coordinator_enter_web_execution_phase(
+    connection: &Connection,
+    lease: &CoordinatorLease,
+    task_slice: &JsonValue,
+    evidence_revision: i64,
+    capabilities: &[String],
+    reserved_tokens: i64,
+    reserved_requests: i64,
+) -> Result<(), String> {
+    coordinator_enter_execution_phase(
+        connection,
+        lease,
+        ControllerProfile::Web,
+        task_slice,
+        evidence_revision,
+        capabilities,
+        reserved_tokens,
+        reserved_requests,
+    )
+}
+
+#[allow(dead_code)] // D2 execution-takeover cutover (flag-gated, live-only)
+pub(crate) fn coordinator_settle_web_execution_phase(
+    connection: &Connection,
+    lease: &CoordinatorLease,
+    used_tokens: i64,
+    used_requests: i64,
+) -> Result<(), String> {
+    coordinator_settle_execution_phase(connection, lease, ControllerProfile::Web, used_tokens, used_requests)
+}
+
+#[allow(dead_code)] // D2 execution-takeover cutover (flag-gated, live-only)
+pub(crate) fn coordinator_forfeit_web_execution_phase(
+    connection: &Connection,
+    lease: &CoordinatorLease,
+) -> Result<(), String> {
+    coordinator_forfeit_execution_phase(connection, lease, ControllerProfile::Web)
+}
+
 #[cfg(test)]
 mod controller_phase_lease_tests {
     use super::{

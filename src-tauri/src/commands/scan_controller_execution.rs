@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS scan_controller_execution (
     attempt_number INTEGER NOT NULL CHECK(attempt_number > 0),
     conversation_continuity INTEGER NOT NULL CHECK(conversation_continuity IN (0,1)),
     phase_leasing INTEGER NOT NULL CHECK(phase_leasing IN (0,1)),
+    execution_takeover INTEGER NOT NULL DEFAULT 0 CHECK(execution_takeover IN (0,1)),
     attested_by TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
     PRIMARY KEY(scan_id,attempt_number)
@@ -71,6 +72,11 @@ fn scan_controller_execution_flag(
     match value {
         Ok(flag) => Ok(flag == 1),
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(false),
+        // A DB written before this column existed is fail-closed OFF: a missing
+        // column means the operator never froze that toggle, never an error.
+        // (Matched on the message text rather than the error variant because the
+        // "no such column" failure surfaces at prepare time as a generic error.)
+        Err(error) if error.to_string().contains("no such column") => Ok(false),
         Err(error) => Err(error.to_string()),
     }
 }
@@ -97,12 +103,28 @@ pub(crate) fn scan_controller_phase_leasing_on(
     scan_controller_execution_flag(connection, scan_id, attempt_number, "phase_leasing")
 }
 
+/// Whether this scan attempt froze the single-controller EXECUTION TAKEOVER ON
+/// (D2): the coordinator root run itself drives target-touching execution under
+/// a Web phase lease, settling a segregated phase-exec budget window (never
+/// `agent_runs.used_*`). Operator-only, immutable, default-OFF, fail-closed.
+/// This is the most powerful toggle and, like all others, is NEVER enabled by
+/// the agent or a target page; it also stays OFF until operator + authorized-
+/// target LIVE validation (the bespoke root-execution path is live-only).
+pub(crate) fn scan_controller_execution_takeover_on(
+    connection: &rusqlite::Connection,
+    scan_id: &str,
+    attempt_number: i64,
+) -> Result<bool, String> {
+    scan_controller_execution_flag(connection, scan_id, attempt_number, "execution_takeover")
+}
+
 fn set_scan_controller_execution_on(
     connection: &rusqlite::Connection,
     scan_id: &str,
     attempt_number: i64,
     conversation_continuity: bool,
     phase_leasing: bool,
+    execution_takeover: bool,
     attested_by: &str,
 ) -> Result<(), String> {
     if scan_id.trim().is_empty()
@@ -131,12 +153,13 @@ fn set_scan_controller_execution_on(
         .map_err(|_| "scan_controller_execution_storage_unavailable")?;
     let changed = connection
         .execute(
-            "INSERT INTO scan_controller_execution(scan_id,attempt_number,conversation_continuity,phase_leasing,attested_by) VALUES(?1,?2,?3,?4,?5)",
+            "INSERT INTO scan_controller_execution(scan_id,attempt_number,conversation_continuity,phase_leasing,execution_takeover,attested_by) VALUES(?1,?2,?3,?4,?5,?6)",
             params![
                 scan_id,
                 attempt_number,
                 i64::from(conversation_continuity),
                 i64::from(phase_leasing),
+                i64::from(execution_takeover),
                 attested_by
             ],
         )
@@ -153,12 +176,14 @@ fn set_scan_controller_execution_on(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn set_scan_controller_execution_inner(
     db_path: &Path,
     scan_id: &str,
     attempt_number: Option<i64>,
     conversation_continuity: bool,
     phase_leasing: bool,
+    execution_takeover: bool,
     attested_by: &str,
 ) -> Result<(), String> {
     let mut connection = db::open(db_path)?;
@@ -184,6 +209,7 @@ fn set_scan_controller_execution_inner(
         attempt,
         conversation_continuity,
         phase_leasing,
+        execution_takeover,
         attested_by,
     )?;
     tx.commit().map_err(|e| e.to_string())
@@ -201,6 +227,7 @@ pub fn set_scan_controller_execution(
     attempt_number: Option<i64>,
     conversation_continuity: bool,
     phase_leasing: bool,
+    execution_takeover: Option<bool>,
     attested_by: Option<String>,
 ) -> Result<(), String> {
     set_scan_controller_execution_inner(
@@ -209,6 +236,7 @@ pub fn set_scan_controller_execution(
         attempt_number,
         conversation_continuity,
         phase_leasing,
+        execution_takeover.unwrap_or(false),
         attested_by.as_deref().unwrap_or(""),
     )
 }
@@ -230,14 +258,15 @@ pub fn get_scan_controller_execution(
     Ok(serde_json::json!({
         "conversationContinuity": scan_controller_conversation_continuity_on(&connection, &scan_id, attempt).unwrap_or(false),
         "phaseLeasing": scan_controller_phase_leasing_on(&connection, &scan_id, attempt).unwrap_or(false),
+        "executionTakeover": scan_controller_execution_takeover_on(&connection, &scan_id, attempt).unwrap_or(false),
     }))
 }
 
 #[cfg(test)]
 mod scan_controller_execution_tests {
     use super::{
-        scan_controller_conversation_continuity_on, scan_controller_phase_leasing_on,
-        set_scan_controller_execution_on,
+        scan_controller_conversation_continuity_on, scan_controller_execution_takeover_on,
+        scan_controller_phase_leasing_on, set_scan_controller_execution_on,
     };
     use rusqlite::Connection;
 
@@ -253,47 +282,67 @@ mod scan_controller_execution_tests {
     }
 
     #[test]
-    fn both_toggles_off_by_default() {
+    fn all_toggles_off_by_default() {
         // No table at all (fresh DB) ⇒ fail-closed OFF.
         let bare = Connection::open_in_memory().unwrap();
         assert!(!scan_controller_conversation_continuity_on(&bare, "scan-a", 1).unwrap());
         assert!(!scan_controller_phase_leasing_on(&bare, "scan-a", 1).unwrap());
+        assert!(!scan_controller_execution_takeover_on(&bare, "scan-a", 1).unwrap());
         // Table present but no row for this attempt ⇒ OFF.
         let c = db();
-        set_scan_controller_execution_on(&c, "scan-a", 1, true, true, "op").unwrap();
+        set_scan_controller_execution_on(&c, "scan-a", 1, true, true, true, "op").unwrap();
         assert!(!scan_controller_conversation_continuity_on(&c, "scan-a", 2).unwrap());
         assert!(!scan_controller_phase_leasing_on(&c, "scan-a", 2).unwrap());
+        assert!(!scan_controller_execution_takeover_on(&c, "scan-a", 2).unwrap());
     }
 
     #[test]
     fn reads_back_each_toggle_independently() {
         let c = db();
-        // conversation ON, phase OFF.
-        set_scan_controller_execution_on(&c, "scan-a", 1, true, false, "op").unwrap();
+        // conversation ON, phase OFF, takeover ON.
+        set_scan_controller_execution_on(&c, "scan-a", 1, true, false, true, "op").unwrap();
         assert!(scan_controller_conversation_continuity_on(&c, "scan-a", 1).unwrap());
         assert!(!scan_controller_phase_leasing_on(&c, "scan-a", 1).unwrap());
+        assert!(scan_controller_execution_takeover_on(&c, "scan-a", 1).unwrap());
     }
 
     #[test]
     fn record_is_immutable() {
         let c = db();
-        assert!(set_scan_controller_execution_on(&c, "scan-a", 1, true, false, "op").is_ok());
-        let again = set_scan_controller_execution_on(&c, "scan-a", 1, false, true, "op");
+        assert!(set_scan_controller_execution_on(&c, "scan-a", 1, true, false, false, "op").is_ok());
+        let again = set_scan_controller_execution_on(&c, "scan-a", 1, false, true, true, "op");
         assert!(again.is_err());
         // The first write still stands unchanged.
         assert!(scan_controller_conversation_continuity_on(&c, "scan-a", 1).unwrap());
         assert!(!scan_controller_phase_leasing_on(&c, "scan-a", 1).unwrap());
+        assert!(!scan_controller_execution_takeover_on(&c, "scan-a", 1).unwrap());
     }
 
     #[test]
     fn unknown_scan_rejected() {
         let c = db();
-        assert!(set_scan_controller_execution_on(&c, "ghost", 1, true, true, "op").is_err());
+        assert!(set_scan_controller_execution_on(&c, "ghost", 1, true, true, true, "op").is_err());
     }
 
     #[test]
     fn illegal_attempt_rejected() {
         let c = db();
-        assert!(set_scan_controller_execution_on(&c, "scan-a", 0, true, true, "op").is_err());
+        assert!(set_scan_controller_execution_on(&c, "scan-a", 0, true, true, true, "op").is_err());
+    }
+
+    #[test]
+    fn missing_takeover_column_is_fail_closed_off() {
+        // A DB written before `execution_takeover` existed: the reader must treat
+        // the missing column as OFF, never surface an error.
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE sentinel_scans(id TEXT PRIMARY KEY); INSERT INTO sentinel_scans(id) VALUES('scan-a');
+             CREATE TABLE scan_controller_execution(scan_id TEXT, attempt_number INTEGER, conversation_continuity INTEGER, phase_leasing INTEGER, attested_by TEXT, created_at TEXT, PRIMARY KEY(scan_id,attempt_number));
+             INSERT INTO scan_controller_execution(scan_id,attempt_number,conversation_continuity,phase_leasing,attested_by,created_at) VALUES('scan-a',1,1,1,'op','');",
+        )
+        .unwrap();
+        // The legacy columns still read; the new one fails closed to OFF.
+        assert!(scan_controller_conversation_continuity_on(&c, "scan-a", 1).unwrap());
+        assert!(!scan_controller_execution_takeover_on(&c, "scan-a", 1).unwrap());
     }
 }
