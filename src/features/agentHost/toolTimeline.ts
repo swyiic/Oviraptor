@@ -6,11 +6,11 @@ import type { AgentTaskEvidence } from "./types";
  * One row in the live tool-activity timeline shown under a running/completed
  * assistant reply. Built client-side from whatever the host already streams
  * (`runtime.step` titles, `runtime.heartbeat` elapsed, `runtime.inner`
- * reasoning snapshots — now carrying a monotonic `seq` + host-clock `at` — and
+ * reasoning snapshots — now carrying a monotonic `seq` + host-clock `at` —,
  * `task.evidence` receipts, which carry real startedAt/finishedAt/status and,
- * once finished, a `previewText`) — there is no dedicated per-step backend
- * event yet. Still missing (tracked in docs/AGENT_TOP_LEVEL_REFACTOR.md §7):
- * a live "latest output" preview for a tool step that is still running.
+ * once finished, a `previewText`, and `runtime.toolProgress`, a transient
+ * ~1s tick for the step that is still running, keyed by its evidenceId) —
+ * there is no single dedicated per-step backend event.
  */
 export type ToolTimelineStep = {
   id: string;
@@ -39,6 +39,8 @@ export function useToolTimeline(getters: {
   inner: () => InnerSnapshot;
   evidence: () => AgentTaskEvidence[];
   running: () => boolean;
+  /** `runtime.toolProgress` ticks for the currently-running step, keyed by evidenceId. */
+  toolProgress?: () => Map<string, { outputLines: number; previewText: string }>;
 }) {
   const { tr } = useI18n();
   const now = ref(Date.now());
@@ -92,13 +94,21 @@ export function useToolTimeline(getters: {
         // running and set once the step finishes — use it for the one-line row label,
         // and keep the full summary for the expanded detail (hidden when identical).
         const oneLine = item.toolName === "remember" ? tr("在配置中心·模型里查看或删除", "View or delete in Config Center · Models") : (item.previewText || item.summary || item.toolName);
+        // While still running, a live tool-progress tick (keyed by this evidenceId)
+        // overrides the empty summary/previewText with the host's latest output.
+        const progress = isRunning ? getters.toolProgress?.().get(item.id) : undefined;
+        const previewSuffix = progress?.previewText ? ` · ${progress.previewText}` : "";
+        const progressLabel = progress ? tr(
+          `已输出 ${progress.outputLines} 行${previewSuffix}`,
+          `${progress.outputLines} line${progress.outputLines === 1 ? "" : "s"} so far${previewSuffix}`,
+        ) : undefined;
         return {
           id: item.id,
           kind: "tool" as const,
           title: memoryTitle || item.toolName,
           status: isRunning ? "running" : item.status === "failed" ? "failed" : "done",
           actionSummary: oneLine,
-          detail: item.summary || undefined,
+          detail: progressLabel || item.summary || undefined,
           startedAtMs,
           elapsedMs: Math.max(0, elapsedMs),
           isDecision: item.toolName.startsWith("jev_"),

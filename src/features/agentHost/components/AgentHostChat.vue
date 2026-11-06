@@ -96,7 +96,7 @@ async function loadChain() {
   catch { chainHops.value = []; }
 }
 function resetActivity() {
-  inner.value = null; steps.value = []; heartbeat.value = undefined;
+  inner.value = null; steps.value = []; heartbeat.value = undefined; toolProgress.value = new Map();
   activityRunId.value = undefined; activityMessageId.value = undefined; activityOpen.value = false;
 }
 /** Match public execution updates to their reply; old runs cannot replace the active process. */
@@ -151,12 +151,15 @@ async function loadEarlierMessages(){
 }
 const composerInput = ref<HTMLTextAreaElement>();
 const heartbeat = ref<{ elapsedMs: number; stepTitle?: string }>();
+/** `runtime.toolProgress` ticks (~1s) for the step still running, keyed by evidenceId; cleared on resetActivity. */
+const toolProgress = ref<Map<string, { outputLines: number; previewText: string }>>(new Map());
 const { timeline: toolTimeline, totalElapsedMs: toolTimelineElapsedMs } = useToolTimeline({
   steps: () => steps.value,
   heartbeat: () => heartbeat.value,
   inner: () => inner.value,
   evidence: () => activityEvidence.value,
   running: () => running.value,
+  toolProgress: () => toolProgress.value,
 });
 type GrantOffer = { appId: string; revision: number; permissions: Array<{ permission: string; tools: string[] }> };
 const grantPrompt = ref<{ conversationId: string; runId?: string; requestId?: string; projectId: number; identity: string; offers: GrantOffer[]; question: string } | null>(null);
@@ -607,6 +610,9 @@ function handleEvent(event: AgentHostEvent) {
   } else if (event.type === "runtime.heartbeat") {
     if (!bindActivity(event)) return;
     heartbeat.value = { elapsedMs: Number(event.elapsedMs) || 0, stepTitle: typeof event.stepTitle === "string" ? event.stepTitle : undefined };
+  } else if (event.type === "runtime.toolProgress" && typeof event.evidenceId === "string") {
+    if (!bindActivity(event)) return;
+    toolProgress.value = new Map(toolProgress.value).set(event.evidenceId, { outputLines: Number(event.outputLines) || 0, previewText: String(event.previewText ?? "") });
   } else if (event.type === "message.steer") { void loadMessages(); }
   else if (event.type === "runtime.usage" && event.usage && typeof event.usage === 'object') {
     const message = messages.value.find(item => item.role === 'assistant' && item.runId === event.runId);
