@@ -84,6 +84,9 @@ export function createAgentHostChatClient(endpoint: AgentHostEndpoint, fetchImpl
     projectMemory: (projectId: number) => request<{ items: AgentProjectMemoryEntry[] }>(`/api/projects/${projectId}/memory`).then(r => r.items),
     forgetMemory: (projectId: number, entryId: string) => request<{ ok: boolean; removed: boolean }>(`/api/projects/${projectId}/memory/${encodeURIComponent(entryId)}`, { method: "DELETE" }),
     clearMemory: (projectId: number) => request<{ ok: boolean; removed: number }>(`/api/projects/${projectId}/memory`, { method: "DELETE" }),
+    /** Global cross-workspace memory (scope='global'): visible from every project. */
+    globalMemory: () => request<{ items: AgentProjectMemoryEntry[] }>("/api/memory/global").then(r => r.items),
+    forgetGlobalMemory: (entryId: string) => request<{ ok: boolean; removed: boolean }>(`/api/memory/global/${encodeURIComponent(entryId)}`, { method: "DELETE" }),
     messagePage: (conversationId:string,projectId:number,before?:string) => request<{items:AgentHostMessage[];hasMore:boolean;nextCursor:string|null}>(`/api/conversations/${encodeURIComponent(conversationId)}/messages?projectId=${projectId}&limit=50${before?`&before=${encodeURIComponent(before)}`:''}`),
     messages: (conversationId: string, projectId: number) => request<{ items: AgentHostMessage[] }>(`/api/conversations/${encodeURIComponent(conversationId)}/messages?projectId=${projectId}`).then(r => r.items),
     chain: (conversationId: string, projectId: number) => request<{ hops: Array<{ id: string; factLabel: string; factValue: string; source: string; opensNext: boolean; action: string }> }>(`/api/conversations/${encodeURIComponent(conversationId)}/chain?projectId=${projectId}`).then(result => result.hops),
