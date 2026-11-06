@@ -16,7 +16,7 @@ import { AppManager } from './apps.mjs';
 import { ensureBundledApps, bundledAppsStatus } from './bundled-apps.mjs';
 import { shellCatalog as buildShellCatalog } from './shell-apps.mjs';
 import { buildDiscoverySummary, formatDiscoveryPromptBlock } from './discovery.mjs';
-import { formatMemoryPromptBlock, readConversationMemory, recordTurn, summarizeToolEvent, pinFact, MEMORY_TOOL_SPECS, readProjectMemory, writeProjectMemoryEntry, forgetProjectMemory, formatProjectMemoryPromptBlock } from './memory.mjs';
+import { formatMemoryPromptBlock, readConversationMemory, recordTurn, summarizeToolEvent, pinFact, MEMORY_TOOL_SPECS, readProjectMemory, writeProjectMemoryEntry, forgetProjectMemory, formatProjectMemoryPromptBlock, readGlobalMemory, formatGlobalMemoryPromptBlock } from './memory.mjs';
 import { readApprovedResearchCards, formatResearchCardsPromptBlock } from './research-cards.mjs';
 import { ProviderStore, OpenAiCompatibleRuntime, truncateMcpResult } from './provider.mjs';
 import { buildTurnPrompt, exposureTaskIntent, discoveryAssistIntent, discoveryEnrichmentIntent, looksLikeDataQuestion, isProjectReadQuestion, isReadOnlyDataRequest, certificateTaskIntent, scanningTaskIntent, scanningHandoffIntent, humanizeToolTitle, normalizeAnswerMode, answerModeOptions, prefersResponsesApi, scrubSecrets, scrubbedModelText } from './quality-prompt.mjs';
@@ -1133,6 +1133,8 @@ export class AgentHost {
       const memoryBlock = formatMemoryPromptBlock(memory);
       // Cross-session, project-scoped agent memory: advisory reference text only.
       const projectMemoryBlock = formatProjectMemoryPromptBlock(readProjectMemory(this.store, conversation.projectId));
+      // Global cross-workspace memory (P1): advisory, same wall as project memory.
+      const globalMemoryBlock = formatGlobalMemoryPromptBlock(readGlobalMemory(this.store));
       // Operator-approved technique cards (D4): advisory reasoning only, same wall as memory;
       // read-only from the Tauri app DB, never feeds any auth/scope/settlement/capability gate.
       const researchCardsBlock = formatResearchCardsPromptBlock(readApprovedResearchCards(process.env.OVIRAPTOR_APP_DB));
@@ -1170,6 +1172,7 @@ export class AgentHost {
         discoveryBlock: formatDiscoveryPromptBlock(discovery),
         memoryBlock,
         projectMemoryBlock,
+        globalMemoryBlock,
         researchCardsBlock,
         userText: text,
         answerMode,
