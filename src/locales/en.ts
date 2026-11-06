@@ -25,7 +25,7 @@ export const en: Messages = {
   settings: {
     groups: { modelsSkills: "Models & skills", assets: "Assets", scanning: "Scanning", machineNetwork: "Machine & network", accessPlugins: "Access & plugins" },
     items: {
-      models: "Models", skills: "Skills", assetApis: "Asset APIs", collection: "Asset collection", probe: "Asset probing",
+      models: "Models", skills: "Skills", agentKnowledge: "Memory & techniques", assetApis: "Asset APIs", collection: "Asset collection", probe: "Asset probing",
       contentRules: "Content classification", pageRules: "Page rules", agentPolicy: "Scan agent policy", codeRules: "Code rule libraries",
       fingerprints: "Fingerprint library", businessNetwork: "Business networking", workers: "Worker nodes", environment: "Environment",
       dataPermissions: "Data permissions", apps: "Sidebar & apps",

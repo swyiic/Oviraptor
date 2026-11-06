@@ -45,6 +45,7 @@ import {
   ConfigCompatibilityScopesSection,
   ConfigDomainSettingsSection,
   ConfigModelsSection,
+  ConfigAgentKnowledgeSection,
   ConfigInstalledAppsSection,
   ConfigDataPermissionsSection,
   ConfigFingerprintLibrarySection,
@@ -655,6 +656,7 @@ onUnmounted(()=>{unlisten?.();unlistenTray?.();if(workerSyncTimer)clearInterval(
             <p>{{t.settings.groups.modelsSkills}}</p>
             <button type="button" :class="{active:configSection==='runtime-model'}" data-testid="config-nav-runtime-model" @click="openConfigSection('runtime-model')">{{t.settings.items.models}}</button>
             <button type="button" :class="{active:configSection==='skills'}" data-testid="config-nav-skills" @click="openSkills">{{t.settings.items.skills}}</button>
+            <button type="button" :class="{active:configSection==='agent-knowledge'}" data-testid="config-nav-agent-knowledge" @click="openConfigSection('agent-knowledge')">{{t.settings.items.agentKnowledge}}</button>
             <p>{{t.settings.groups.assets}}</p>
             <button v-for="item in PROFILE_SETTINGS_NAV.filter(item=>['asset-apis','collection','probe','content-rules'].includes(item.route))" :key="item.route" type="button" :class="{active:configSection==='profile-settings'&&profileSettingsRoute===item.route}" :data-testid="`config-nav-${item.route}`" @click="openConfigSection(item.route)">{{t.settings.items[item.labelKey]}}</button>
             <button type="button" :class="{active:configSection==='advanced'&&advancedSub==='rules'}" @click="openConfigSection('rules')">{{t.settings.items.pageRules}}</button>
@@ -671,12 +673,13 @@ onUnmounted(()=>{unlisten?.();unlistenTray?.();if(workerSyncTimer)clearInterval(
           </nav>
           <div class="settings-pane">
           <header class="settings-pane-head">
-            <h2>{{configSection==='skills'?t.settings.items.skills:configSection==='runtime-model'?t.settings.items.models:configSection==='profile-settings'?t.settings.items[profileSettingsItem.labelKey]:configSection==='apps'?t.settings.items.apps:configSection==='data-permissions'?t.settings.items.dataPermissions:configSection==='fingerprints'?t.settings.items.fingerprints:advancedSub==='rules'?t.settings.items.pageRules:advancedSub==='workers'?t.settings.items.workers:advancedSub==='runtime'?t.settings.items.environment:tr('历史兼容来源','Historical compatibility sources')}}</h2>
+            <h2>{{configSection==='agent-knowledge'?t.settings.items.agentKnowledge:configSection==='skills'?t.settings.items.skills:configSection==='runtime-model'?t.settings.items.models:configSection==='profile-settings'?t.settings.items[profileSettingsItem.labelKey]:configSection==='apps'?t.settings.items.apps:configSection==='data-permissions'?t.settings.items.dataPermissions:configSection==='fingerprints'?t.settings.items.fingerprints:advancedSub==='rules'?t.settings.items.pageRules:advancedSub==='workers'?t.settings.items.workers:advancedSub==='runtime'?t.settings.items.environment:tr('历史兼容来源','Historical compatibility sources')}}</h2>
             <button class="button ghost compact" @click="appSettingsDialog=true"><AppWindow :size="14" /> {{tr('应用设置','App settings')}}</button>
           </header>
 
           <ConfigModelsSection v-if="configSection==='runtime-model'" :profiles="profiles" @notify="notify" @changed="categorySaved" />
           <SkillsWorkspace v-else-if="configSection==='skills'" @notify="notify"/>
+          <ConfigAgentKnowledgeSection v-else-if="configSection==='agent-knowledge'" />
 
           <section v-else-if="configSection==='profile-settings'" class="panel config-domain-panel">
             <p class="config-domain-description">{{tr(profileSettingsItem.description[0],profileSettingsItem.description[1])}}</p>

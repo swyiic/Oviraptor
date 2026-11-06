@@ -28,7 +28,7 @@ export const zh = {
   settings: {
     groups: { modelsSkills: "模型与技能", assets: "资产", scanning: "扫描", machineNetwork: "机器与网络", accessPlugins: "权限与插件" },
     items: {
-      models: "模型", skills: "技能", assetApis: "资产 API", collection: "资产采集", probe: "资产探测",
+      models: "模型", skills: "技能", agentKnowledge: "记忆与技法", assetApis: "资产 API", collection: "资产采集", probe: "资产探测",
       contentRules: "内容分类", pageRules: "页面与划词", agentPolicy: "扫描 Agent 策略", codeRules: "代码规则库",
       fingerprints: "指纹库", businessNetwork: "业务网络", workers: "Worker 节点", environment: "运行环境",
       dataPermissions: "数据权限", apps: "侧栏与应用",

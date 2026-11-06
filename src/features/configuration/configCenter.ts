@@ -2,6 +2,7 @@
 export const CONFIG_CENTER_SECTIONS = [
   "runtime-model",
   "skills",
+  "agent-knowledge",
   "apps",
   "data-permissions",
   "profile-settings",
@@ -24,6 +25,9 @@ export const CONFIG_SECTION_ALIASES: Record<string, ConfigCenterSection> = {
   plugins: "apps",
   "runtime-model": "runtime-model",
   skills: "skills",
+  "agent-knowledge": "agent-knowledge",
+  memory: "agent-knowledge",
+  techniques: "agent-knowledge",
   apps: "apps",
   "data-permissions": "data-permissions",
   advanced: "advanced",
