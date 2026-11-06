@@ -19,6 +19,8 @@ import ConversationHistoryList from './ConversationHistoryList.vue';
 import { sortConversationHistory } from '../conversationHistory';
 import { useConversationFiles } from '../useConversationFiles';
 import ConversationFiles from './ConversationFiles.vue';
+import { useToolTimeline } from '../toolTimeline';
+import AgentToolTimelineList from './AgentToolTimelineList.vue';
 
 const props = defineProps<{ client: AgentHostChatClient; settings: AgentHostSettings; projectName: string; projectId?: number; historySearchRequest?:number; draftRequest?:DiscoveryChatRequest }>();
 const emit = defineEmits<{ draftApplied:[id:number]; settingsChanged: [settings: AgentHostSettings] }>();
@@ -149,6 +151,13 @@ async function loadEarlierMessages(){
 }
 const composerInput = ref<HTMLTextAreaElement>();
 const heartbeat = ref<{ elapsedMs: number; stepTitle?: string }>();
+const { timeline: toolTimeline, totalElapsedMs: toolTimelineElapsedMs } = useToolTimeline({
+  steps: () => steps.value,
+  heartbeat: () => heartbeat.value,
+  inner: () => inner.value,
+  evidence: () => activityEvidence.value,
+  running: () => running.value,
+});
 type GrantOffer = { appId: string; revision: number; permissions: Array<{ permission: string; tools: string[] }> };
 const grantPrompt = ref<{ conversationId: string; runId?: string; requestId?: string; projectId: number; identity: string; offers: GrantOffer[]; question: string } | null>(null);
 type RuntimePermission = { id: string; conversationId: string; description: string; options: Array<{ id: string; label: string }> };
@@ -199,12 +208,6 @@ const innerPhaseText = computed(() => {
   };
   const pair = known[innerPhase.value];
   return pair ? tr(...pair) : (inner.value?.phaseLabel || "");
-});
-const heartbeatLabel = computed(() => {
-  if (!heartbeat.value) return "";
-  const seconds = Math.max(1, Math.round(heartbeat.value.elapsedMs / 1000));
-  const step = heartbeat.value.stepTitle ? ` · ${heartbeat.value.stepTitle}` : "";
-  return tr(`仍在运行 · 已用 ${seconds}s${step}`, `Still working · ${seconds}s${step}`);
 });
 const copiedId = ref<string>();
 async function copyMessage(message: AgentHostMessage) {
@@ -682,9 +685,7 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
               <p v-else>{{ tr('没有。这里的内容不是事实。', 'None. Items here are not facts.') }}</p>
             </div>
             <p v-if="inner?.compressed">{{ tr('更早的原文已收成一条。最早的要求还留着。', 'Older text was folded. The first request is still kept.') }}</p>
-            <p v-if="running && heartbeat" class="ahc-heartbeat" data-testid="agent-host-heartbeat" aria-live="polite"><span class="ahc-pulse" />{{ heartbeatLabel }}</p>
-            <ol v-if="steps.length" class="agent-host-chat-steps"><li v-for="step in steps" :key="step">{{ step }}</li></ol>
-            <ol v-else-if="activityEvidence.length" class="agent-host-chat-steps"><li v-for="item in activityEvidence" :key="item.id"><template v-if="item.toolName === 'remember'"><strong class="ahc-mem-chip">🧠 {{ tr('记住了一条跨会话记忆', 'Saved a cross-session memory') }}</strong><p class="ahc-mem-hint">{{ tr('在配置中心·模型里查看或删除', 'View or delete in Config Center · Models') }}</p></template><template v-else-if="item.toolName === 'forget'"><strong class="ahc-mem-chip">🗑 {{ tr('删掉了一条记忆', 'Removed a memory') }}</strong></template><template v-else><strong>{{ item.toolName }} · {{ taskLabel(item.status) }}</strong><p v-if="item.summary">{{ item.summary }}</p></template></li></ol>
+            <AgentToolTimelineList v-if="toolTimeline.length" :items="toolTimeline" :running="message.status === 'running'" :total-elapsed-ms="toolTimelineElapsedMs" />
           </div>
         </details>
       </article>
