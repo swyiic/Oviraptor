@@ -18,6 +18,7 @@ import { shellCatalog as buildShellCatalog } from './shell-apps.mjs';
 import { buildDiscoverySummary, formatDiscoveryPromptBlock } from './discovery.mjs';
 import { formatMemoryPromptBlock, readConversationMemory, recordTurn, summarizeToolEvent, pinFact, MEMORY_TOOL_SPECS, readProjectMemory, writeProjectMemoryEntry, forgetProjectMemory, formatProjectMemoryPromptBlock, readGlobalMemory, formatGlobalMemoryPromptBlock } from './memory.mjs';
 import { readApprovedResearchCards, formatResearchCardsPromptBlock } from './research-cards.mjs';
+import { allAgentTools, matchAgentTools, formatAgentToolsPromptBlock, recallAgentToolCode, AGENT_TOOL_RECALL_SPEC } from './agent-tools.mjs';
 import { ProviderStore, OpenAiCompatibleRuntime, truncateMcpResult } from './provider.mjs';
 import { buildTurnPrompt, exposureTaskIntent, discoveryAssistIntent, discoveryEnrichmentIntent, looksLikeDataQuestion, isProjectReadQuestion, isReadOnlyDataRequest, certificateTaskIntent, scanningTaskIntent, scanningHandoffIntent, humanizeToolTitle, normalizeAnswerMode, answerModeOptions, prefersResponsesApi, scrubSecrets, scrubbedModelText } from './quality-prompt.mjs';
 import {
@@ -1138,6 +1139,9 @@ export class AgentHost {
       // Operator-approved technique cards (D4): advisory reasoning only, same wall as memory;
       // read-only from the Tauri app DB, never feeds any auth/scope/settlement/capability gate.
       const researchCardsBlock = formatResearchCardsPromptBlock(readApprovedResearchCards(process.env.OVIRAPTOR_APP_DB));
+      // Tool library (P2b): advisory recall of parameterized skeletons matched to this target.
+      const _agentTools = allAgentTools(process.env.OVIRAPTOR_APP_DB);
+      const agentToolsBlock = formatAgentToolsPromptBlock(matchAgentTools(_agentTools, text), { total: _agentTools.length });
       run.toolMemory = [];
       const pendingSteers = this.store.pendingSteers(conversation.id);
       if (pendingSteers.length) text += `\n此前已接收、尚未交付的补充要求：\n${pendingSteers.map(message => message.content).join('\n')}`;
@@ -1174,6 +1178,7 @@ export class AgentHost {
         projectMemoryBlock,
         globalMemoryBlock,
         researchCardsBlock,
+        agentToolsBlock,
         userText: text,
         answerMode,
         permissionMode: run.permissionMode,
@@ -1526,8 +1531,12 @@ export class AgentHost {
     const conversation = this.store.conversation(conversationId);
     if (method === 'initialize') return { protocolVersion: '2025-06-18', capabilities: { tools: { listChanged: true } }, serverInfo: { name: 'oviraptor-apps', version: '1.0.0' } };
     const skillTools = run.skillScope && this.skillAccess ? this.skillAccess.toolSpecs(conversationId, run.skillScope) : [];
-    if (method === 'tools/list') return { tools: [...this.apps.capabilities(conversation.projectId, { runtimeIdentity: this.runtimeIdentity() }).map(tool => ({ name: tool.name.replace('::', '__'), description: tool.description, inputSchema: tool.inputSchema })), ...WORKSPACE_TOOL_SPECS, ...MEMORY_TOOL_SPECS, ...TASK_TOOL_SPECS, ...(this.runtimeId === 'xai-api' ? SUBAGENT_TOOL_SPECS : []), ...VERIFIER_TOOL_SPECS, ...skillTools] };
+    if (method === 'tools/list') return { tools: [...this.apps.capabilities(conversation.projectId, { runtimeIdentity: this.runtimeIdentity() }).map(tool => ({ name: tool.name.replace('::', '__'), description: tool.description, inputSchema: tool.inputSchema })), ...WORKSPACE_TOOL_SPECS, ...MEMORY_TOOL_SPECS, ...TASK_TOOL_SPECS, ...(this.runtimeId === 'xai-api' ? SUBAGENT_TOOL_SPECS : []), ...VERIFIER_TOOL_SPECS, ...AGENT_TOOL_RECALL_SPEC, ...skillTools] };
     if (method === 'tools/call') {
+      if (params.name === 'recall_agent_tool') {
+        const code = recallAgentToolCode(process.env.OVIRAPTOR_APP_DB, (params.arguments ?? {}).id);
+        return { content: [{ type: 'text', text: JSON.stringify(code ? { ok: true, code } : { ok: false, error: '没有该已批准骨架(或 id 不对)' }) }], _meta: { hostEvidence: 'advisory' } };
+      }
       if (params.name === 'remember' || params.name === 'forget') {
         if (params.name === 'remember') {
           const written = writeProjectMemoryEntry(this.store, conversation.projectId, { ...(params.arguments ?? {}), sourceConversationId: conversation.id });
