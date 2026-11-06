@@ -243,6 +243,7 @@ include!("commands/result_ingestion_recon.rs");
 include!("commands/result_ingestion_runs.rs");
 include!("commands/result_ingestion_engines.rs");
 include!("commands/poison_strip.rs");
+include!("commands/research_cards.rs");
 
 #[path="commands/agent_homogeneous_execution.rs"]
 pub(crate) mod homogeneous_execution;

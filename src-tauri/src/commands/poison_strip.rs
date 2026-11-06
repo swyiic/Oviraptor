@@ -19,7 +19,6 @@ struct PoisonArtifact {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 struct PoisonStripResult {
     cleaned: String,
     removed: Vec<PoisonArtifact>,
@@ -48,7 +47,6 @@ fn poison_strip_patterns() -> Vec<(&'static str, regex::Regex, bool)> {
 /// Strip poison artifacts from untrusted text. Each match is replaced with an
 /// inert `[[stripped:kind]]` placeholder (which carries no url / base64 / hex
 /// characters, so a later pattern never re-matches inside an earlier removal).
-#[allow(dead_code)] // reached by the D4 ingestion channel + sandbox pre-run re-scan (next increment).
 fn poison_strip_untrusted(text: &str) -> PoisonStripResult {
     let mut cleaned = text.to_string();
     let mut removed = Vec::new();
