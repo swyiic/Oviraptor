@@ -118,7 +118,7 @@ export function createAgentHostChatClient(endpoint: AgentHostEndpoint, fetchImpl
     deleteFinding: (id: string) => request<{ ok: boolean; removed: boolean }>(`/api/findings/${encodeURIComponent(id)}`, { method: "DELETE" }),
     /** Operator surface for the agent's own workspace scripts/artifacts (§F) — distinct from
      *  conversationFiles() above (chat-attachment records), this walks the live workspace dir. */
-    workspaceFiles: (conversationId: string) => request<{ files: AgentWorkspaceFile[] }>(`/api/conversations/${encodeURIComponent(conversationId)}/workspace`).then(r => r.files),
+    workspaceFiles: (conversationId: string) => request<{ files: AgentWorkspaceFile[] }>(`/api/conversations/${encodeURIComponent(conversationId)}/workspace/files`).then(r => r.files),
     workspaceFile: (conversationId: string, path: string) => request<AgentWorkspaceFileContent>(`/api/conversations/${encodeURIComponent(conversationId)}/workspace/file?path=${encodeURIComponent(path)}`),
     messagePage: (conversationId:string,projectId:number,before?:string) => request<{items:AgentHostMessage[];hasMore:boolean;nextCursor:string|null}>(`/api/conversations/${encodeURIComponent(conversationId)}/messages?projectId=${projectId}&limit=50${before?`&before=${encodeURIComponent(before)}`:''}`),
     messages: (conversationId: string, projectId: number) => request<{ items: AgentHostMessage[] }>(`/api/conversations/${encodeURIComponent(conversationId)}/messages?projectId=${projectId}`).then(r => r.items),
