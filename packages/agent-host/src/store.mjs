@@ -264,7 +264,7 @@ export class HostStore {
     return row;
   }
   normalizeProjectKind(kind) {
-    return kind === 'scratch' ? 'scratch' : 'project';
+    return kind === 'scratch' ? 'scratch' : kind === 'personal' ? 'personal' : 'project';
   }
   createProject(name, { externalId, kind } = {}) {
     const value = boundedText(name, 256);
@@ -298,6 +298,14 @@ export class HostStore {
       return this.project(existing.id);
     }
     return this.createProject(name || `Workspace ${external}`, { externalId: external });
+  }
+  /** The reserved top-level "direct chat" space (agent-at-top): conversations with no named
+   * workspace land here. A fixed external_id keeps it stable and idempotent across restarts. */
+  ensurePersonalProject() {
+    const external = '__personal__';
+    this.db.prepare("INSERT OR IGNORE INTO projects(name,created_at,external_id,kind) VALUES('直接对话',?,?,'personal')").run(stamp(), external);
+    const row = this.db.prepare('SELECT id FROM projects WHERE external_id=?').get(external);
+    return this.project(row.id);
   }
   conversations(projectId) {
     this.project(projectId);

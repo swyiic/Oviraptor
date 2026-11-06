@@ -150,6 +150,7 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
           throw hostError('host_route_unavailable', 404);
         }
         if (path === '/api/projects' && method === 'GET') return json({ items: host.store.projects() });
+        if (path === '/api/projects/personal' && method === 'GET') return json(host.store.ensurePersonalProject());
         if (path === '/api/projects' && method === 'POST') {
           const input = await body(request);
           if (input?.ensureByExternalId != null && input.ensureByExternalId !== '') {
