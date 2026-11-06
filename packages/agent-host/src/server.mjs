@@ -128,6 +128,8 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
         if (path === '/api/settings/provider/oauth/select' && method === 'POST') return json(await host.selectProviderOAuth(await body(request)));
         if (path === '/api/settings/provider/oauth/status' && method === 'GET') return json(await host.pollProviderOAuth());
         if (path === '/api/settings/provider/oauth/logout' && method === 'POST') return json(await host.logoutProviderOAuth());
+        if (path === '/api/mcp/jev' && method === 'GET') return json(host.jev.status());
+        if (path === '/api/mcp/jev' && method === 'POST') return json(await host.jev.configure(await body(request)));
         if (path === '/api/settings' && method === 'POST') {
           const input = await body(request);
           let result = null;
