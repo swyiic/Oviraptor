@@ -759,6 +759,7 @@ pub fn run() {
             scanning::set_oob_canary_domain,
             scanning::mint_oob_canary,
             scanning::record_oob_canary_callback,
+            scanning::set_request_transform,
             scanning::analyze_jwt,
             scanning::run_attack_sweep,
             scanning::run_finding_deep_dive,

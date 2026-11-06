@@ -217,6 +217,7 @@ include!("commands/exposure_probe_command.rs");
 include!("commands/agent_sqli_tester.rs");
 include!("commands/cloud_bucket_probe.rs");
 include!("commands/oob_canary.rs");
+include!("commands/request_transform.rs");
 include!("commands/jwt_analyzer.rs");
 include!("commands/target_egress_sandbox.rs");
 include!("commands/agent_finding_exploits.rs");
