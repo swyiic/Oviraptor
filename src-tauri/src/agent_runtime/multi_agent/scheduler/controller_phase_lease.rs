@@ -175,10 +175,18 @@ pub(crate) fn revoke_controller_phase(
 
 /// Enter a phase: validate it exactly like the equivalent child contract, then
 /// lease the phase's capabilities to the controller's own run (bound to the
-/// current epoch + fencing). Issues nothing if validation fails. Not called in
+/// current epoch + fencing). Issues nothing if validation fails. Called in
 /// production for the Planner phase (zero capabilities) via
-/// coordinator_enter_planner_phase, flag-gated and default OFF; capability-
-/// bearing phases are leased here once B3-3 wires controller execution.
+/// coordinator_enter_planner_phase, flag-gated and default OFF; the capability-
+/// bearing Web/Api phases are leased here via coordinator_enter_execution_phase.
+///
+/// B3-4 (independent validation档, hard invariants enforced here): the single
+/// controller run can NEVER become its own validator — it cannot grade its own
+/// homework. (1) The Validator phase is refused outright: validation stays a
+/// SEPARATE EvidenceReviewer run on the exclusive Review lane, with its own
+/// identity + evidence. (2) No controller phase (deliberation OR execution) may
+/// ever be leased a `review.*` capability, so the execution brain can never
+/// author a review verdict even if a caller mis-passes the capability.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn lease_controller_phase(
     connection: &Connection,
@@ -190,6 +198,12 @@ pub(crate) fn lease_controller_phase(
     reserved_tokens: i64,
     reserved_requests: i64,
 ) -> Result<(), String> {
+    if profile == ControllerProfile::Validator {
+        return Err("controller_phase_validator_must_be_separate_run".into());
+    }
+    if capabilities.iter().any(|c| c.starts_with("review.")) {
+        return Err("controller_phase_must_not_hold_review_capability".into());
+    }
     validate_controller_phase(
         connection, lease, profile, task_slice, evidence_revision, capabilities, reserved_tokens,
         reserved_requests,
@@ -501,5 +515,121 @@ mod controller_phase_lease_tests {
         coordinator_enter_planner_phase(&c, &lease_for(7, "ftok")).unwrap();
         coordinator_release_controller_phases(&c, &lease_for(7, "ftok")).unwrap();
         assert_eq!(phase_row_count(&c), 0);
+    }
+
+    // ---- B3-4: the single controller run can never self-validate ----
+
+    #[test]
+    fn validator_phase_is_refused_on_the_controller_run() {
+        // The Validator must stay a SEPARATE EvidenceReviewer run (Review lane)
+        // with its own identity + evidence; leasing it to the controller's own
+        // run is refused outright, so the single brain cannot grade its own work.
+        let c = db();
+        let err = lease_controller_phase(
+            &c,
+            &lease_for(7, "ftok"),
+            ControllerProfile::Validator,
+            &serde_json::Value::Null,
+            0,
+            &["review.write".into()],
+            0,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(err, "controller_phase_validator_must_be_separate_run");
+    }
+
+    #[test]
+    fn no_controller_phase_may_hold_a_review_capability() {
+        // Even a (non-Validator) execution/deliberation phase cannot be leased a
+        // review.* capability — review authorship belongs only to the separate
+        // validator run. Refused before any store write.
+        let c = db();
+        for profile in [ControllerProfile::Planner, ControllerProfile::Web, ControllerProfile::Api] {
+            let err = lease_controller_phase(
+                &c,
+                &lease_for(7, "ftok"),
+                profile,
+                &serde_json::Value::Null,
+                0,
+                &["review.write".into()],
+                0,
+                0,
+            )
+            .unwrap_err();
+            assert_eq!(err, "controller_phase_must_not_hold_review_capability");
+        }
+    }
+
+    // ---- B3-3: a capability-bearing execution phase lease is load-bearing ----
+
+    // A DB with a live coordinator run row rich enough for validate_surface_role
+    // (non-source web plan) plus the coordinator lease + phase-lease store, so a
+    // real Web-phase lease validates exactly like the WebExecutor child contract.
+    fn web_phase_db() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE agent_runs(id TEXT PRIMARY KEY, root_run_id TEXT, role TEXT, status TEXT, cancel_requested_at TEXT, scan_id TEXT, attempt_number INTEGER, target_url TEXT, plan_json TEXT, hard_request_budget INTEGER, orchestration_policy TEXT, assignment_id TEXT, parent_run_id TEXT);
+             INSERT INTO agent_runs(id,root_run_id,role,status,cancel_requested_at,scan_id,attempt_number,target_url,plan_json,hard_request_budget,orchestration_policy,assignment_id,parent_run_id) \
+               VALUES('ctrl','ctrl','coordinator','running','','s',1,'t','{\"surface\":\"web\"}',100,'multi','',NULL);
+             CREATE TABLE agent_coordinator_leases(root_run_id TEXT, scan_id TEXT, attempt_number INTEGER, target_key TEXT, lease_epoch INTEGER, fencing_token TEXT, lease_expires_at TEXT);
+             INSERT INTO agent_coordinator_leases(root_run_id,scan_id,attempt_number,target_key,lease_epoch,fencing_token,lease_expires_at) VALUES('ctrl','s',1,'t',7,'ftok','2999-01-01 00:00:00');",
+        )
+        .unwrap();
+        c.execute_batch(CONTROLLER_PHASE_LEASE_SCHEMA).unwrap();
+        c
+    }
+
+    #[test]
+    fn web_execution_phase_authorizes_only_its_leased_capability() {
+        // Enter the Web execution phase (WebExecutor / target-touching) on the
+        // controller's OWN run: it validates via the SAME child contract, leases
+        // the executor tool capability to the controller run bound to the live
+        // coordinator epoch + fencing, and the per-call chokepoint predicate then
+        // authorizes exactly that capability on the controller run — and nothing
+        // else (phase boundary == equivalent child allow-list, fail-closed).
+        let c = web_phase_db();
+        lease_controller_phase(
+            &c,
+            &lease_for(7, "ftok"),
+            ControllerProfile::Web,
+            &serde_json::Value::Null,
+            0,
+            &["replay_http".into()],
+            0,
+            0,
+        )
+        .unwrap();
+        assert!(controller_phase_authorized(&c, "ctrl", "replay_http").unwrap());
+        // A capability outside the lease is never authorized...
+        assert!(!controller_phase_authorized(&c, "ctrl", "finish_target").unwrap());
+        // ...and in particular review authorship is never reachable this way.
+        assert!(!controller_phase_authorized(&c, "ctrl", "review.write").unwrap());
+        // Release withdraws it; the chokepoint then fails closed.
+        revoke_controller_phase(&c, "ctrl", 7, "ftok", "web").unwrap();
+        assert!(!controller_phase_authorized(&c, "ctrl", "replay_http").unwrap());
+    }
+
+    #[test]
+    fn web_phase_lease_is_bound_to_the_live_coordinator_epoch_and_fencing() {
+        // A lease roll (new epoch/fencing on the coordinator lease) instantly
+        // invalidates a prior Web-phase lease: the controller is no longer
+        // authorized, even though the phase-lease row still exists.
+        let c = web_phase_db();
+        lease_controller_phase(
+            &c,
+            &lease_for(7, "ftok"),
+            ControllerProfile::Web,
+            &serde_json::Value::Null,
+            0,
+            &["replay_http".into()],
+            0,
+            0,
+        )
+        .unwrap();
+        assert!(controller_phase_authorized(&c, "ctrl", "replay_http").unwrap());
+        c.execute("UPDATE agent_coordinator_leases SET lease_epoch=8, fencing_token='rolled'", [])
+            .unwrap();
+        assert!(!controller_phase_authorized(&c, "ctrl", "replay_http").unwrap());
     }
 }
