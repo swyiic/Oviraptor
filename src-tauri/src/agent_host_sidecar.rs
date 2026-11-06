@@ -375,6 +375,8 @@ fn spawn_sidecar(app: &AppHandle, data_dir: &Path) -> Result<(OwnedHostProcess, 
         .arg("0")
         // No --runtime override: the host restores the saved runtime (xai-api after Grok OAuth).
         .env("OVIRAPTOR_BUNDLED_APPS_ROOT", &bundled_root)
+        // D4: let the host read operator-approved technique cards (advisory only) read-only.
+        .env("OVIRAPTOR_APP_DB", data_dir.join("oviraptor.sqlite3"))
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .stdin(Stdio::piped()))

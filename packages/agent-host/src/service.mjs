@@ -17,6 +17,7 @@ import { ensureBundledApps, bundledAppsStatus } from './bundled-apps.mjs';
 import { shellCatalog as buildShellCatalog } from './shell-apps.mjs';
 import { buildDiscoverySummary, formatDiscoveryPromptBlock } from './discovery.mjs';
 import { formatMemoryPromptBlock, readConversationMemory, recordTurn, summarizeToolEvent, pinFact, MEMORY_TOOL_SPECS, readProjectMemory, writeProjectMemoryEntry, forgetProjectMemory, formatProjectMemoryPromptBlock } from './memory.mjs';
+import { readApprovedResearchCards, formatResearchCardsPromptBlock } from './research-cards.mjs';
 import { ProviderStore, OpenAiCompatibleRuntime, truncateMcpResult } from './provider.mjs';
 import { buildTurnPrompt, exposureTaskIntent, discoveryAssistIntent, discoveryEnrichmentIntent, looksLikeDataQuestion, isProjectReadQuestion, isReadOnlyDataRequest, certificateTaskIntent, scanningTaskIntent, scanningHandoffIntent, humanizeToolTitle, normalizeAnswerMode, answerModeOptions, prefersResponsesApi, scrubSecrets, scrubbedModelText } from './quality-prompt.mjs';
 import {
@@ -1132,6 +1133,9 @@ export class AgentHost {
       const memoryBlock = formatMemoryPromptBlock(memory);
       // Cross-session, project-scoped agent memory: advisory reference text only.
       const projectMemoryBlock = formatProjectMemoryPromptBlock(readProjectMemory(this.store, conversation.projectId));
+      // Operator-approved technique cards (D4): advisory reasoning only, same wall as memory;
+      // read-only from the Tauri app DB, never feeds any auth/scope/settlement/capability gate.
+      const researchCardsBlock = formatResearchCardsPromptBlock(readApprovedResearchCards(process.env.OVIRAPTOR_APP_DB));
       run.toolMemory = [];
       const pendingSteers = this.store.pendingSteers(conversation.id);
       if (pendingSteers.length) text += `\n此前已接收、尚未交付的补充要求：\n${pendingSteers.map(message => message.content).join('\n')}`;
@@ -1166,6 +1170,7 @@ export class AgentHost {
         discoveryBlock: formatDiscoveryPromptBlock(discovery),
         memoryBlock,
         projectMemoryBlock,
+        researchCardsBlock,
         userText: text,
         answerMode,
         permissionMode: run.permissionMode,
