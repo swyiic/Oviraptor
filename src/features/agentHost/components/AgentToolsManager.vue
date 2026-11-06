@@ -139,12 +139,15 @@ async function submit() {
   submitting.value = true;
   submitError.value = '';
   try {
+    // Rust's ingest_agent_tool takes algo_tags as a JSON-encoded string (it stores
+    // and re-parses it), not a native array — the IPC layer rejects an array here.
+    const tags = form.value.algoTags.split(',').map(tag => tag.trim()).filter(Boolean);
     await invoke('ingest_agent_tool', {
       title: form.value.title.trim(),
       language: form.value.language,
       code: form.value.code,
       targetFingerprint: form.value.targetFingerprint.trim() || null,
-      algoTags: form.value.algoTags.split(',').map(tag => tag.trim()).filter(Boolean),
+      algoTags: JSON.stringify(tags),
       sourceConversationId: form.value.sourceConversationId.trim() || null,
     });
     form.value = { title: '', language: 'node', code: '', targetFingerprint: '', algoTags: '', sourceConversationId: '' };
