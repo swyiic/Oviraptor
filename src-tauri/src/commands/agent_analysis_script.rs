@@ -23,6 +23,20 @@ fn agent_tool_run_analysis_script(
     if script.trim().is_empty() {
         return agent_tool_error("缺少 script", "invalid_arguments");
     }
+    // Gate 5 (§4d(三) 执行前复扫): agent-written code must not fetch-and-exec or
+    // pull a dependency — the "run someone else's bytes" a poisoned write-up could
+    // induce. Narrow by design: never blobs/keys, which legit crypto analysis
+    // (hashes, base64 vectors) routinely holds. Defense-in-depth; the no-network
+    // sandbox is still the hard boundary.
+    let poison = poison_scan_sandbox_code(&script);
+    if !poison.is_empty() {
+        let found = poison.iter().map(|a| format!("{}（{}）", a.kind, a.preview)).collect::<Vec<_>>().join("；");
+        return serde_json::json!({
+            "accepted": false,
+            "code": "poison_blocked",
+            "error": format!("脚本含取-执行 / 依赖拉取，已拒绝运行（防供应链投毒）。请用 stdlib 自己重写，不要引用外部命令或装包：{found}"),
+        });
+    }
     let connection = match db::open(&context.db_path) {
         Ok(connection) => connection,
         Err(error) => return agent_tool_error(&error, "tool_authorization_unavailable"),
