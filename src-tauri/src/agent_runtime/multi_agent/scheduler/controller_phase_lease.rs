@@ -269,6 +269,90 @@ pub(crate) fn coordinator_release_controller_phases(
     )
 }
 
+/// B3-3 / D2 production entry (flag-gated by the caller, default OFF; live-only
+/// behavioral path): the single controller enters a target-touching EXECUTION
+/// phase on its OWN run. It (1) leases the phase's executor tool capabilities to
+/// the controller run — validated by the SAME child contract, bound to the live
+/// coordinator epoch + fencing, and refused for Validator / any `review.*` cap
+/// by lease_controller_phase (B3-4) — and (2) reserves a SEGREGATED per-phase
+/// execution budget window in the isolated controller-phase ledger (never
+/// `agent_runs.used_*`, never the hash-chained tick core). The controller then
+/// drives the execution model-loop under this phase (the cutover), and on finish
+/// the window is settled from the measured span and the phase released. Planner
+/// (deliberation, no execution) is refused here. Target-touching single-brain
+/// stays default OFF and is never enabled without operator + authorized-target
+/// live validation.
+#[allow(dead_code, clippy::too_many_arguments)] // consumed by the controller-execution cutover (D2, flag-gated, live-only)
+pub(crate) fn coordinator_enter_execution_phase(
+    connection: &Connection,
+    lease: &CoordinatorLease,
+    profile: ControllerProfile,
+    task_slice: &JsonValue,
+    evidence_revision: i64,
+    capabilities: &[String],
+    reserved_tokens: i64,
+    reserved_requests: i64,
+) -> Result<(), String> {
+    if profile == ControllerProfile::Planner {
+        return Err("controller_execution_phase_requires_execution_profile".into());
+    }
+    // Authorization first (fail-closed): no budget window is reserved unless the
+    // phase validates and its capabilities lease to the controller run.
+    lease_controller_phase(
+        connection, lease, profile, task_slice, evidence_revision, capabilities, reserved_tokens,
+        reserved_requests,
+    )?;
+    reserve_phase_execution_window(
+        connection,
+        lease,
+        controller_phase_str(profile),
+        reserved_tokens,
+        reserved_requests,
+    )
+}
+
+/// Settle the controller execution phase from the MEASURED execution span and
+/// release the phase: the segregated window consumes the actual spend + releases
+/// the remainder (settle-to-zero, overspend refused), then every leased
+/// capability is revoked. Symmetric with coordinator_enter_execution_phase.
+#[allow(dead_code)] // consumed by the controller-execution cutover (D2, flag-gated, live-only)
+pub(crate) fn coordinator_settle_execution_phase(
+    connection: &Connection,
+    lease: &CoordinatorLease,
+    profile: ControllerProfile,
+    used_tokens: i64,
+    used_requests: i64,
+) -> Result<(), String> {
+    let phase = controller_phase_str(profile);
+    settle_phase_execution_window(connection, lease, phase, used_tokens, used_requests)?;
+    revoke_controller_phase(
+        connection,
+        &lease.root_run_id,
+        lease.lease_epoch,
+        &lease.fencing_token,
+        phase,
+    )
+}
+
+/// An UNKNOWN-outcome execution (interrupted / indeterminate): forfeit the whole
+/// outstanding window (budget burned, never reclaimed) and release the phase.
+#[allow(dead_code)] // consumed by the controller-execution cutover (D2, flag-gated, live-only)
+pub(crate) fn coordinator_forfeit_execution_phase(
+    connection: &Connection,
+    lease: &CoordinatorLease,
+    profile: ControllerProfile,
+) -> Result<(), String> {
+    let phase = controller_phase_str(profile);
+    forfeit_phase_execution_window(connection, lease, phase)?;
+    revoke_controller_phase(
+        connection,
+        &lease.root_run_id,
+        lease.lease_epoch,
+        &lease.fencing_token,
+        phase,
+    )
+}
+
 #[cfg(test)]
 mod controller_phase_lease_tests {
     use super::{
@@ -631,5 +715,73 @@ mod controller_phase_lease_tests {
         c.execute("UPDATE agent_coordinator_leases SET lease_epoch=8, fencing_token='rolled'", [])
             .unwrap();
         assert!(!controller_phase_authorized(&c, "ctrl", "replay_http").unwrap());
+    }
+
+    // ---- D2: enter/settle execution phase (lease authz + segregated budget) ----
+
+    #[test]
+    fn execution_phase_enter_reserves_budget_authorizes_then_settle_releases_and_revokes() {
+        use super::{
+            coordinator_enter_execution_phase, coordinator_settle_execution_phase,
+            phase_budget_balance,
+        };
+        let c = web_phase_db();
+        // Enter the Web execution phase: lease authorizes the capability AND a
+        // segregated per-phase budget window is reserved (isolated ledger).
+        coordinator_enter_execution_phase(
+            &c,
+            &lease_for(7, "ftok"),
+            ControllerProfile::Web,
+            &serde_json::Value::Null,
+            0,
+            &["replay_http".into()],
+            1000,
+            5,
+        )
+        .unwrap();
+        assert!(controller_phase_authorized(&c, "ctrl", "replay_http").unwrap());
+        assert_eq!(phase_budget_balance(&c, "ctrl", 7, "ftok", "web", "tokens").unwrap().outstanding(), 1000);
+        assert_eq!(phase_budget_balance(&c, "ctrl", 7, "ftok", "web", "requests").unwrap().outstanding(), 5);
+        // Settle from the measured span: consume 600/2, release the rest, revoke.
+        coordinator_settle_execution_phase(&c, &lease_for(7, "ftok"), ControllerProfile::Web, 600, 2)
+            .unwrap();
+        assert!(!controller_phase_authorized(&c, "ctrl", "replay_http").unwrap());
+        let tok = phase_budget_balance(&c, "ctrl", 7, "ftok", "web", "tokens").unwrap();
+        assert_eq!((tok.consumed, tok.released, tok.outstanding()), (600, 400, 0));
+    }
+
+    #[test]
+    fn execution_phase_rejects_planner_and_never_reserves_on_bad_authz() {
+        use super::{coordinator_enter_execution_phase, controller_phase_budget_storage_exists};
+        let c = web_phase_db();
+        // Planner is deliberation, not execution: refused before any budget write.
+        let err = coordinator_enter_execution_phase(
+            &c,
+            &lease_for(7, "ftok"),
+            ControllerProfile::Planner,
+            &serde_json::Value::Null,
+            0,
+            &[],
+            10,
+            1,
+        )
+        .unwrap_err();
+        assert_eq!(err, "controller_execution_phase_requires_execution_profile");
+        // A review capability is refused by lease_controller_phase (B3-4) BEFORE
+        // the budget window is reserved — authorization-first, fail-closed.
+        let err = coordinator_enter_execution_phase(
+            &c,
+            &lease_for(7, "ftok"),
+            ControllerProfile::Web,
+            &serde_json::Value::Null,
+            0,
+            &["review.write".into()],
+            10,
+            1,
+        )
+        .unwrap_err();
+        assert_eq!(err, "controller_phase_must_not_hold_review_capability");
+        // No budget ledger was created by either refused enter.
+        assert!(!controller_phase_budget_storage_exists(&c).unwrap());
     }
 }
