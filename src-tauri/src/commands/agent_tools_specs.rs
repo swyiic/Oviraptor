@@ -90,7 +90,7 @@ fn agent_tool_specs() -> Vec<AgentToolSpec> {
         ),
         agent_string_tool(
             "record_hypothesis_result",
-            "Close one hypothesis with a verdict. confirmed requires control request, test request, response difference, impact and reproduction steps. For a confirmed finding also fill `description` (one or two plain sentences on what the flaw is) and `technicalAnalysis` (how the two requests prove it) — both render directly on the finding card; leave them empty when the verdict is not confirmed.",
+            "Close one hypothesis with a verdict. confirmed requires control request, test request, response difference, impact and reproduction steps. For a confirmed finding also fill `description` (one or two plain sentences on what the flaw is) and `technicalAnalysis` (how the two requests prove it) — both render directly on the finding card; leave them empty when the verdict is not confirmed. Also fill `businessImpact`: in plain language a non-security developer understands, what this actually lets an attacker do to the business (concrete consequences, not CWE codes) — it is the headline shown to developers.",
             agent_strict_schema(&["hypothesisKey","status"], serde_json::json!({
                 "hypothesisKey": {"type":"string","minLength":1},
                 "status": {"type":"string","enum":["confirmed","rejected","exhausted","insufficient_evidence"]},
@@ -99,6 +99,7 @@ fn agent_tool_specs() -> Vec<AgentToolSpec> {
                 "title": {"type":"string"},
                 "description": {"type":"string","maxLength":1200},
                 "technicalAnalysis": {"type":"string","maxLength":2000},
+                "businessImpact": {"type":"string","maxLength":2000},
                 "severity": {"type":"string","enum":["critical","high","medium","low","informational"]},
                 "cwe": {"type":"string"},
                 "cvss": {"type":"string"},

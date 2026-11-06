@@ -129,8 +129,12 @@ async function copyText(value: string) {
               <span>{{ tr('证据', 'Evidence') }}</span>
               <pre>{{ text(json(item.recordJson).evidence) }}</pre>
             </div>
+            <div v-if="json(item.recordJson).business_impact" class="vuln-business-impact">
+              <span>{{ tr('真实业务危害（给开发看）', 'Real business impact (for developers)') }}</span>
+              <p>{{ json(item.recordJson).business_impact }}</p>
+            </div>
             <div v-if="json(item.recordJson).impact || json(item.recordJson).detail">
-              <span>{{ tr('影响', 'Impact') }}</span>
+              <span>{{ tr('技术影响', 'Technical impact') }}</span>
               <p>{{ json(item.recordJson).impact || json(item.recordJson).detail }}</p>
             </div>
             <div v-if="json(item.recordJson).recommendation || json(item.recordJson).remediation_steps">
@@ -439,4 +443,7 @@ async function copyText(value: string) {
 .deep-field > pre { margin: 0; padding: 8px 10px; border: 1px solid var(--ui-line, #ddd); border-radius: 8px; background: var(--ui-surface-raised, #f7f7f7); overflow-x: auto; white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.5; }
 .deep-dive-note { font-size: 11px; color: var(--ui-muted, #777); margin: 0; }
 .vuln-empty-detail > p { font-size: 12px; color: var(--ui-muted, #777); margin: 0; }
+.vuln-business-impact { border-left: 3px solid color-mix(in srgb, #b4332f 55%, transparent); padding-left: 10px; }
+.vuln-business-impact > span { color: color-mix(in srgb, #b4332f 80%, var(--ui-ink, #1a1a1a)); font-weight: 600; }
+.vuln-business-impact > p { font-size: 13px; line-height: 1.6; }
 </style>

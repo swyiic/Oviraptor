@@ -132,6 +132,7 @@ fn persist_agent_vulnerability(
         "testRequest": bound.test_summary,
         "responseDifference": format!("响应差异记录 {}", bound.difference_artifact_id),
         "impact": value_first(arguments, &["impact"]),
+        "business_impact": value_first(arguments, &["businessImpact"]),
         "reproductionSteps": value_first(arguments, &["reproductionSteps"]),
         "counterEvidence": value_first(arguments, &["counterEvidenceCheck"]),
         "severityChangeConditions": value_first(arguments, &["severityChangeConditions"]),
