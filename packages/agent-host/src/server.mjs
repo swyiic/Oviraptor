@@ -185,6 +185,13 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
         if (parts[1] === 'projects' && parts.length === 5 && parts[3] === 'memory' && method === 'DELETE') {
           return json({ ok: true, removed: host.store.deleteProjectMemory(parts[2], decodeURIComponent(parts[4])) });
         }
+        // Global cross-workspace memory (P1): operator review / revoke.
+        if (path === '/api/memory/global' && method === 'GET') {
+          return json({ items: host.store.globalMemory() });
+        }
+        if (parts[1] === 'memory' && parts[2] === 'global' && parts.length === 4 && method === 'DELETE') {
+          return json({ ok: true, removed: host.store.deleteGlobalMemoryEntry(decodeURIComponent(parts[3])) });
+        }
         // Opens the conversation a scan task reports to, creating and binding one when none exists.
         if (parts[1] === 'projects' && parts[3] === 'scan-tasks' && parts[5] === 'conversation' && parts.length === 6 && method === 'POST') {
           return json(await host.openScanTaskConversation(parts[2], parts[4]));
