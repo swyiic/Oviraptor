@@ -9,6 +9,8 @@
 // (missing binary, bad handshake, crash) degrades gracefully to "no extra tools"
 // so the agent keeps running.
 import { spawn } from 'node:child_process';
+import { homedir } from 'node:os';
+import { readdirSync } from 'node:fs';
 
 const REQUEST_TIMEOUT_MS = 30000;
 const MAX_LINE = 1 << 20; // 1 MB per JSON-RPC line
@@ -24,6 +26,17 @@ export function readJevConfig(store) {
       args: Array.isArray(cfg.args) ? cfg.args.filter(a => typeof a === 'string').slice(0, 16) : [],
     };
   } catch { return { enabled: false, command: 'jev-studio', args: [] }; }
+}
+
+// GUI-launched hosts get a narrow PATH (/usr/bin:/bin). pip installs land in
+// ~/.local/bin, Homebrew, or ~/Library/Python/*/bin, so augment PATH to resolve
+// a bare `jev-studio` command. A full path in config bypasses this entirely.
+function augmentedPath() {
+  const home = homedir();
+  const extra = [`${home}/.local/bin`, '/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin'];
+  try { for (const v of readdirSync(`${home}/Library/Python`)) extra.push(`${home}/Library/Python/${v}/bin`); } catch { /* not macOS / none */ }
+  const dirs = [...new Set([...(process.env.PATH || '').split(':').filter(Boolean), ...extra])];
+  return dirs.join(':');
 }
 
 export class JevConnector {
@@ -69,7 +82,7 @@ export class JevConnector {
     this.state = 'starting'; this.error = ''; this.tools = []; this.buffer = '';
     let child;
     try {
-      child = spawn(cfg.command, cfg.args, { stdio: ['pipe', 'pipe', 'ignore'], env: process.env });
+      child = spawn(cfg.command, cfg.args, { stdio: ['pipe', 'pipe', 'ignore'], env: { ...process.env, PATH: augmentedPath() } });
     } catch (e) { this.state = 'error'; this.error = `spawn failed: ${String(e?.message || e).slice(0, 160)}`; return; }
     this.child = child;
     child.on('error', e => this.#fail(`process error: ${String(e?.message || e).slice(0, 160)}`));
