@@ -40,8 +40,8 @@ export const WORKSPACE_TOOL_SPECS = [
   },
   {
     name: 'workspace_read_path',
-    description: 'Read a window of a local file that was left at its original path because it is larger than 1MB. offset is a byte offset. length is at most 262144. Does not copy the file into the workspace.',
-    inputSchema: { type: 'object', properties: { path: { type: 'string' }, offset: { type: 'integer', minimum: 0 }, length: { type: 'integer', minimum: 1, maximum: 262144 } }, required: ['path'], additionalProperties: false },
+    description: 'Read a byte window of a local file left at its original path. offset is a byte offset; length is at most 1048576. Does not copy the file. For a large file, prefer writing a script and running it with workspace_run to read/parse the whole file directly from its directory (an allowed read root) instead of reading it in windows here.',
+    inputSchema: { type: 'object', properties: { path: { type: 'string' }, offset: { type: 'integer', minimum: 0 }, length: { type: 'integer', minimum: 1, maximum: 1048576 } }, required: ['path'], additionalProperties: false },
   },
   {
     name: 'workspace_fetch',

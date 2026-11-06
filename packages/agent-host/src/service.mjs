@@ -1158,8 +1158,8 @@ export class AgentHost {
         if (pages.note) text += `\n${pages.note}`;
         run.citedHosts = citedHosts(text);
         const pasted = await savePastedRequest(text, workspace);
-        if (pasted) text += `\nHost: 用户给出的请求已落盘 ${pasted.path}。本对话已放行：用 workspace_fetch 自己抓后续网址，大文件用 workspace_read_path 按偏移读原路径。不要让用户把文件下载下来。`;
-        else text += '\nHost: 本对话已放行。用 workspace_fetch 自己抓后续需要的网址和脚本。超过 1MB 的本地文件留在原路径，用 workspace_read_path 读取。不要让用户代你下载。';
+        if (pasted) text += `\nHost: 用户给出的请求已落盘 ${pasted.path}。本对话已放行：用 workspace_fetch 自己抓后续网址，大文件直接写脚本用 workspace_run 从原路径所在目录读取并解析、一次跑完，不要用 workspace_read_path 一段段手读整份大文件。不要让用户把文件下载下来。`;
+        else text += '\nHost: 本对话已放行。用 workspace_fetch 自己抓后续需要的网址和脚本。大文件留在原路径——它所在目录是允许读取的根，直接写脚本用 workspace_run 读取并解析原文件、一次跑完，不要用 workspace_read_path 一段段手读整份大文件。不要让用户代你下载。';
       }
       run.userText = text;
       const answerMode = this.answerMode();

@@ -2,10 +2,11 @@ import { constants } from 'node:fs';
 import { lstat, mkdir, open, writeFile } from 'node:fs/promises';
 import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
-// workspace_run refuses any workspace file larger than this. Stay under it so
-// copying a cited file cannot make later scripts fail to start.
-const MAX_BYTES = 1024 * 1024;
-const MAX_FILES = 4;
+// Files up to this size are copied into the workspace; larger ones stay at
+// their original path and are read directly by a workspace_run script (their
+// directory is an allowed read root in full / material-open mode), never copied.
+const MAX_BYTES = 8 * 1024 * 1024;
+const MAX_FILES = 8;
 
 function pathChar(char) {
   return char !== ' ' && char !== '\n' && char !== '\r' && char !== '\t'
@@ -74,7 +75,7 @@ export async function readFileRange(file, offset, length) {
   }
   const start = offset ?? 0;
   const want = length ?? 65536;
-  if (!Number.isSafeInteger(start) || start < 0 || !Number.isSafeInteger(want) || want < 1 || want > 262144) {
+  if (!Number.isSafeInteger(start) || start < 0 || !Number.isSafeInteger(want) || want < 1 || want > 1048576) {
     throw Object.assign(Error('range_invalid'), { code: 'range_invalid' });
   }
   const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -156,12 +157,12 @@ export async function importCitedFiles(text, workspaceRoot) {
 
 function citedNote(imported, skipped, external = []) {
   if (!imported.length && !skipped.length && !external.length) return '';
-  const lines = ['Host: 用户点名的本机文件按下述方式打开。小文件已复制进工作区。超过 1MB 的文件留在原路径，用 workspace_read_path 按偏移读取，不要整份复制。'];
+  const lines = ['Host: 用户点名的本机文件按下述方式打开。小文件已复制进工作区。大文件留在原路径——它所在目录已是允许读取的根，直接写脚本用 workspace_run 读取并解析原文件，不要整份复制，也不要用 workspace_read_path 一段段手读整份大文件。'];
   for (const file of imported) {
     lines.push(`- 已复制 ${file.path}（${file.bytes} 字节）。文本用 workspace_read；二进制或未知后缀用 workspace_run 跑 Python，看文件头、大小和可读字符串。`);
   }
   for (const file of external) {
-    lines.push(`- 大文件留在原路径 ${file.source}（${file.bytes} 字节）。用 workspace_read_path，offset 从 0 开始，length 最大 262144。`);
+    lines.push(`- 大文件留在原路径 ${file.source}（${file.bytes} 字节）。它所在目录已是允许读取的根：直接写一个脚本(Node/Python)用 workspace_run 读取并解析原文件、一次跑完（如解析 .burp/.har、批量解密响应），不要用 workspace_read_path 一段段手读整份大文件——那会迅速耗尽本轮步数。只需看小窗口时 workspace_read_path 的 length 最大 1048576。`);
   }
   for (const file of skipped) {
     if (file.reason === 'already_in_workspace') lines.push('- 该路径已经在工作区内，直接用相对路径读取。');

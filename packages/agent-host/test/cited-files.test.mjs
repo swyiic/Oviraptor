@@ -20,17 +20,18 @@ test('a path glued to Chinese is still a cited token', () => {
   assert.deepEqual(citedPathTokens(text), ['/Users/swyiic/Documents/MobileE/鼓楼水务_1.14.37.mec']);
 });
 
-test('a file over 1MB stays at its original path', async () => withDirs(async (root, outside) => {
+test('a file over the copy threshold stays at its original path', async () => withDirs(async (root, outside) => {
   const file = join(outside, 'big.bin');
-  await writeFile(file, Buffer.alloc(1024 * 1024 + 8, 0xff));
+  const size = 8 * 1024 * 1024 + 8;
+  await writeFile(file, Buffer.alloc(size, 0xff));
   const result = await importCitedFiles(file, root);
   assert.equal(result.imported.length, 0);
   assert.equal(result.external[0].source, file);
-  assert.equal(result.external[0].bytes, 1024 * 1024 + 8);
-  const slice = await readFileRange(file, 1024 * 1024, 4);
+  assert.equal(result.external[0].bytes, size);
+  const slice = await readFileRange(file, 8 * 1024 * 1024, 4);
   assert.equal(slice.encoding, 'hex');
   assert.equal(slice.content, 'ffffffff');
-  assert.equal(slice.size, 1024 * 1024 + 8);
+  assert.equal(slice.size, size);
 }));
 
 test('import copies only the file named in the message', async () => withDirs(async (root, outside) => {
