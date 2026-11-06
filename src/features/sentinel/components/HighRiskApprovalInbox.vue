@@ -2,6 +2,7 @@
 import { ref, onMounted, onUnmounted, watch } from "vue";
 import { sentinelApi } from "../api";
 import { useI18n } from "../../../i18n";
+import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 
 // The third gate's operator surface: high-risk actions the agent has requested
 // and that are waiting on a human decision. Each is a SINGLE action bound to the
@@ -25,6 +26,8 @@ const deciding = ref("");
 const error = ref("");
 let timer: ReturnType<typeof setInterval> | undefined;
 let disposed = false;
+const seenRequestIds = new Set<string>();
+let notifyPrimed = false;
 
 function classLabel(cls: string): string {
   switch (cls) {
@@ -39,6 +42,37 @@ function classLabel(cls: string): string {
   }
 }
 
+async function notifyPending(item: PendingAction) {
+  try {
+    let granted = await isPermissionGranted();
+    if (!granted) granted = (await requestPermission()) === "granted";
+    if (!granted) return;
+    sendNotification({
+      title: tr("Agent 请求批准高危动作", "Agent requests high-risk approval"),
+      body: `${classLabel(item.capabilityClass)} · ${item.target || item.actionSummary}`,
+    });
+  } catch {
+    /* native notifications unavailable; the inbox still shows the request */
+  }
+}
+
+// Desktop notification for newly-arrived pending actions when the window is not
+// focused (operator away from the approval surface). The first poll only primes
+// the seen-set, so pre-existing requests never notify. The notification only
+// knocks — approving still happens in this inbox, by a human, single-use.
+function maybeNotify(rows: PendingAction[]) {
+  const fresh = rows.filter((r) => !seenRequestIds.has(r.requestId));
+  rows.forEach((r) => seenRequestIds.add(r.requestId));
+  if (!notifyPrimed) {
+    notifyPrimed = true;
+    return;
+  }
+  const away = typeof document !== "undefined"
+    && (document.visibilityState === "hidden" || !document.hasFocus());
+  if (!away) return;
+  for (const item of fresh) void notifyPending(item);
+}
+
 async function refresh() {
   if (!props.scanId) {
     pending.value = [];
@@ -49,6 +83,7 @@ async function refresh() {
     if (!disposed) {
       pending.value = rows;
       error.value = "";
+      maybeNotify(rows);
     }
   } catch (e) {
     if (!disposed) error.value = String(e);
@@ -78,7 +113,11 @@ onUnmounted(() => {
   disposed = true;
   if (timer) clearInterval(timer);
 });
-watch(() => props.scanId, () => refresh());
+watch(() => props.scanId, () => {
+  seenRequestIds.clear();
+  notifyPrimed = false;
+  refresh();
+});
 </script>
 
 <template>

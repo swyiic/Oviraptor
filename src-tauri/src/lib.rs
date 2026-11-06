@@ -301,6 +301,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let acceptance = startup_profile::acceptance_root()?;
             let (app_data_dir, export_dir, legacy_icon_dirs) = if let Some(root) = &acceptance {
