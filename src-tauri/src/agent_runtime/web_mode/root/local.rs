@@ -17,8 +17,8 @@ impl LocalDeliberation {
     pub(crate) fn creation_contract() -> Self {
         Self {
             schema_version: 1,
-            model_round_limit: 3,
-            local_call_limit: 4,
+            model_round_limit: 12,
+            local_call_limit: 12,
             context_byte_limit: 96 * 1024,
             reviewer_token_floor: 15_000,
             reviewer_request_floor: 1,

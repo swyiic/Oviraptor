@@ -70,15 +70,6 @@ impl FreshAuthorizationSideReceipt {
     }
 }
 
-#[cfg(test)]
-pub(super) fn claim_authorization_probe(
-    context: &AgentRunContext,
-    child: &crate::agent_runtime::multi_agent::scheduler::ScheduledChild,
-    control: &SaveAuthorizationControlInput,
-    side: &str, identity: &str, url: &str,
-) -> Result<(), String> {
-    claim_authorization_probe_fresh(context, child, control, side, identity, url).map(|_| ())
-}
 
 /// Atomic broker decision and durable, non-replayable side reservation. The
 /// model cannot invoke this function, and a request is never sent before its
@@ -126,7 +117,9 @@ fn claim_authorization_probe_fresh(
         return Err("authorization_request_budget_exhausted".into());
     }
     let usage = agent_request_accounting(&tx,&context.scan_id,context.attempt_number,&context.target_url)?;
-    let ceiling = context.execution_plan.hard_model_requests.max(1).saturating_mul(4).min(400);
+    // No `.min(400)` cap — match the declared target_requests budget so recon does
+    // not starve the authorization probes (see agent_target_request_ceiling).
+    let ceiling = context.execution_plan.hard_model_requests.max(1).saturating_mul(4);
     if usage.budget_committed >= ceiling {
         return Err("authorization_request_budget_exhausted".into());
     }
@@ -256,6 +249,9 @@ pub(super) fn execute_authorization_side(
         .map_err(|_| "authorization_identity_unavailable".to_string())?;
     let mut builder = reqwest::blocking::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
+        // Only an operator-configured proxy is used; ambient system/env proxies
+        // are ignored.
+        .no_proxy()
         .connect_timeout(Duration::from_secs(10)).timeout(Duration::from_secs(20));
     if let Some(proxy) = &context.proxy {
         builder = builder.proxy(reqwest::Proxy::all(proxy)

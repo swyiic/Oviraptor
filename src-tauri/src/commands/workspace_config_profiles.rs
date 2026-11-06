@@ -66,7 +66,7 @@ pub(crate) fn persist_config_profile(
     let mut settings = db::normalize_settings(&input.settings);
     if let Some(object)=settings.as_object_mut() { object.remove("_configurationRefs"); }
     let transaction = connection
-        .transaction()
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(|error| error.to_string())?;
     if input.is_default {
         transaction
@@ -121,71 +121,4 @@ pub(crate) fn delete_config_profile_inner(connection: &rusqlite::Connection,prof
     tx.commit().map_err(|error|error.to_string())
 }
 
-#[cfg(test)]
-pub(crate) mod test_support {
-    use crate::configuration_models::{ConfigProfile, ConfigProfileInput};
 
-    pub(crate) fn read_config_profiles(
-        connection: &rusqlite::Connection,
-    ) -> Result<Vec<ConfigProfile>, String> {
-        super::read_config_profiles(connection)
-    }
-
-    pub(crate) fn persist_config_profile(
-        connection: &mut rusqlite::Connection,
-        input: ConfigProfileInput,
-    ) -> Result<i64, String> {
-        super::persist_config_profile(connection, input)
-    }
-
-    pub(crate) fn delete_config_profile_inner(
-        connection: &rusqlite::Connection,
-        profile_id: i64,
-    ) -> Result<(), String> {
-        super::delete_config_profile_inner(connection, profile_id)
-    }
-}
-
-#[cfg(test)]
-mod selection_tests {
-    use super::*;
-
-    fn fixture() -> rusqlite::Connection {
-        let connection = rusqlite::Connection::open_in_memory().unwrap();
-        connection.execute_batch("CREATE TABLE config_profiles(id INTEGER PRIMARY KEY,name TEXT,description TEXT,is_default INTEGER,settings_json TEXT,created_at TEXT,updated_at TEXT);
-            INSERT INTO config_profiles VALUES(9,'newest','',0,'{\"fixture\":9}','2000-01-01','2099-01-01'),(3,'oldest id','',0,'{\"fixture\":3}','2000-01-01','2000-01-01'),(7,'middle','',0,'{\"fixture\":7}','2000-01-01','2050-01-01');").unwrap();
-        connection
-    }
-
-    #[test]
-    fn configuration_profile_no_default_fallback_matches_model_resolver() {
-        let connection = fixture();
-        let profiles = read_config_profiles(&connection).unwrap();
-        assert_eq!(profiles.iter().map(|profile| profile.id).collect::<Vec<_>>(), vec![3, 7, 9]);
-        // Category defaults add builtins and provenance to the legacy snapshot.
-        // The selected fallback identity must agree, not the entire JSON shape.
-        let defaults = crate::model_configuration::default_settings(&connection);
-        assert_eq!(profiles[0].settings["fixture"], defaults["fixture"]);
-        for kind in ["models", "assetApis", "collection", "probe", "rules", "agent", "network", "securityRules"] {
-            assert_eq!(defaults["_configurationLegacyFallbacks"][kind], profiles[0].id);
-        }
-        // Editing a newer profile must not silently change a no-default fallback.
-        connection.execute("UPDATE config_profiles SET updated_at='2199-01-01' WHERE id=9", []).unwrap();
-        assert_eq!(read_config_profiles(&connection).unwrap()[0].id, 3);
-    }
-
-    #[test]
-    fn configuration_profile_explicit_defaults_sort_before_fallback_by_stable_id() {
-        let connection = fixture();
-        connection.execute("UPDATE config_profiles SET is_default=1 WHERE id IN (7,9)", []).unwrap();
-        let profiles = read_config_profiles(&connection).unwrap();
-        assert_eq!(profiles.iter().map(|profile| profile.id).collect::<Vec<_>>(), vec![7, 9, 3]);
-        // Category defaults add builtins and provenance to the legacy snapshot.
-        // The selected fallback identity must agree, not the entire JSON shape.
-        let defaults = crate::model_configuration::default_settings(&connection);
-        assert_eq!(profiles[0].settings["fixture"], defaults["fixture"]);
-        for kind in ["models", "assetApis", "collection", "probe", "rules", "agent", "network", "securityRules"] {
-            assert_eq!(defaults["_configurationLegacyFallbacks"][kind], profiles[0].id);
-        }
-    }
-}

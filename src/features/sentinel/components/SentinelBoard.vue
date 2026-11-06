@@ -3,6 +3,8 @@ import { computed, onUnmounted, reactive, ref, shallowRef, watch } from "vue";
 import { listen } from "@tauri-apps/api/event";
 import {
   Activity,
+  ArrowLeft,
+  BookOpen,
   Bug,
   Code2,
   Download,
@@ -21,7 +23,7 @@ import {
 import { sentinelApi } from "../api";
 import { useI18n } from "../../../i18n";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import InlineConfirm from "../../../shared/components/InlineConfirm.vue";
+import { actionTrigger, confirmInPlace } from "../../../shared/confirmInPlace";
 import { useBoardLifecycle } from "../results/useBoardLifecycle";
 import { useTaskSearch } from "../results/useTaskSearch";
 import { useScanPages } from "../results/useScanPages";
@@ -31,13 +33,15 @@ import { useInvestigationSummary } from "../overview/useInvestigationSummary";
 import SentinelTokenOverview from "./overview/SentinelTokenOverview.vue";
 import SentinelOverviewSummary from "./overview/SentinelOverviewSummary.vue";
 import SentinelOverviewSidebar from "./overview/SentinelOverviewSidebar.vue";
-import SentinelTaskOverview from "./overview/SentinelTaskOverview.vue";
+import SentinelTaskStrip from "./overview/SentinelTaskStrip.vue";
 import SentinelValidationWorkbench from "./SentinelValidationWorkbench.vue";
 import SentinelFingerprintPane from "./results/SentinelFingerprintPane.vue";
 import SentinelTraceTimeline from "./results/SentinelTraceTimeline.vue";
+import ScanRequestLog from "./ScanRequestLog.vue";
 import SentinelEndpointsPane from "./results/SentinelEndpointsPane.vue";
 import SentinelOpportunitiesPane from "./results/SentinelOpportunitiesPane.vue";
 import SentinelVulnerabilitiesPane from "./results/SentinelVulnerabilitiesPane.vue";
+import AgentFindingsPanel from "./results/AgentFindingsPanel.vue";
 import SentinelApiPane from "./results/SentinelApiPane.vue";
 import SentinelFuseZone from "./SentinelFuseZone.vue";
 import {
@@ -54,6 +58,10 @@ import { useApiResults } from "../results/useApiResults";
 import SentinelAuthRecoveryPanel from "./SentinelAuthRecoveryPanel.vue";
 import InvestigationGraphPanel from "./InvestigationGraphPanel.vue";
 import NativeRunStatus from "./NativeRunStatus.vue";
+import AgentStageTimeline from "./AgentStageTimeline.vue";
+import SourceAuditPanel from "./SourceAuditPanel.vue";
+import NativeRootReconciliation from "./NativeRootReconciliation.vue";
+import NativeProtectionRecovery from "./NativeProtectionRecovery.vue";
 import SentinelExecutionDetails from "./SentinelExecutionDetails.vue";
 import {
   AgentDialog,
@@ -90,8 +98,8 @@ import {
   validRouteRecord,
   validSensitiveRecord,
 } from "../presentation";
-import type { GapFollowupPreview, ClosureHandoffPreview, AppSecScanResult, AppSecVulnerability, BrowserAuthSession, InvestigationGraph, InvestigationHypothesis, InvestigationValidation, SentinelCheckpoint, SentinelFinding, SentinelFuseEntry, SentinelOverviewStats, SentinelOpportunity, SentinelScan, SentinelScanAttempt, SentinelTarget, SentinelValidation, SentinelValidationWorkItem, AgentTargetExecution } from "../types";
-import type { ScanAgentHandoff } from "../scanAgentHandoff";
+import type { GapFollowupPreview, ClosureHandoffPreview, AppSecScanResult, AppSecVulnerability, BrowserAuthSession, InvestigationGraph, InvestigationHypothesis, InvestigationValidation, SentinelCheckpoint, SentinelFinding, FindingExploit, SentinelFuseEntry, SentinelOverviewStats, SentinelOpportunity, SentinelScan, SentinelScanAttempt, SentinelTarget, SentinelValidation, SentinelValidationWorkItem, AgentTargetExecution } from "../types";
+import { scanAgentHandoff, type ScanAgentHandoff } from "../scanAgentHandoff";
 import type { Project } from "../../workspaces/types";
 
 const props = withDefaults(
@@ -108,7 +116,7 @@ const props = withDefaults(
     section: "overview",
     resultView: "summary",
     search: "",
-    workbenchMode: "code",
+    workbenchMode: "web",
     active: true,
   },
 );
@@ -121,8 +129,9 @@ const emit = defineEmits<{
   "alerts-change": [alerts: { fuse: number; vulnerabilities: number }];
   "open-runner-log": [scanId: string, attempt: number];
   "open-workbench": [mode: WorkbenchMode];
+  "open-library": [];
 }>();
-const { tr } = useI18n();
+const { t, tr, fmt } = useI18n();
 type Tab =
   | "overview"
   | "queue"
@@ -130,24 +139,31 @@ type Tab =
   | "fuse"
   | "validations"
   | "workbench"
+  | "knowledge"
   | "dialog"
   | "help";
 type WorkbenchMode = "web" | "code" | "greybox" | "cicd" | "skills" | "traces";
+// 结果与证据 holds conclusions only; how a run got there lives in 执行概览.
 type ResultTab =
   | "summary"
-  | "investigation"
-  | "opportunities"
   | "fingerprint"
   | "api"
   | "endpoints"
   | "vulnerabilities";
+type ProcessTab = "investigation" | "opportunities" | "trace" | "attempts" | "routing";
 
 const tab = ref<Tab>(props.section);
-const dialogScanId = ref("");
-function openScanDialog(scan: SentinelScan) {
-  dialogScanId.value = scan.id;
+const processTab = ref<ProcessTab>("trace");
+// 执行概览 follows the task open on the board, so its process panels and the
+// collaboration record always describe the same scan.
+function openScanDialog(scan: SentinelScan, focus?: ProcessTab) {
+  if (focus) processTab.value = focus;
+  if (selected.value?.id !== scan.id) void openScan(scan, false);
   tab.value = "dialog";
-  emit("section-change", "dialog");
+}
+function onDialogTask(scan: SentinelScan) {
+  if (selected.value?.id === scan.id) return;
+  void openScan(scans.value.find((item) => item.id === scan.id) || scan, false);
 }
 const workbenchIntent = ref<WorkbenchMode | "">("");
 const workbenchFollowup = ref<GapFollowupPreview>();
@@ -165,7 +181,7 @@ async function prepareClosureHandoff(scanId: string) {
     startInvestigation();
     workbenchHandoff.value = preview;
   } catch (error) {
-    if (selected.value === selectedScan) emit('notify', 'error', `无法准备独立关联任务：${String(error)}`);
+    if (selected.value === selectedScan) emit('notify', 'error', tr(`无法准备独立关联任务：${String(error)}`, `Could not prepare the separate linked task: ${String(error)}`));
   } finally { preparingHandoff = false; }
 }
 function startInvestigation() {
@@ -258,6 +274,7 @@ const opportunityBusy = ref(0);
 const loading = ref(false);
 const detailBusy = ref(false);
 watch(projectFilter, () => {
+  vulnerabilityCounts.value = undefined;
   ++overviewGeneration;
   ++loadGeneration;
   stats.value = emptyOverviewStats();
@@ -265,6 +282,23 @@ watch(projectFilter, () => {
   overviewError.value = false;
 }, { flush: "sync" });
 const selected = ref<SentinelScan>();
+// SourceAuditPanel needs a concrete project (its prop is a required number). A
+// scan's own project wins, with the board scope prop as fallback; both are
+// optional, so the panel is guarded on this below and never gets undefined.
+const sourceAuditProjectId = computed(() => selected.value?.projectId ?? props.projectId);
+// One-click handoff from a run that has something to read (anything but an
+// unstarted draft) to a read-only Agent analysis of the same task. Reuses the
+// existing analyze-scan path (App.vue opens/creates the task conversation and
+// jumps into it); undefined when the scan cannot be handed off.
+const scanAnalysisHandoff = computed(() =>
+  selected.value && selected.value.status !== "draft"
+    ? scanAgentHandoff(projectFilter.value, selected.value)
+    : undefined,
+);
+function analyzeSelectedScan() {
+  const handoff = scanAnalysisHandoff.value;
+  if (handoff) emit("analyze-scan", handoff);
+}
 let detailGeneration = 0;
 let detailDisposed = false;
 let graphGeneration = 0;
@@ -275,12 +309,12 @@ const visibleScanAttempts = computed(() =>
 );
 const attemptModeLabel = (mode: string, attemptNumber: number) =>
   mode === "fresh"
-    ? "全新执行"
+    ? tr("全新执行", "Fresh run")
     : mode === "resume"
-      ? "继续未完成阶段"
+      ? tr("继续未完成阶段", "Resume unfinished stages")
       : attemptNumber <= 1
-        ? "首次执行"
-        : "历史执行";
+        ? tr("首次执行", "First run")
+        : tr("历史执行", "Earlier run");
 const selectedUrl = ref("");
 const previewScan = ref<SentinelScan>();
 const previewUrls = ref<string[]>([]);
@@ -327,6 +361,71 @@ const validationWorkForm = reactive({
 });
 const pendingDelete = ref<SentinelScan>();
 const deleting = ref(false);
+// Hard-override delete: offered only after a normal delete is refused because a
+// crashed scan left unsettled budget/assignments behind. Holds the scan and the
+// original refusal so the confirm can quote why normal deletion failed.
+const forceCandidate = ref<SentinelScan>();
+const forceReason = ref("");
+// High-risk capability authorization (opt-in, operator-only). Default off; the
+// scheduling/per-action gates stay closed until the operator opts a task in with
+// an explicit legal-authorization attestation. Immutable once set (backend).
+const HIGH_RISK_CLASSES = ["code_exec", "target_write", "post_write", "egress", "waf_evasion", "persistence", "exfil", "internal_scope"];
+const highRiskTask = ref<SentinelScan>();
+const highRiskAttested = ref(false);
+const highRiskClasses = ref<string[]>([]);
+const highRiskBusy = ref(false);
+const grantedClasses = ref<string[]>([]);
+const postWriteEnabled = ref(false);
+const ssrfCallback = ref("");
+const writeConfirmations = ref<Array<{ id: number; method: string; endpoint: string; cleanup: string; recovery: string; status: string }>>([]);
+const writePathBusy = ref(false);
+function highRiskLabel(key: string): string {
+  switch (key) {
+    case "code_exec": return tr("命令执行(RCE,仅无害命令,其余逐次人工批准)", "Command execution (RCE; harmless cmds only, else per-action approval)");
+    case "target_write": return tr("修改目标资产(仅可逆变更)", "Modify target assets (reversible only)");
+    case "post_write": return tr("POST/上传（仍须当场确认，不会自动发包）", "POST/upload (still needs a live confirmation; never auto-sent)");
+    case "egress": return tr("追加出网 origin(operator 批准)", "Extra egress origin (operator-approved)");
+    case "waf_evasion": return tr("WAF 效力测试(有界尝试)", "WAF-efficacy testing (bounded attempts)");
+    case "persistence": return tr("持久化(限时可撤,逐次批准)", "Persistence (time-boxed, per-action approval)");
+    case "exfil": return tr("数据外带(仅 canary 证明)", "Data exfiltration (canary proof only)");
+    case "internal_scope": return tr("内网跟进（只根据响应中出现的地址，不预指定、不扫网段）", "Internal follow-up (only addresses seen in a response; no preset, no range scan)");
+    default: return key;
+  }
+}
+function openHighRisk(scan: SentinelScan) {
+  if (highRiskBusy.value) return;
+  highRiskAttested.value = false;
+  highRiskClasses.value = [];
+  highRiskTask.value = scan;
+}
+function cancelHighRisk() {
+  if (!highRiskBusy.value) highRiskTask.value = undefined;
+}
+function toggleHighRiskClass(key: string) {
+  const i = highRiskClasses.value.indexOf(key);
+  if (i >= 0) highRiskClasses.value.splice(i, 1);
+  else highRiskClasses.value.push(key);
+}
+async function submitHighRisk() {
+  const scan = highRiskTask.value;
+  if (!scan || highRiskBusy.value) return;
+  if (highRiskClasses.value.length > 0 && !highRiskAttested.value) {
+    emit("notify", "error", tr("开启高危能力前必须先勾选合法授权确认", "Confirm legal authorization before enabling high-risk capabilities"));
+    return;
+  }
+  highRiskBusy.value = true;
+  try {
+    await sentinelApi.setScanCapabilityAuthorization(scan.id, highRiskAttested.value, [...highRiskClasses.value]);
+    highRiskTask.value = undefined;
+    emit("notify", "success", tr("已记录该任务的高风险能力授权;每次具体高危动作仍需人工逐次批准。", "High-risk authorization recorded; each concrete high-risk action still needs per-action approval."));
+    grantedClasses.value = [...highRiskClasses.value];
+    await load();
+  } catch (e) {
+    emit("notify", "error", `${tr("高风险授权失败", "High-risk authorization failed")}：${String(e)}`);
+  } finally {
+    highRiskBusy.value = false;
+  }
+}
 const scanControlBusy = ref("");
 const authRecoveryScan = ref<SentinelScan>();
 const authRecoverySessions = ref<BrowserAuthSession[]>([]);
@@ -388,7 +487,7 @@ async function openTargetUrl(url: string) {
   try {
     await openUrl(url);
   } catch (e) {
-    emit("notify", "error", `无法打开浏览器：${String(e)}`);
+    emit("notify", "error", tr(`无法打开浏览器：${String(e)}`, `Could not open the browser: ${String(e)}`));
   }
 }
 function registrationData(item: SentinelFinding) {
@@ -402,9 +501,9 @@ function runtimeSignalUrl(item: SentinelFinding) {
 async function copyText(value: string) {
   try {
     await navigator.clipboard.writeText(value);
-    emit("notify", "success", "已复制到剪贴板");
+    emit("notify", "success", tr("已复制到剪贴板", "Copied to clipboard"));
   } catch {
-    emit("notify", "error", "复制失败");
+    emit("notify", "error", tr("复制失败", "Copy failed"));
   }
 }
 function toggleSensitive(id: number) {
@@ -506,7 +605,7 @@ const targetUrls = computed(() => {
 function companyForUrl(url: string) {
   return (
     scanTargetByUrl.value.get(url)?.company?.trim() ||
-    "未提供公司"
+    tr("未提供公司", "No company provided")
   );
 }
 function targetForUrl(url: string) {
@@ -519,17 +618,25 @@ const one = (kind: string) => {
   const item = currentRows.value.find((f) => f.kind === kind);
   return item ? json(item.recordJson) : undefined;
 };
+// A finding counts as a vulnerability when the agent pipeline labelled it
+// kind="vulnerability", OR it came from the code-driven attack sweep
+// (stage="attack"), which writes its kind as the vuln type (sql_injection,
+// broken_access, sensitive_exposure, cors, …) rather than the generic marker.
+// Without the stage check those confirmed attack findings fall into no bucket
+// and never show in the vulnerability view.
+const isVulnerabilityFinding = (f: SentinelFinding) =>
+  f.kind === "vulnerability" || f.stage === "attack";
 const urlCards = computed(() =>
   targetUrls.value.map((url) => {
     const list = findingsByUrl.value.get(url) || [];
     const target = targetForUrl(url);
     let fingerprints=0,apis=0,endpoints=0,vulnerabilities=0,pendingVulnerabilities=0,sensitive=0,high=0;
     for(const finding of list){
-      if(["fingerprint","wordpress","tech_stack"].includes(finding.kind)) fingerprints++;
+      if(["fingerprint","wordpress","tech_stack","tech_identified"].includes(finding.kind)) fingerprints++;
       if(["api","route","js_file"].includes(finding.kind)) apis++;
       if(finding.kind.includes("endpoint")||finding.kind==="directory_find") endpoints++;
       if(finding.kind==="sensitive_info"&&validSensitiveRecord(finding)) sensitive++;
-      if(finding.kind==="vulnerability"){
+      if(isVulnerabilityFinding(finding)){
         const severity=effectiveSeverity(finding);
         if(severity!=="none"){
           vulnerabilities++;
@@ -554,8 +661,11 @@ const urlCards = computed(() =>
 );
 const filteredUrlCards = computed(() =>
   urlCards.value.filter((card) => {
-    if (resultTab.value === "vulnerabilities" && card.vulnerabilities === 0)
-      return false;
+    // Every target URL stays selectable on every tab, including 漏洞/vulnerabilities.
+    // The old `vulnerabilities === 0` narrowing made every 0-finding URL vanish from
+    // the selector the moment you opened the vuln tab (two URLs collapsing to one),
+    // which reads as a bug. The vuln pane itself still shows "0 漏洞" for whichever
+    // URL is selected, so no information is lost by keeping the URL listed.
     return (
       !normalizedSearch.value ||
       `${card.company} ${card.url}`
@@ -571,11 +681,11 @@ const previewTargetRows = computed(() =>
     );
     return {
       url,
-      company: target?.company?.trim() || "未提供公司",
+      company: target?.company?.trim() || tr("未提供公司", "No company provided"),
       highValue:
         (target?.valueScore || 0) >= 80 ||
         target?.scanMode === "deep" ||
-        String(target?.routingReason || "").includes("高价值"),
+        String(target?.routingReason || "").includes("高价值"), // i18n-ignore
     };
   }),
 );
@@ -585,8 +695,48 @@ function scanHighValueCount(scanId: string) {
       target.scanId === scanId &&
       (target.valueScore >= 80 ||
         target.scanMode === "deep" ||
-        String(target.routingReason || "").includes("高价值")),
+        String(target.routingReason || "").includes("高价值")), // i18n-ignore
   ).length;
+}
+// Per-task numbers for the task list and task strips. The backend applies the
+// same visibility rule as the vulnerability index and omits tasks with none.
+const vulnerabilityCounts = shallowRef<Map<string, number>>();
+async function refreshVulnerabilityCounts(project = projectFilter.value) {
+  try {
+    const rows = await sentinelApi.listSentinelVulnerabilityCounts(project);
+    if (detailDisposed || project !== projectFilter.value || !Array.isArray(rows)) return;
+    vulnerabilityCounts.value = new Map(rows
+      .filter((row) => typeof row?.scanId === "string" && Number.isSafeInteger(row.count) && row.count >= 0)
+      .map((row) => [row.scanId, row.count]));
+  } catch {
+    /* Keep the last counts; the next load or live sync retries. */
+  }
+}
+// undefined until the first read for this project has returned.
+function taskVulnerabilityCount(scanId: string): number | undefined {
+  const counts = vulnerabilityCounts.value;
+  return counts ? counts.get(scanId) ?? 0 : undefined;
+}
+const targetCountByScan = computed(() => {
+  const counts = new Map<string, number>();
+  for (const target of targets.value)
+    if (target.scanId) counts.set(target.scanId, (counts.get(target.scanId) || 0) + 1);
+  return counts;
+});
+const taskTargetCount = (scanId: string) => targetCountByScan.value.get(scanId) || 0;
+// Track A · A2 — a short technology hint for a URL's subtask row, pulled from
+// that URL's own fingerprint/tech-stack finding (empty when none is present).
+function urlFingerprintHint(url: string): string {
+  for (const finding of findingsByUrl.value.get(url) || []) {
+    if (!["fingerprint", "tech_stack", "wordpress", "tech_identified"].includes(finding.kind)) continue;
+    if (finding.kind === "wordpress") return "WordPress";
+    const data = json(finding.recordJson) as Record<string, any>;
+    const name =
+      data.product || data.server?.name || data.backend?.name || data.frontend?.name ||
+      data.framework || data.cms || (typeof data.server === "string" ? data.server : "");
+    if (name) return String(name);
+  }
+  return "";
 }
 const currentCard = computed(() =>
   urlCards.value.find((c) => c.url === selectedUrl.value),
@@ -595,16 +745,38 @@ const currentTarget = computed(() => targetForUrl(selectedUrl.value));
 const fingerprint = computed(() => one("fingerprint") || {});
 const wordpress = computed(() => one("wordpress") || {});
 const techStack = computed(() => one("tech_stack") || {});
+// The identified OSS product(s) (e.g. RuoYi) live in `tech_identified` findings,
+// which the Unknown-only server/WAF cards never surface. Show them prominently so
+// a successful identification is actually visible in 指纹与配置.
+// Known stack for identified OSS products, so a positive identification is
+// informative even when header-based recon of server/framework stays "未识别".
+const PRODUCT_STACK: Record<string, string> = {
+  ruoyi: "Spring Boot · Java · MyBatis",
+};
+const identifiedProducts = computed(() =>
+  currentRows.value
+    .filter((finding) => finding.kind === "tech_identified")
+    .map((finding) => {
+      const data = json(finding.recordJson) as Record<string, any>;
+      const productId = String(data.productId || "");
+      return {
+        name: String(data.product || data.productId || ""),
+        productId,
+        stack: PRODUCT_STACK[productId] || "",
+      };
+    })
+    .filter((product) => product.name),
+);
 const fingerprintCards = computed(() => [
   {
     key: "frontend",
-    label: "前端技术",
+    label: tr("前端技术", "Frontend technology"),
     data: fingerprint.value.frontend || techStack.value.framework || {},
   },
-  { key: "backend", label: "后端框架", data: fingerprint.value.backend || {} },
+  { key: "backend", label: tr("后端框架", "Backend framework"), data: fingerprint.value.backend || {} },
   {
     key: "server",
-    label: "Web 服务器",
+    label: tr("Web 服务器", "Web server"),
     data: fingerprint.value.server || { name: techStack.value.server },
   },
   { key: "waf", label: "WAF", data: fingerprint.value.waf || {} },
@@ -762,15 +934,15 @@ const agentUnclosedGaps = computed(
 function agentCoverageOutcomeLabel(outcome: string) {
   return (
     {
-      reported: "已形成发现",
-      no_issue_found: "已测试，未发现问题",
-      ruled_out: "已排除",
-      not_applicable: "不适用",
-      needs_follow_up: "需要继续验证",
+      reported: tr("已形成发现", "Reported as finding"),
+      no_issue_found: tr("已测试，未发现问题", "Tested, no issue found"),
+      ruled_out: tr("已排除", "Ruled out"),
+      not_applicable: tr("不适用", "Not applicable"),
+      needs_follow_up: tr("需要继续验证", "Needs follow-up"),
     } as Record<string, string>
-  )[String(outcome || "").toLowerCase()] || outcome || "未说明";
+  )[String(outcome || "").toLowerCase()] || outcome || tr("未说明", "Not specified");
 }
-const vulnerabilityRows = computed(() => rows("vulnerability"));
+const vulnerabilityRows = computed(() => currentRows.value.filter(isVulnerabilityFinding));
 const pocRows = computed(() => rows("poc_test"));
 const isGreyboxScan = computed(() => selected.value?.scanType === "greybox");
 const isCicdScan = computed(() => selected.value?.scanType === "cicd");
@@ -817,6 +989,113 @@ const focusedVulnerabilityRows = computed(() => {
   const selectedRow = vulnerabilityRows.value.find((item) => item.id === selectedFindingId.value);
   return selectedRow ? [selectedRow] : vulnerabilityRows.value.slice(0, 1);
 });
+// Phase 2 — per-finding deep-dive (agent_finding_exploits). Read-only display of
+// the deep exploitation record under each vulnerability, plus an operator-triggered
+// "re-deep-dive". The backend (run_finding_deep_dive) enforces target_write
+// authorization and the SSRF floor; this UI never bypasses them.
+const findingExploits = ref<Record<number, FindingExploit>>({});
+const deepDiveBusyId = ref<number>();
+const deepDiveNote = ref<string>();
+let exploitPollTimer: ReturnType<typeof setInterval> | undefined;
+async function loadScanExploits() {
+  const scanId = selected.value?.id;
+  if (!scanId || selected.value?.scanType !== "web") { findingExploits.value = {}; return; }
+  try {
+    const rows = await sentinelApi.listScanFindingExploits(scanId);
+    if (selected.value?.id !== scanId) return;
+    const map: Record<number, FindingExploit> = {};
+    for (const row of rows) map[row.findingId] = row;
+    findingExploits.value = map;
+  } catch { /* read-only; keep the last snapshot on a transient failure */ }
+}
+function exploitsInFlight() {
+  return Object.values(findingExploits.value).some((e) => e.deepStatus === "in_progress" || e.deepStatus === "pending");
+}
+async function runDeepDive(findingId: number) {
+  const scanId = selected.value?.id;
+  if (!scanId || deepDiveBusyId.value) return;
+  const finding = vulnerabilityRows.value.find((item) => item.id === findingId);
+  const target = finding?.targetUrl || json(finding?.recordJson ?? "{}").url || selectedUrl.value;
+  let baseUrl = "";
+  try { baseUrl = new URL(target).origin; } catch { deepDiveNote.value = tr("无法解析目标地址，无法深挖。", "Couldn't parse the target URL for deep-dive."); return; }
+  deepDiveBusyId.value = findingId; deepDiveNote.value = undefined;
+  try {
+    await sentinelApi.runFindingDeepDive(scanId, baseUrl, findingId);
+    await loadScanExploits();
+  } catch (e) {
+    deepDiveNote.value = String((e as Error)?.message ?? e);
+  } finally {
+    deepDiveBusyId.value = undefined;
+  }
+}
+async function loadWritePath(scanId: string) {
+  const [enabled, rows] = await Promise.all([
+    sentinelApi.getScanPostWriteEnabled(scanId),
+    sentinelApi.listScanWriteConfirmations(scanId),
+  ]);
+  if (selected.value?.id !== scanId) return;
+  postWriteEnabled.value = enabled;
+  writeConfirmations.value = rows;
+  ssrfCallback.value = await sentinelApi.getAgentSsrfCallbackUrl().catch(() => "");
+}
+async function savePostWrite() {
+  const scanId = selected.value?.id;
+  if (!scanId || writePathBusy.value) return;
+  writePathBusy.value = true;
+  try {
+    await sentinelApi.setScanPostWriteEnabled(scanId, postWriteEnabled.value);
+    emit("notify", "info", postWriteEnabled.value
+      ? tr("本任务已允许 POST。每次仍要在下面当场确认，全部高危授权不会自动发包。", "POST is enabled for this task. Each series still needs a live confirmation below. Full high-risk authorization does not send it.")
+      : tr("本任务 POST 已关闭", "POST is off for this task"));
+  } catch (e) {
+    postWriteEnabled.value = !postWriteEnabled.value;
+    emit("notify", "error", String(e));
+  } finally {
+    writePathBusy.value = false;
+  }
+}
+async function saveSsrfCallback() {
+  try {
+    await sentinelApi.setAgentSsrfCallbackUrl(ssrfCallback.value.trim());
+    emit("notify", "info", tr("SSRF 回连地址已保存。未填写时不能用 DNSLog/HTTP 回连，也不会自动扫描内网。", "SSRF callback saved. Without it there is no DNSLog/HTTP callback, and internal ranges are not scanned."));
+  } catch (e) {
+    emit("notify", "error", String(e));
+  }
+}
+async function decideWrite(id: number, approved: boolean) {
+  const scanId = selected.value?.id;
+  if (!scanId || writePathBusy.value) return;
+  writePathBusy.value = true;
+  try {
+    await sentinelApi.decideScanWriteConfirmation(id, approved);
+    await loadWritePath(scanId);
+  } catch (e) {
+    emit("notify", "error", String(e));
+  } finally {
+    writePathBusy.value = false;
+  }
+}
+watch(() => selected.value?.id, () => {
+  deepDiveNote.value = undefined;
+  grantedClasses.value = [];
+  postWriteEnabled.value = false;
+  writeConfirmations.value = [];
+  void loadScanExploits();
+  const id = selected.value?.id;
+  if (!id) return;
+  void sentinelApi.getScanCapabilityAuthorization(id).then((value) => {
+    if (selected.value?.id === id && value.attested) grantedClasses.value = value.classes;
+  }).catch(() => {});
+  void loadWritePath(id).catch(() => {});
+}, { immediate: true });
+// Light poll (path A) that fetches only while a deep-dive is running, so streamed
+// results appear without a full detail refresh.
+exploitPollTimer = setInterval(() => {
+  if (exploitsInFlight() || deepDiveBusyId.value) void loadScanExploits();
+  const id = selected.value?.id;
+  if (id && selected.value?.scanType === "web") void loadWritePath(id).catch(() => {});
+}, 4000);
+onUnmounted(() => { if (exploitPollTimer) clearInterval(exploitPollTimer); });
 function vulnerabilityUpdateHistory(item: SentinelFinding) {
   const data = json(item.recordJson);
   const history = data.update_history || data.updateHistory;
@@ -892,8 +1171,8 @@ function sourceTypeLabel(value: string) {
         dast: "DAST",
         sca: "SCA",
         iast: "IAST",
-        ai_validation: "AI 验证",
-        scanner: "扫描器",
+        ai_validation: tr("AI 验证", "AI validation"),
+        scanner: tr("扫描器", "Scanner"),
       } as Record<string, string>
     )[value] || value.toUpperCase()
   );
@@ -902,10 +1181,10 @@ function authTypeLabel(value: string) {
   return (
     (
       {
-        none: "匿名",
-        cookie: "Cookie 会话",
+        none: tr("匿名", "Anonymous"),
+        cookie: tr("Cookie 会话", "Cookie session"),
         bearer: "Bearer Token",
-        header: "自定义 Header",
+        header: tr("自定义 Header", "Custom header"),
       } as Record<string, string>
     )[value] || value
   );
@@ -922,17 +1201,17 @@ function ciProviderLabel(value: string) {
       } as Record<string, string>
     )[value] ||
     value ||
-    "未记录"
+    tr("未记录", "Not recorded")
   );
 }
 function gateStatusLabel(value: string) {
   return (
     (
       {
-        passed: "通过",
-        warning: "超限告警",
-        blocked: "阻断发布",
-        not_evaluated: "未评估",
+        passed: tr("通过", "Passed"),
+        warning: tr("超限告警", "Threshold warning"),
+        blocked: tr("阻断发布", "Release blocked"),
+        not_evaluated: tr("未评估", "Not evaluated"),
       } as Record<string, string>
     )[value] || value
   );
@@ -940,10 +1219,10 @@ function gateStatusLabel(value: string) {
 function correlationParts(vulnerability: AppSecVulnerability) {
   const correlation = vulnerability.correlation || {};
   return [
-    { key: "type", label: "漏洞类型 / CWE", ...correlation.type },
+    { key: "type", label: tr("漏洞类型 / CWE", "Vulnerability type / CWE"), ...correlation.type },
     { key: "url", label: "URL", ...correlation.url },
-    { key: "parameter", label: "参数", ...correlation.parameter },
-    { key: "dataFlow", label: "数据流", ...correlation.dataFlow },
+    { key: "parameter", label: tr("参数", "Parameter"), ...correlation.parameter },
+    { key: "dataFlow", label: tr("数据流", "Data flow"), ...correlation.dataFlow },
   ];
 }
 const appsecSourceCounts = computed(() => {
@@ -964,11 +1243,11 @@ const webCoverageCatalog = computed(() =>
 function coverageStatusLabel(status: string) {
   return (
     {
-      ready: "自动能力已就绪",
-      automatic: "按目标自动准备",
-      partial: "需要业务条件",
-      not_configured: "当前环境不可测",
-      disabled: "已关闭",
+      ready: tr("自动能力已就绪", "Automatic capability ready"),
+      automatic: tr("按目标自动准备", "Prepared automatically per target"),
+      partial: tr("需要业务条件", "Needs business conditions"),
+      not_configured: tr("当前环境不可测", "Not testable in this environment"),
+      disabled: tr("已关闭", "Disabled"),
     } as Record<string, string>
   )[status] || status;
 }
@@ -987,7 +1266,7 @@ const sourceIssueGroups = computed(() => {
   >();
   for (const vulnerability of appsecVulnerabilities.value) {
     const name =
-      vulnerability.vulnerabilityType || vulnerability.title || "未分类问题";
+      vulnerability.vulnerabilityType || vulnerability.title || tr("未分类问题", "Uncategorized issue");
     const current = groups.get(name) || { name, count: 0, high: 0 };
     current.count += 1;
     if (["critical", "high"].includes(vulnerability.severity))
@@ -1168,40 +1447,41 @@ function opportunityIdentityRows(item: SentinelOpportunity): OpportunityIdentity
   const runByKey = new Map(runs.map((run: any) => [String(run?.identityKey || ""), run]));
   const count = Math.min(Math.max(identityKeys.length, runs.length), 5);
   const displayKey = (key: string) => {
-    if (!key) return "未提供身份标识";
+    if (!key) return tr("未提供身份标识", "No identity key provided");
     return key.length > 72 ? `${key.slice(0, 34)}…${key.slice(-30)}` : key;
   };
   return Array.from({ length: count }, (_, index) => {
     const key = identityKeys[index] || String(runs[index]?.identityKey || "");
     const run = runByKey.get(key) || (identityKeys.length ? undefined : runs[index]) || {};
-    const label = String(run?.identityLabel || (labels.length === count ? labels[index] : "") || `账号 ${String.fromCharCode(65 + index)}`);
+    const label = String(run?.identityLabel || (labels.length === count ? labels[index] : "") || tr(`账号 ${String.fromCharCode(65 + index)}`, `Account ${String.fromCharCode(65 + index)}`));
     const hasRuntimeResult = Boolean(run && Object.keys(run).length);
     const capture = String(run?.captureStatus || "").toLowerCase();
     const sessionValid = run?.sessionValid;
-    const statusCode = run?.statusCode ? `HTTP ${run.statusCode}` : "无状态码";
+    const statusCode = run?.statusCode ? `HTTP ${run.statusCode}` : tr("无状态码", "No status code");
     if (!hasRuntimeResult) {
       return {
         label,
-        state: "待验证",
-        detail: `尚未产生同一机会的运行时结果 · ${displayKey(key)}`,
+        state: tr("待验证", "Pending validation"),
+        detail: tr(`尚未产生同一机会的运行时结果 · ${displayKey(key)}`, `No runtime result for this opportunity yet · ${displayKey(key)}`),
         tone: "unknown",
         identityKey: key,
       };
     }
     if (run.observed === false) {
-      return { label, state: "未观察到", detail: `${statusCode} · 该账号未产生同一机会请求`, tone: "unknown", identityKey: key };
+      return { label, state: tr("未观察到", "Not observed"), detail: tr(`${statusCode} · 该账号未产生同一机会请求`, `${statusCode} · This account sent no request for this opportunity`), tone: "unknown", identityKey: key };
     }
     if (sessionValid === false && run.validationReason && run.validationReason !== "runtime_probe_unavailable") {
-      return { label, state: "明确失效", detail: `${statusCode} · ${run.validationReason}`, tone: "warn", identityKey: key };
+      return { label, state: tr("明确失效", "Confirmed invalid"), detail: `${statusCode} · ${run.validationReason}`, tone: "warn", identityKey: key };
     }
     if (capture === "failed" || capture === "partial" || capture === "unavailable" || sessionValid === null || run.validationReason === "runtime_probe_unavailable") {
-      return { label, state: "不可判断", detail: `${statusCode} · runtime 未完成${run.captureError ? ` · ${run.captureError}` : ""}`, tone: "unknown", identityKey: key };
+      const captureNote = run.captureError ? ` · ${run.captureError}` : "";
+      return { label, state: tr("不可判断", "Inconclusive"), detail: tr(`${statusCode} · runtime 未完成${captureNote}`, `${statusCode} · runtime incomplete${captureNote}`), tone: "unknown", identityKey: key };
     }
     const apiCount = Number(run.apiCount || 0);
     return {
       label,
-      state: capture === "complete" ? "已捕获" : "已关联",
-      detail: `${statusCode} · ${apiCount} API · ${displayKey(key || "同请求身份")}`,
+      state: capture === "complete" ? tr("已捕获", "Captured") : tr("已关联", "Linked"),
+      detail: `${statusCode} · ${apiCount} API · ${displayKey(key || tr("同请求身份", "same-request identity"))}`,
       tone: "ok",
       identityKey: key,
     };
@@ -1210,10 +1490,12 @@ function opportunityIdentityRows(item: SentinelOpportunity): OpportunityIdentity
 
 function opportunityIdentitySummary(item: SentinelOpportunity) {
   const rows = opportunityIdentityRows(item);
-  if (!rows.length) return "身份范围未标记";
+  if (!rows.length) return tr("身份范围未标记", "Identity scope not marked");
   const unknown = rows.filter((row) => row.tone === "unknown").length;
-  if (rows.length === 1) return unknown ? "单账号已绑定 · 采集待补全" : "单账号已绑定";
-  return unknown ? `A/B 已区分 · ${unknown} 个身份待补采` : `A/B 已区分 · ${rows.length} 个身份`;
+  if (rows.length === 1) return unknown ? tr("单账号已绑定 · 采集待补全", "Single account bound · capture incomplete") : tr("单账号已绑定", "Single account bound");
+  return unknown
+    ? tr(`A/B 已区分 · ${unknown} 个身份待补采`, `A/B separated · ${unknown} identities still need capture`)
+    : tr(`A/B 已区分 · ${rows.length} 个身份`, `A/B separated · ${rows.length} identities`);
 }
 const visibleOpportunities = computed(() =>
   opportunities.value.filter((item) => {
@@ -1261,7 +1543,14 @@ function validationForOpportunity(item: SentinelOpportunity) {
     .sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)))[0];
 }
 function validationVerdictLabel(value?: string) {
-  return ({ confirmed_issue: "确认存在问题", normal: "正常 / 可忽略", needs_more_evidence: "需要更多证据", unauthorized_stop: "权限边界 / 停止", request_failed: "请求失败", not_applicable: "不适用" } as Record<string, string>)[String(value || "")] || value || "未验证";
+  return ({
+    confirmed_issue: tr("确认存在问题", "Issue confirmed"),
+    normal: tr("正常 / 可忽略", "Normal / can be ignored"),
+    needs_more_evidence: tr("需要更多证据", "Needs more evidence"),
+    unauthorized_stop: tr("权限边界 / 停止", "Authorization boundary / stop"),
+    request_failed: tr("请求失败", "Request failed"),
+    not_applicable: tr("不适用", "Not applicable"),
+  } as Record<string, string>)[String(value || "")] || value || tr("未验证", "Not validated");
 }
 function validationOpportunityStatus(verdict?: string) {
   return ({
@@ -1275,57 +1564,72 @@ function validationOpportunityStatus(verdict?: string) {
 }
 function validationSummary(item: SentinelOpportunity) {
   const validation = validationForOpportunity(item);
-  if (!validation) return "尚未验证";
+  if (!validation) return tr("尚未验证", "Not validated yet");
   return `${validationVerdictLabel(validation.verdict)} · ${validation.responseStatus || "—"} · ${validation.updatedAt}`;
 }
 const evidenceNextAction = computed(() => {
   const pending = vulnerabilityRows.value.filter((item) => !validationFor(item)).length;
   if (pending)
-    return { tone: "risk", label: `${pending} 个漏洞等待人工定性`, action: "vulnerabilities" };
+    return { tone: "risk", label: tr(`${pending} 个漏洞等待人工定性`, `${pending} vulnerabilities awaiting manual classification`), action: "vulnerabilities" };
   const ready = selectedUrlOpportunities.value.filter(isVerifiableOpportunity).length;
   if (ready)
-    return { tone: "opportunity", label: `${ready} 个高价值机会可以直接验证`, action: "opportunities" };
+    return { tone: "opportunity", label: tr(`${ready} 个高价值机会可以直接验证`, `${ready} high-value opportunities ready to validate`), action: "opportunities" };
   if (["limited", "protected_stop", "fuse_excluded"].includes(currentTarget.value?.status || ""))
-    return { tone: "stopped", label: "该 URL 已停止，查看原因并决定是否恢复", action: "fuse" };
+    return { tone: "stopped", label: tr("该 URL 已停止，查看原因并决定是否恢复", "This URL was stopped; review the reason and decide whether to resume"), action: "fuse" };
   if (endpointRows.value.length)
-    return { tone: "endpoint", label: `${endpointRows.value.length} 个端点已响应，优先分析参数与鉴权`, action: "endpoints" };
-  return { tone: "collect", label: "尚无高价值证据，检查 JS/API 情报后再决定是否续跑", action: "api" };
+    return { tone: "endpoint", label: tr(`${endpointRows.value.length} 个端点已响应，优先分析参数与鉴权`, `${endpointRows.value.length} endpoints responded; analyze parameters and auth first`), action: "endpoints" };
+  return { tone: "collect", label: tr("尚无高价值证据，检查 JS/API 情报后再决定是否续跑", "No high-value evidence yet; check JS/API intelligence before deciding whether to resume"), action: "api" };
 });
 function followEvidenceNextAction() {
-  if (evidenceNextAction.value.action === "fuse") tab.value = "fuse";
-  else resultTab.value = evidenceNextAction.value.action as ResultTab;
+  const action = evidenceNextAction.value.action;
+  if (action === "fuse") tab.value = "fuse";
+  else if (action === "opportunities") openProcess("opportunities");
+  else resultTab.value = action as ResultTab;
 }
+// Opens a process panel of the current task in 执行概览.
+function openProcess(next: ProcessTab) {
+  processTab.value = next;
+  tab.value = "dialog";
+}
+const processTabs = computed(() => {
+  const process = t.value.scanning.process;
+  return [{ key: "trace" as ProcessTab, label: process.trace, title: process.trace, count: undefined as number | undefined }];
+});
+// WIP 脚手架：声明待接线,保留不删(标记已引用以过 noUnusedLocals)
+void sourceAuditProjectId; void loadAgentExecution; void savePostWrite; void AgentStageTimeline; void SourceAuditPanel;
+const activeProcessTab = computed(() =>
+  processTabs.value.some((item) => item.key === processTab.value) ? processTab.value : processTabs.value[0]?.key);
 const runningScanCount = computed(
   () => scans.value.filter((item) => ["queued", "scanning", "pausing"].includes(item.status)).length,
 );
 const opportunityCategoryLabel = (value: string) =>
   (
     {
-      privilege_surface: "权限与管理",
-      identity_surface: "身份与账户",
-      file_surface: "文件处理",
-      api_contract: "接口契约",
-      business_transaction: "业务交易",
-      administration: "配置与审计",
-      data_query: "数据查询",
-      api_surface: "接口测试面",
-      product_match: "产品知识匹配",
-      frontend_feature: "前端功能",
-      fallback_discovery: "兜底发现",
+      privilege_surface: tr("权限与管理", "Privileges and administration"),
+      identity_surface: tr("身份与账户", "Identity and accounts"),
+      file_surface: tr("文件处理", "File handling"),
+      api_contract: tr("接口契约", "API contract"),
+      business_transaction: tr("业务交易", "Business transactions"),
+      administration: tr("配置与审计", "Configuration and audit"),
+      data_query: tr("数据查询", "Data queries"),
+      api_surface: tr("接口测试面", "API test surface"),
+      product_match: tr("产品知识匹配", "Product knowledge match"),
+      frontend_feature: tr("前端功能", "Frontend features"),
+      fallback_discovery: tr("兜底发现", "Fallback discovery"),
     } as Record<string, string>
   )[value] || value;
 const opportunityStatusLabel = (value: string) =>
   (
     {
-      queued: "待自动补证",
-      ready: "可直接验证",
-      in_progress: "调查中",
-      validated: "已验证",
-      dismissed: "已忽略",
-      exhausted: "无新增证据",
-      needs_more_evidence: "需要更多证据",
-      blocked_by_authorization: "已由自动策略接管",
-      closed: "已关闭",
+      queued: tr("待自动补证", "Awaiting automatic evidence"),
+      ready: tr("可直接验证", "Ready to validate"),
+      in_progress: tr("调查中", "Investigating"),
+      validated: tr("已验证", "Validated"),
+      dismissed: tr("已忽略", "Dismissed"),
+      exhausted: tr("无新增证据", "No new evidence"),
+      needs_more_evidence: tr("需要更多证据", "Needs more evidence"),
+      blocked_by_authorization: tr("已由自动策略接管", "Taken over by automatic policy"),
+      closed: tr("已关闭", "Closed"),
     } as Record<string, string>
   )[value] || value;
 function opportunityEndpoint(item: SentinelOpportunity) {
@@ -1374,9 +1678,9 @@ function syntheticOpportunityForReplay(api: any, hypothesis?: InvestigationHypot
     id: 0, projectId: selected.value?.projectId, scanId: selected.value?.id || hypothesis?.scanId || "",
     targetUrl: selectedUrl.value || hypothesis?.targetUrl || selectedUrl.value || "",
     opportunityKey: `replay:${api?.apiKey || hypothesis?.hypothesisKey || endpoint}`,
-    category: hypothesis?.category || "manual_replay", title: hypothesis?.title || `手动重放 ${method} ${endpoint}`,
+    category: hypothesis?.category || "manual_replay", title: hypothesis?.title || tr(`手动重放 ${method} ${endpoint}`, `Manual replay ${method} ${endpoint}`),
     score: hypothesis?.score || 0, status: "in_progress", confidence: hypothesis?.confidence || "medium",
-    why: ["来自调查图谱的完整请求证据"], evidence: [], source: "investigation_graph",
+    why: [tr("来自调查图谱的完整请求证据", "Full request evidence from the investigation graph")], evidence: [], source: "investigation_graph",
     recommendedAction: { method, targetUrl: endpoint }, record: { apiKey: api?.apiKey, method, endpoint, url: endpoint },
     firstSeen: new Date().toISOString(), lastSeen: new Date().toISOString(),
   };
@@ -1400,7 +1704,7 @@ function openRepeaterForGraphApi(api: any, hypothesis?: InvestigationHypothesis)
 }
 function openRepeaterForHypothesis(hypothesis: InvestigationHypothesis) {
   const graph = investigationGraph.value;
-  if (!graph) { emit("notify", "error", "调查图谱尚未加载，无法打开请求重放"); return; }
+  if (!graph) { emit("notify", "error", tr("调查图谱尚未加载，无法打开请求重放", "The investigation graph has not loaded yet, so request replay cannot open")); return; }
   const method = String(hypothesis.contract?.method || "GET").toUpperCase();
   const endpoint = String(hypothesis.contract?.endpoint || "");
   const endpointPath = normalizeReplayTarget(endpoint);
@@ -1488,12 +1792,12 @@ async function handleRepeaterSaved(validation: InvestigationValidation) {
   repeaterOpportunity.value = undefined;
   repeaterApi.value = undefined;
   repeaterHypothesis.value = undefined;
-  emit("notify", "success", `验证结论已保存：${validationVerdictLabel(validation.verdict)}；验证器已关闭，机会数量已更新`);
+  emit("notify", "success", tr(`验证结论已保存：${validationVerdictLabel(validation.verdict)}；验证器已关闭，机会数量已更新`, `Validation verdict saved: ${validationVerdictLabel(validation.verdict)}. Validator closed and opportunity counts updated`));
   try {
     await refreshSelectedEvidenceAfterValidation();
-    emit("notify", "success", "已同步机会、调查图谱、证据中心和行动中心");
+    emit("notify", "success", tr("已同步机会、调查图谱、证据中心和行动中心", "Synced opportunities, investigation graph, evidence center, and action center"));
   } catch (error) {
-    emit("notify", "info", `验证已保存，页面已即时更新；后台同步稍后重试：${String(error)}`);
+    emit("notify", "info", tr(`验证已保存，页面已即时更新；后台同步稍后重试：${String(error)}`, `Validation saved and the page updated; background sync will retry later: ${String(error)}`));
   }
 }
 async function openRepeaterForOpportunity(item: SentinelOpportunity) {
@@ -1515,7 +1819,7 @@ async function openRepeaterForOpportunity(item: SentinelOpportunity) {
     repeaterHypothesis.value = graph.hypotheses.find((hypothesis) => hypothesis.sourceOpportunityKey === item.opportunityKey)
       || graph.hypotheses.find((hypothesis) => String(hypothesis.contract?.endpoint || "") === opportunityEndpoint(item));
   } catch (error) {
-    emit("notify", "info", `已打开独立 Repeater，但未能加载调查 API：${String(error)}`);
+    emit("notify", "info", tr(`已打开独立 Repeater，但未能加载调查 API：${String(error)}`, `Opened a standalone Repeater, but could not load the investigation API: ${String(error)}`));
   }
 }
 function opportunityParameters(item: SentinelOpportunity) {
@@ -1531,7 +1835,7 @@ function opportunityKnowledge(item: SentinelOpportunity) {
 function opportunityKnowledgeTitles(item: SentinelOpportunity) {
   return opportunityKnowledge(item)
     .slice(0, 3)
-    .map((value: any) => String(value?.title || "未命名知识"))
+    .map((value: any) => String(value?.title || tr("未命名知识", "Untitled knowledge")))
     .join(" / ");
 }
 function opportunityEvidenceCount(item: SentinelOpportunity) {
@@ -1618,7 +1922,7 @@ async function setOpportunityStatus(item: SentinelOpportunity, status: string) {
     detailOpportunities.value = replace(detailOpportunities.value);
     await refreshOverviewStats();
   } catch (error) {
-    emit("notify", "error", `机会状态更新失败：${String(error)}`);
+    emit("notify", "error", tr(`机会状态更新失败：${String(error)}`, `Failed to update opportunity status: ${String(error)}`));
   } finally {
     opportunityBusy.value = 0;
   }
@@ -1630,12 +1934,12 @@ async function openOpportunity(item: SentinelOpportunity, markInProgress = false
   }
   const scan = scans.value.find((value) => value.id === item.scanId);
   if (!scan) {
-    emit("notify", "error", "对应任务不在当前项目筛选范围内");
+    emit("notify", "error", tr("对应任务不在当前项目筛选范围内", "The matching task is outside the current project filter"));
     return;
   }
-  await openScan(scan);
+  await openScan(scan, false);
   selectedUrl.value = item.targetUrl;
-  resultTab.value = "opportunities";
+  openProcess("opportunities");
 }
 const transferProjectId = computed(
   () => projectFilter.value || selected.value?.projectId,
@@ -1699,12 +2003,14 @@ async function load() {
     targets.value = nextTargets;
     vulnerabilityScanIds.value = nextVulnerabilityScanIds;
     opportunities.value = nextOpportunities;
-    if (tab.value === "fuse") {
+    void refreshVulnerabilityCounts(project);
+    if (tab.value === "fuse" || tab.value === "queue") {
       const entries = await sentinelApi.listSentinelFuseZone(project);
       if (!current()) return;
       fuseEntries.value = entries;
     }
-    if (tab.value === "validations") {
+    // 任务 (queue) shows a live "人工验证队列" entry badge, so it needs the count too.
+    if (tab.value === "validations" || tab.value === "queue") {
       const items = await sentinelApi.listSentinelValidationWorkItems(project);
       if (!current()) return;
       validationWorkItems.value = items;
@@ -1713,14 +2019,13 @@ async function load() {
       const first = selectedValidationWorkItems.value[0];
       if (first) editValidationWorkItem(first);
     }
-    if (tab.value === "queue" && !previewScan.value && queueScans.value[0])
-      await preview(queueScans.value[0]);
     if (!current()) return;
+    // 结果与证据 is opened from a task (list, strip or search), never by
+    // silently picking the first row.
     if (selected.value) {
       const fresh = scans.value.find((s) => s.id === selected.value?.id);
       if (fresh) await openScan(fresh, false);
-    } else if (tab.value === "results" && resultTaskScans.value[0])
-      await openScan(resultTaskScans.value[0], false);
+    }
   } catch (e) {
     if (current()) emit("notify", "error", String(e));
   } finally {
@@ -1767,6 +2072,7 @@ async function liveSync() {
     targets.value = nextTargets;
     vulnerabilityScanIds.value = nextVulnerabilityScanIds;
     opportunities.value = nextOpportunities;
+    void refreshVulnerabilityCounts(project);
     if (selected.value && !detailBusy.value) {
       const fresh = nextScans.find((scan) => scan.id === selected.value?.id);
       if (fresh) selected.value = fresh;
@@ -1783,13 +2089,14 @@ async function liveSync() {
     liveSyncing = false;
   }
 }
-function selectResultTask(event: Event) {
-  const id = String((event.target as HTMLSelectElement).value || "");
-  const scan = resultTaskScans.value.find((item) => item.id === id);
-  if (scan) void openScan(scan, false);
-}
 function selectResultUrl(event: Event) {
   selectedUrl.value = String((event.target as HTMLSelectElement).value || "");
+  if (resultTab.value !== "vulnerabilities") resultTab.value = "summary";
+}
+// Track A · A2 — drill into one URL's subtask from the per-URL list. The
+// selectedUrl watcher reloads that URL's investigation graph and execution.
+function selectUrl(url: string) {
+  selectedUrl.value = url;
   if (resultTab.value !== "vulnerabilities") resultTab.value = "summary";
 }
 function clearResultDetails() {
@@ -1819,7 +2126,7 @@ async function readResultDetails(scan: SentinelScan) {
     sentinelApi.listSentinelValidations(scan.id),
     sentinelApi.listInvestigationValidations(scan.id),
     scan.previousScanId ? sentinelApi.listSentinelFindings(scan.previousScanId).catch(() => []) : Promise.resolve([]),
-    sentinelApi.listSentinelOpportunities(undefined, scan.id, undefined, 800),
+    Promise.resolve([] as SentinelOpportunity[]),
     sentinelApi.listSentinelScanAttempts(scan.id),
     scan.scanType === "web" ? Promise.resolve({ vulnerabilities: [], sources: [] }) : sentinelApi.listAppSecScanResult(scan.id),
   ]);
@@ -1835,18 +2142,19 @@ async function openScan(scan: SentinelScan, jump = true) {
   const generation = detailGeneration;
   const current = () => !detailDisposed && generation === detailGeneration && selected.value?.id === scan.id;
   if (jump) {
-    tab.value = "results";
+    tab.value = scan.scanType === "web" ? "dialog" : "results";
     resultTab.value = "summary";
+    if (scan.scanType === "web") processTab.value = "trace";
   }
   detailBusy.value = true;
   try {
     const details = await readResultDetails(scan);
     if (!current()) return;
     publishResultDetails(details);
-    const selectableUrls =
-      resultTab.value === "vulnerabilities"
-        ? urlCards.value.filter((card) => card.vulnerabilities > 0).map((card) => card.url)
-        : targetUrls.value;
+    // Keep every target URL selectable regardless of tab (see filteredUrlCards):
+    // narrowing to vulnerabilities>0 on the vuln tab dropped 0-finding URLs and
+    // reset the selection, collapsing two URLs to one.
+    const selectableUrls = targetUrls.value;
     const withEvidence = selectableUrls.find(
       (url) => (findingsByUrl.value.get(url) || []).length > 0,
     );
@@ -1855,14 +2163,8 @@ async function openScan(scan: SentinelScan, jump = true) {
       : withEvidence || selectableUrls[0] || "";
     selectedFindingId.value =
       (scan.scanType === "web" ? vulnerabilityRows.value[0] : sourceFindingRows.value[0])?.id;
-    if (scan.scanType === "web" && selectedUrl.value && selectedUrl.value !== "*") {
-      await loadInvestigationGraph(scan.id, selectedUrl.value);
-      if (!current()) return;
-      await loadAgentExecution(scan.id, selectedUrl.value);
-    } else {
-      investigationGraph.value = undefined;
-      agentExecution.value = null;
-    }
+    investigationGraph.value = undefined;
+    agentExecution.value = null;
     if (current()) await loadSelectedTrace(scan.id);
   } catch (e) {
     if (current()) emit("notify", "error", String(e));
@@ -1889,7 +2191,7 @@ async function loadInvestigationGraph(scanId?: string, url?: string) {
   } catch (error) {
     if (current()) {
       investigationGraph.value = undefined;
-      emit("notify", "error", `调查图谱加载失败：${String(error)}`);
+      emit("notify", "error", tr(`调查图谱加载失败：${String(error)}`, `Failed to load the investigation graph: ${String(error)}`));
     }
   } finally {
     if (current()) investigationBusy.value = false;
@@ -1901,7 +2203,9 @@ async function updateInvestigationStatus(item: InvestigationHypothesis, status: 
   try {
     await sentinelApi.updateInvestigationHypothesis(item.id, status);
     await loadInvestigationGraph(item.scanId, item.targetUrl);
-    emit("notify", "success", status === "in_progress" ? "已进入有界验证队列" : "调查假设状态已更新");
+    emit("notify", "success", status === "in_progress"
+      ? tr("已进入有界验证队列", "Added to the bounded validation queue")
+      : tr("调查假设状态已更新", "Investigation hypothesis status updated"));
   } catch (error) {
     emit("notify", "error", String(error));
   } finally {
@@ -1953,18 +2257,20 @@ async function onAttemptClosed(scanId: string, attemptNumber: number) {
       refreshScanReference(scanId);
     }
   } catch (error) {
-    emit("notify", "error", `结案后列表刷新失败，请手动刷新：${String(error)}`);
+    emit("notify", "error", tr(`结案后列表刷新失败，请手动刷新：${String(error)}`, `The list did not refresh after closing; refresh it manually: ${String(error)}`));
   }
 }
 function onTaskArchived(scan: SentinelScan) {
   mergeScanPage([scan]);
   refreshScanReference(scan.id);
-  emit("notify", "success", scan.archivedAt ? "任务已归档，历史证据仍可查看" : "任务已从归档恢复");
+  emit("notify", "success", scan.archivedAt
+    ? tr("任务已归档，历史证据仍可查看", "Task archived; its evidence is still viewable")
+    : tr("任务已从归档恢复", "Task restored from archive"));
 }
 async function confirm(scan: SentinelScan) {
   try {
     await sentinelApi.confirmSentinelScan(scan.id);
-    emit("notify", "success", "任务已确认，前端深度解析与原生 Web 调查已启动");
+    emit("notify", "success", tr("任务已确认，前端深度解析与原生 Web 调查已启动", "Task confirmed; deep frontend analysis and native Web investigation started"));
     await load();
     await preview(scans.value.find((s) => s.id === scan.id) || scan);
   } catch (e) {
@@ -1972,14 +2278,21 @@ async function confirm(scan: SentinelScan) {
   }
 }
 async function pauseScan(scan: SentinelScan) {
-  if (!window.confirm("确定请求暂停吗？系统会等待执行线程退出后标记“已暂停”；已保存证据、未知目标效果和未确认清理记录会保留。")) return;
+  if (!await confirmInPlace({
+    title: t.value.scanning.pauseTitle,
+    detail: t.value.scanning.pauseDetail,
+    confirmText: t.value.scanning.pauseConfirm,
+    tone: "warning",
+  })) return;
   scanControlBusy.value = scan.id;
   try {
     await sentinelApi.pauseSentinelScan(scan.id);
     emit(
       "notify",
       "success",
-      "暂停请求已接收；等待执行线程退出。未知目标效果不会被撤销，也不会自动重发请求",
+      tr(
+        "暂停请求已接收；等待执行线程退出。未知目标效果不会被撤销，也不会自动重发请求",
+        "Pause request received; waiting for the run thread to exit. Unknown effects on the target are not undone, and requests are not resent automatically"),
     );
     await load();
     refreshScanReference(scan.id);
@@ -1997,8 +2310,8 @@ async function resumeScan(scan: SentinelScan) {
       "notify",
       "success",
       scan.scanType && scan.scanType !== "web"
-        ? "任务已在原记录中启动新的续跑尝试；历史发现和累计成本保持不变"
-        : "任务已恢复，将从下一个未完成 URL 继续",
+        ? tr("任务已在原记录中启动新的续跑尝试；历史发现和累计成本保持不变", "Started a new resume attempt on the existing task; earlier findings and cumulative cost are kept")
+        : tr("任务已恢复，将从下一个未完成 URL 继续", "Task resumed; it continues from the next unfinished URL"),
     );
     await load();
     refreshScanReference(scan.id);
@@ -2016,7 +2329,9 @@ async function executeRescan(scan: SentinelScan) {
     emit(
       "notify",
       "success",
-      "已在当前工作台任务中重新执行；运行产物按尝试隔离，累计成本继续保留",
+      tr(
+        "已在当前工作台任务中重新执行；运行产物按尝试隔离，累计成本继续保留",
+        "Re-ran within the current workbench task; run artifacts are isolated per attempt and cumulative cost is kept"),
     );
     return;
   }
@@ -2028,8 +2343,8 @@ async function executeRescan(scan: SentinelScan) {
     "notify",
     "success",
     ["partial", "failed", "limited", "cancelled"].includes(scan.status)
-      ? "已继续未完成阶段：保留正式接口、登录会话和可验证证据；旧错误与旧状态仅保留在执行历史中"
-      : "已全新执行：当前结果面已清理，只展示本轮状态与新证据；旧轮次仅保留在折叠的执行历史中",
+      ? tr("已继续未完成阶段：保留正式接口、登录会话和可验证证据；旧错误与旧状态仅保留在执行历史中", "Resumed unfinished stages: confirmed APIs, login sessions, and verifiable evidence are kept; old errors and states remain only in run history")
+      : tr("已全新执行：当前结果面已清理，只展示本轮状态与新证据；旧轮次仅保留在折叠的执行历史中", "Started a fresh run: current results were cleared and only this run's state and new evidence are shown; earlier runs remain in the collapsed run history"),
   );
 }
 async function rescan(scan: SentinelScan) {
@@ -2048,7 +2363,7 @@ async function rescan(scan: SentinelScan) {
         authRecoveryScan.value = scan;
         authRecoverySessions.value = sessions;
         authRecoveryAutoContinuing.value = false;
-        emit("notify", "info", "登录会话已失效：请在当前任务内重新登录，绿灯后即可自动续扫");
+        emit("notify", "info", tr("登录会话已失效：请在当前任务内重新登录，绿灯后即可自动续扫", "Login session expired: sign in again within this task; scanning resumes automatically once it turns green"));
         return;
       }
     }
@@ -2076,7 +2391,7 @@ async function reopenAuthRecovery(session: BrowserAuthSession) {
     });
     startAuthCapturePolling(opened);
     await reloadAuthRecoverySessions();
-    emit("notify", "info", "登录窗口已打开；登录成功并访问后台功能后，会自动保存身份、显示右上角成功提示并关闭窗口");
+    emit("notify", "info", tr("登录窗口已打开；登录成功并访问后台功能后，会自动保存身份、显示右上角成功提示并关闭窗口", "Login window opened. After you sign in and open an admin page, the identity is saved automatically, a success notice appears at the top right, and the window closes"));
   } catch (error) {
     emit("notify", "error", String(error));
   } finally {
@@ -2091,7 +2406,9 @@ async function finishAuthRecovery(session: BrowserAuthSession) {
     emit(
       "notify",
       updated.status === "valid" ? "success" : "info",
-      updated.status === "valid" ? "登录会话已更新，绿灯恢复" : updated.lastError || "会话仍需确认",
+      updated.status === "valid"
+        ? tr("登录会话已更新，绿灯恢复", "Login session updated; status is green again")
+        : updated.lastError || tr("会话仍需确认", "Session still needs confirmation"),
     );
     if (updated.status === "valid") void maybeAutoContinueAfterAuthRecovery();
   } catch (error) {
@@ -2108,7 +2425,9 @@ async function validateAuthRecovery(session: BrowserAuthSession) {
     emit(
       "notify",
       updated.status === "valid" ? "success" : "info",
-      updated.status === "valid" ? "会话校验通过，可以继续原任务" : updated.lastError || "会话需要重新登录",
+      updated.status === "valid"
+        ? tr("会话校验通过，可以继续原任务", "Session check passed; you can continue the original task")
+        : updated.lastError || tr("会话需要重新登录", "Session needs a new login"),
     );
     if (updated.status === "valid") void maybeAutoContinueAfterAuthRecovery();
   } catch (error) {
@@ -2121,7 +2440,7 @@ async function maybeAutoContinueAfterAuthRecovery() {
   if (!authRecoveryScan.value || authRecoveryAutoContinuing.value || authRecoveryBusy.value === "continue") return;
   if (!authRecoverySessions.value.length || authRecoverySessions.value.some((session) => session.status !== "valid")) return;
   authRecoveryAutoContinuing.value = true;
-  emit("notify", "success", "登录成功，绑定身份已保存；恢复窗口已关闭，正在自动继续原任务");
+  emit("notify", "success", tr("登录成功，绑定身份已保存；恢复窗口已关闭，正在自动继续原任务", "Signed in and the bound identity was saved; the recovery window closed and the original task is continuing automatically"));
   await continueAfterAuthRecovery();
 }
 async function continueAfterAuthRecovery() {
@@ -2132,7 +2451,7 @@ async function continueAfterAuthRecovery() {
   try {
     await reloadAuthRecoverySessions();
     if (authRecoverySessions.value.some((session) => session.status !== "valid")) {
-      emit("notify", "info", "仍有绑定身份未恢复绿色状态，请先完成登录");
+      emit("notify", "info", tr("仍有绑定身份未恢复绿色状态，请先完成登录", "Some bound identities are not green yet; finish signing in first"));
       authRecoveryAutoContinuing.value = false;
       return;
     }
@@ -2147,12 +2466,29 @@ async function continueAfterAuthRecovery() {
     authRecoveryAutoContinuing.value = false;
   }
 }
-function askRemove(scan: SentinelScan) {
+// Delete confirms in place, in the row whose button was pressed; a refused
+// delete of a crashed task then offers the force delete in the same spot.
+async function askRemove(scan: SentinelScan) {
   if (deleting.value) return;
+  const trigger = actionTrigger();
   pendingDelete.value = scan;
-}
-function cancelRemove() {
-  if (!deleting.value) pendingDelete.value = undefined;
+  await confirmInPlace({
+    trigger,
+    title: fmt(t.value.scanning.deleteTask, { name: scanTitle(scan) }),
+    detail: ["scanning", "pausing"].includes(scan.status) ? t.value.scanning.deleteActive : t.value.scanning.deleteRecord,
+    run: remove,
+  });
+  if (pendingDelete.value?.id === scan.id) pendingDelete.value = undefined;
+  const candidate = forceCandidate.value;
+  if (candidate?.id !== scan.id) return;
+  await confirmInPlace({
+    trigger: trigger?.isConnected ? trigger : null,
+    title: fmt(t.value.scanning.forceDeleteTitle, { name: scanTitle(candidate) }),
+    detail: fmt(t.value.scanning.forceDeleteDetail, { reason: forceReason.value }),
+    confirmText: t.value.scanning.row.forceDelete,
+    run: forceRemove,
+  });
+  if (forceCandidate.value?.id === scan.id) forceCandidate.value = undefined;
 }
 async function remove() {
   const scan = pendingDelete.value;
@@ -2167,10 +2503,46 @@ async function remove() {
     }
     if (previewScan.value?.id === scan.id) previewScan.value = undefined;
     pendingDelete.value = undefined;
-    emit("notify", "success", "任务及关联记录已删除；历史源文件与任务产物文件已保留");
+    emit("notify", "success", tr("任务及关联记录已删除；历史源文件与任务产物文件已保留", "Task and linked records deleted; source files and task artifact files were kept"));
     await load();
   } catch (e) {
-    emit("notify", "error", `删除失败：${String(e)}`);
+    const reason = String(e);
+    // A crashed scan that is dead but unsettled is refused by the settlement /
+    // quiescence gates. For those, and only for a non-active scan, offer the
+    // operator the explicit hard override. A live-process refusal
+    // (cleanup_unconfirmed / 仍有本地执行进程) is NOT force-able — force keeps
+    // that floor — so we never offer it there.
+    const liveProcess = /cleanup_unconfirmed|仍有本地执行进程/.test(reason);
+    const unsettled = /未结算|尚未.*(确认|闭合)|retention_required|scan_quiescence|exit_missing|unverifiable|worker_active|原审计来源/.test(reason);
+    const active = ["scanning", "pausing"].includes(scan.status);
+    if (unsettled && !liveProcess && !active) {
+      pendingDelete.value = undefined;
+      forceReason.value = reason;
+      forceCandidate.value = scan;
+    } else {
+      emit("notify", "error", tr(`删除失败：${reason}`, `Delete failed: ${reason}`));
+    }
+  } finally {
+    deleting.value = false;
+  }
+}
+async function forceRemove() {
+  const scan = forceCandidate.value;
+  if (!scan || deleting.value) return;
+  deleting.value = true;
+  try {
+    await sentinelApi.forceDeleteSentinelScan(scan.id);
+    if (selected.value?.id === scan.id) {
+      selected.value = undefined;
+      findings.value = [];
+      selectedUrl.value = "";
+    }
+    if (previewScan.value?.id === scan.id) previewScan.value = undefined;
+    forceCandidate.value = undefined;
+    emit("notify", "success", tr("已强制删除崩溃任务；财务审计记录已原样归档保留", "Crashed task force-deleted; financial audit records were archived unchanged"));
+    await load();
+  } catch (e) {
+    emit("notify", "error", tr(`强制删除失败：${String(e)}`, `Force delete failed: ${String(e)}`));
   } finally {
     deleting.value = false;
   }
@@ -2180,15 +2552,16 @@ async function exportProject() {
     emit(
       "notify",
       "info",
-      "请先在顶部选择要导出的项目，或打开该项目的一条扫描任务",
+      tr("请先在顶部选择要导出的项目，或打开该项目的一条扫描任务", "Select the project to export at the top, or open one of its scan tasks"),
     );
     return;
   }
   try {
+    const exportedPath = await sentinelApi.exportSentinelProject(transferProjectId.value);
     emit(
       "notify",
       "success",
-      `项目包已导出：${await sentinelApi.exportSentinelProject(transferProjectId.value)}`,
+      tr(`项目包已导出：${exportedPath}`, `Project package exported: ${exportedPath}`),
     );
   } catch (e) {
     emit("notify", "error", String(e));
@@ -2231,10 +2604,11 @@ async function saveValidation() {
       const nextItems = await sentinelApi.listSentinelValidationWorkItems(project);
       if (!detailDisposed && project === projectFilter.value) validationWorkItems.value = nextItems;
     }
+    const savedSeverity = severityLabel(form.verdict === "false_positive" ? "none" : form.severity);
     emit(
       "notify",
       "success",
-      `验证结论已保存：${verdictLabel(form.verdict)}，风险等级已更新为 ${severityLabel(form.verdict === "false_positive" ? "none" : form.severity)}`,
+      tr(`验证结论已保存：${verdictLabel(form.verdict)}，风险等级已更新为 ${savedSeverity}`, `Validation verdict saved: ${verdictLabel(form.verdict)}; risk level updated to ${savedSeverity}`),
     );
   } catch (e) {
     emit("notify", "error", String(e));
@@ -2271,7 +2645,7 @@ async function saveValidationWorkItem() {
       if (validationWorkEditor.value === item)
         validationWorkEditor.value = nextItems.find((row) => row.findingId === item.findingId);
     }
-    emit("notify", "success", `漏洞结论已保存：${verdictLabel(form.verdict)}`);
+    emit("notify", "success", tr(`漏洞结论已保存：${verdictLabel(form.verdict)}`, `Vulnerability verdict saved: ${verdictLabel(form.verdict)}`));
   } catch (error) {
     emit("notify", "error", String(error));
   }
@@ -2279,7 +2653,7 @@ async function saveValidationWorkItem() {
 async function openValidationEvidence(item: SentinelValidationWorkItem) {
   const scan = scans.value.find((row) => row.id === item.scanId);
   if (!scan) {
-    emit("notify", "error", "对应任务不在当前项目范围内");
+    emit("notify", "error", tr("对应任务不在当前项目范围内", "The matching task is outside the current project"));
     return;
   }
   await openScan(scan, false);
@@ -2291,8 +2665,6 @@ watch(
   () => props.section,
   (value) => {
     tab.value = value;
-    if (value === "results" && !selected.value && resultTaskScans.value[0])
-      openScan(resultTaskScans.value[0], false);
   },
 );
 watch(
@@ -2312,10 +2684,9 @@ watch(() => selected.value?.id, clearResultDetails, { flush: "sync" });
 watch(selectedUrl, (value) => {
   if (resultTab.value === "vulnerabilities")
     selectedFindingId.value = vulnerabilityRows.value[0]?.id;
-  if (selected.value?.scanType === "web") {
-    loadInvestigationGraph(selected.value.id, value);
-    loadAgentExecution(selected.value.id, value);
-  }
+  investigationGraph.value = undefined;
+  agentExecution.value = null;
+  void value;
 });
 watch(resultTab, (value) => {
   if (value === "vulnerabilities")
@@ -2345,13 +2716,13 @@ watch(
 watch(tab, async (value) => {
   emit("section-change", value);
   try {
-    if (value === "queue" && !previewScan.value && queueScans.value[0])
-      await preview(queueScans.value[0]);
     if (value === "fuse" || value === "queue") fuseEntries.value = await sentinelApi.listSentinelFuseZone(projectFilter.value);
-    if (value === "validations") {
+    if (value === "validations" || value === "queue") {
       validationWorkItems.value = await sentinelApi.listSentinelValidationWorkItems(projectFilter.value);
-      const first = selectedValidationWorkItems.value[0];
-      if (first && !validationWorkEditor.value) editValidationWorkItem(first);
+      if (value === "validations") {
+        const first = selectedValidationWorkItems.value[0];
+        if (first && !validationWorkEditor.value) editValidationWorkItem(first);
+      }
     }
   } catch (error) {
     emit("notify", "error", String(error));
@@ -2386,7 +2757,7 @@ useBoardLifecycle({
       authRecoveryBusy.value = "";
       await reloadAuthRecoverySessions();
       if (detailDisposed) return;
-      emit("notify", "success", `登录成功，${session.name} 已保存身份；登录窗口已关闭`);
+      emit("notify", "success", tr(`登录成功，${session.name} 已保存身份；登录窗口已关闭`, `Signed in; identity saved for ${session.name}. Login window closed`));
       void maybeAutoContinueAfterAuthRecovery();
     }
   }),
@@ -2430,44 +2801,282 @@ onUnmounted(() => {
       @close="closeAuthRecovery"
     />
     <template v-if="tab === 'dialog'">
-      <AgentDialog :project-id="projectId" :initial-scan-id="dialogScanId" @start="startInvestigation" @analyze-scan="emit('analyze-scan',$event)" @open-results="(scan) => openScan(scan)" @prepare-followup="prepareGapFollowup" />
+      <AgentDialog :project-id="projectId" :initial-scan-id="selected?.id" @start="startInvestigation" @analyze-scan="emit('analyze-scan',$event)" @open-results="(scan) => openScan(scan)" @prepare-followup="prepareGapFollowup" @task-change="onDialogTask">
+      <template #process="{ scanId: dialogTaskId }">
+        <div v-if="selected && selected.id === dialogTaskId" class="process-stack">
+          <NativeRunStatus v-if="selected.scanType === 'web'" class="agent-workspace" :scan-id="selected.id" :attempt="selected.attemptCount" :status="selected.status" @attempt-closed="onAttemptClosed" @prepare-handoff="prepareClosureHandoff" />
+          <section class="process-panel">
+            <header class="process-panel-head">
+              <div>
+                <h3>{{ tr("这次任务发出的接口测试", "API tests sent for this task") }}</h3>
+                <p>{{ tr("这里只显示 Agent 实际保存下来的请求。没有出现在这张表里的结论，不作为这次扫描的过程。", "This list is only the requests the agent actually saved. A conclusion that is not in this table is not part of this scan's process.") }}</p>
+              </div>
+              <label v-if="selected.scanType === 'web' && urlCards.length" class="result-context-control process-target">
+                <span class="eyebrow">{{ t.scanning.targets }}</span><select :value="selectedUrl" @change="selectResultUrl">
+                  <option v-for="card in urlCards" :key="card.url" :value="card.url">
+                    {{ card.url === "*" ? tr("全部目标 / 全局发现", "All targets / global findings") : card.url }}
+                  </option>
+                </select>
+              </label>
+            </header>
+            <nav class="result-subtabs process-subtabs">
+              <button
+                v-for="item in processTabs"
+                :key="item.key"
+                type="button"
+                :class="{ active: activeProcessTab === item.key }"
+                :title="item.title"
+                @click="processTab = item.key"
+              >
+                {{ item.label }}<em v-if="item.count">{{ item.count }}</em>
+              </button>
+            </nav>
+            <div v-if="detailBusy" class="empty-state">{{ t.scanning.process.loading }}</div>
+            <template v-else>
+              <div
+                v-if="activeProcessTab === 'investigation'"
+                class="result-section-stack"
+              >
+                <InvestigationGraphPanel
+                  :graph="investigationGraph"
+                  :busy="investigationBusy"
+                  :updating-id="investigationUpdatingId"
+                  @status="updateInvestigationStatus"
+                  @replay="openRepeaterForGraphApi"
+                  @replay-hypothesis="openRepeaterForHypothesis"
+                />
+              </div>
+
+              <SentinelOpportunitiesPane
+                v-else-if="activeProcessTab === 'opportunities'"
+                :selected-url-opportunities="selectedUrlOpportunities"
+                :opportunity-category-label="opportunityCategoryLabel"
+                :opportunity-status-label="opportunityStatusLabel"
+                :opportunity-endpoint="opportunityEndpoint"
+                :opportunity-parameters="opportunityParameters"
+                :opportunity-knowledge="opportunityKnowledge"
+                :opportunity-knowledge-titles="opportunityKnowledgeTitles"
+                :opportunity-identity-rows="opportunityIdentityRows"
+                :opportunity-identity-summary="opportunityIdentitySummary"
+                :open-opportunity="openOpportunity"
+                :set-opportunity-status="setOpportunityStatus"
+              />
+
+              <div v-else-if="activeProcessTab === 'trace'" class="result-section-stack">
+                <ScanRequestLog :scan-id="selected.id" :active="tab === 'dialog'" />
+                <details class="result-block">
+                  <summary>{{ tr("原始事件流水（不作为测试结果）", "Raw event stream (not the test record)") }}</summary>
+                <SentinelTraceTimeline
+                  :detail="liveTrace" :busy="liveTraceBusy"
+                  :target-url="selectedUrl" :task-status="selected.status"
+                />
+                <div v-if="!liveTrace && !liveTraceBusy && !['scanning', 'pausing'].includes(selected.status)" class="empty-state">{{ t.scanning.process.noTrace }}</div>
+                </details>
+              </div>
+              <div v-else-if="activeProcessTab === 'attempts'" class="result-section-stack">
+                <section v-if="scanAttempts.length" class="result-block attempt-ledger-block">
+                  <div class="block-title">
+                    <RefreshCw :size="16" />
+                    <div><strong>{{ tr('本次执行结果与增量成本', 'Run results and incremental cost') }}</strong><small>{{ tr('默认只显示最新一次最终状态；重新执行与继续未完成阶段按不同规则隔离。', 'Shows only the latest final state by default; re-runs and resumed stages are isolated by different rules.') }}</small></div>
+                    <button v-if="scanAttempts.length > 1" class="attempt-history-toggle" @click="showAttemptHistory = !showAttemptHistory">{{showAttemptHistory ? tr('收起历史', 'Hide history') : tr(`查看历史 ${scanAttempts.length - 1} 次`, `Show history (${scanAttempts.length - 1})`)}}</button>
+                  </div>
+                  <div class="attempt-ledger">
+                    <article v-for="attempt in visibleScanAttempts" :key="attempt.attemptNumber" :class="[`attempt-${attempt.status}`, { current: attempt.attemptNumber === selected.attemptCount }]">
+                      <header><span>{{ tr(`第 ${attempt.attemptNumber} 次`, `Attempt ${attempt.attemptNumber}`) }} · {{attemptModeLabel(attempt.executionMode, attempt.attemptNumber)}}</span><b>{{attemptStageLabel(attempt.stage)}}</b><em class="status-chip" :class="attempt.status">{{statusLabel(attempt.status)}}</em></header>
+                      <ol class="execution-stage-strip" :aria-label="tr('执行六段状态', 'Six-stage run status')">
+                        <li v-for="step in EXECUTION_STAGE_STEPS" :key="`${attempt.attemptNumber}-${step.key}`" :class="executionStageTone(attempt, step.key)">{{ step.label }}</li>
+                      </ol>
+                      <small v-if="executionStageStatusLabel(attempt)" class="execution-stage-note">{{ executionStageStatusLabel(attempt) }}</small>
+                      <div class="attempt-backend-grid">
+                        <span>{{ tr('执行后端', 'Run backend') }} <b>{{ attemptBackendSummary(attempt).backend }}</b></span>
+                        <span>{{ tr('执行环境', 'Run environment') }} <b>{{ attemptBackendSummary(attempt).environment }}</b></span>
+                        <span>{{ tr('任务状态', 'Task status') }} <b>{{ statusLabel(attemptBackendSummary(attempt).taskStatus) }}</b></span>
+                      </div>
+                      <p>{{attempt.checkpoint || (resolveExecutionStage(attempt).historyMissing ? tr('历史记录未提供', 'History not provided') : tr('尚无阶段详情', 'No stage details yet'))}}</p>
+                      <div class="attempt-cost"><span>{{ tr('请求', 'Requests') }} <b>{{formatNumber(attempt.llmRequests)}}</b></span><span>{{ tr('输入', 'Input') }} <b>{{formatNumber(attempt.inputTokens)}}</b></span><span>{{ tr('缓存', 'Cached') }} <b>{{formatNumber(attempt.cachedTokens)}}</b></span><span>{{ tr('输出', 'Output') }} <b>{{formatNumber(attempt.outputTokens)}}</b></span><span>{{ tr('本次总计', 'Run total') }} <b>{{formatNumber(attempt.totalTokens)}}</b></span></div>
+                      <small>{{attemptTime(attempt)}}</small><code v-if="attempt.workDir" :title="attempt.workDir">{{attempt.workDir}}</code><mark v-if="attemptEndReason(attempt)">{{ tr(`结束说明：${attemptEndReason(attempt)}`, `End reason: ${attemptEndReason(attempt)}`) }}</mark>
+                      <button class="attempt-history-toggle" @click="emit('open-runner-log', selected.id, attempt.attemptNumber)">{{ tr('运行日志与诊断', 'Run log and diagnostics') }}</button>
+                    </article>
+                  </div>
+                </section>
+                <section class="result-block">
+                  <div class="block-title">
+                    <Activity :size="16" />
+                    <div>
+                      <strong>{{ tr('Token 消耗', 'Token usage') }}</strong
+                      ><small
+                        >{{ selected.totalTokens ? `${scanTypeLabel(selected.scanType)} · ${selected.skillNames || tr("默认扫描策略", "Default scan policy")}` : tr("当前模型请求 0、Token 0；前端/CDP 确定性侦察不会消耗模型 Token", "No model requests or tokens yet; deterministic frontend/CDP reconnaissance uses no model tokens") }}</small
+                      >
+                    </div>
+                  </div>
+                  <div class="comparison-grid token-grid">
+                    <article>
+                      <span>{{ tr('请求次数', 'Requests') }}</span
+                      ><strong>{{ formatNumber(selected.llmRequests) }}</strong>
+                    </article>
+                    <article>
+                      <span>{{ tr('输入 Token', 'Input tokens') }}</span
+                      ><strong>{{ formatNumber(selected.inputTokens) }}</strong>
+                    </article>
+                    <article>
+                      <span>{{ tr('输出 Token', 'Output tokens') }}</span
+                      ><strong>{{
+                        formatNumber(selected.outputTokens)
+                      }}</strong>
+                    </article>
+                    <article>
+                      <span>{{ tr('缓存 Token', 'Cached tokens') }}</span
+                      ><strong>{{
+                        formatNumber(selected.cachedTokens)
+                      }}</strong>
+                    </article>
+                    <article>
+                      <span>{{ tr('新增输入 Token', 'Uncached input tokens') }}</span
+                      ><strong>{{
+                        formatNumber(uncachedInput(selected))
+                      }}</strong>
+                    </article>
+                    <article>
+                      <span>{{ tr('输入 + 输出总计', 'Input + output total') }}</span
+                      ><strong>{{ formatNumber(scanTokenTotal(selected)) }}</strong>
+                    </article>
+                  </div>
+                </section>
+                <section v-if="runtimeDiagnosticsFindings.length" class="result-block runtime-diagnostics-block">
+                  <div class="block-title">
+                    <Activity :size="16" />
+                    <div>
+                      <strong>runtimeDiagnostics</strong>
+                      <small>{{ tr('本地浏览器采集失败时保留错误码；不再只显示一句摘要。', 'Error codes are kept when local browser capture fails, instead of a one-line summary.') }}</small>
+                    </div>
+                  </div>
+                  <div class="runtime-diagnostics-list">
+                    <article v-for="finding in runtimeDiagnosticsFindings" :key="finding.id">
+                      <header><strong>{{ finding.title }}</strong><em> · {{ kindLabel(finding.kind) }}</em></header>
+                      <div v-for="row in runtimeDiagnosticRows(finding)" :key="row.key" class="runtime-diagnostic-row">
+                        <div class="runtime-diagnostic-head"><b>{{ row.identity }}</b><span> · </span><code>{{ row.captureStatus }}</code></div>
+                        <dl>
+                          <div v-if="row.captureError"><dt>captureError</dt><dd><code>{{ row.captureError }}</code></dd></div>
+                          <div v-if="row.stopReason"><dt>stopReason</dt><dd><code>{{ row.stopReason }}</code></dd></div>
+                          <div v-if="row.failedStage"><dt>failedStage</dt><dd><code>{{ row.failedStage }}</code></dd></div>
+                          <div v-if="row.transport"><dt>cdpTransport</dt><dd><code>{{ row.transport }}</code></dd></div>
+                          <div v-if="row.browser"><dt>browser</dt><dd><code>{{ row.browser }}</code></dd></div>
+                          <div v-if="row.exitCode"><dt>exitCode</dt><dd><code>{{ row.exitCode }}</code></dd></div>
+                          <div v-if="row.signal"><dt>signal</dt><dd><code>{{ row.signal }}</code></dd></div>
+                        </dl>
+                        <pre v-if="row.stderr" class="runtime-diagnostic-stderr">{{ row.stderr }}</pre>
+                      </div>
+                    </article>
+                  </div>
+                </section>
+              </div>
+              <div v-else class="result-section-stack">
+                <section
+                  v-if="currentTarget?.scanMode"
+                  class="result-block adaptive-route-block"
+                >
+                  <div class="block-title">
+                    <Activity :size="16" />
+                    <div>
+                      <strong>{{ tr('自适应扫描决策', 'Adaptive scan decision') }}</strong
+                      ><small
+                        >{{ currentTarget.scanMode === 'manual_review'
+                          ? tr('复杂前端只保留高价值线索，等待人工复核。', 'Complex frontend: only high-value leads are kept for manual review.')
+                          : tr('本地前置分析决定候选价值，自动调查只验证高价值证据。', 'Local pre-analysis scores candidates; automatic investigation validates only high-value evidence.') }}</small
+                      >
+                    </div>
+                    <span class="route-mode" :class="currentTarget.scanMode">{{
+                      routeModeLabel(currentTarget.scanMode)
+                    }}</span>
+                  </div>
+                  <div class="adaptive-route-summary">
+                    <article>
+                      <span>{{ tr('前端价值', 'Frontend value') }}</span
+                      ><strong
+                        >{{ currentTarget.valueScore
+                        }}<small>/ 100</small></strong
+                      >
+                    </article>
+                    <article>
+                      <span>{{ tr('任务模式', 'Task mode') }}</span
+                      ><strong>{{ routeModeLabel(selected?.requestedScanMode || webEffectivePolicy.webModeCeiling || "standard") }}</strong>
+                    </article>
+                    <article>
+                      <span>{{ tr('实际分流', 'Actual routing') }}</span
+                      ><strong>{{ routeModeLabel(currentTarget.scanMode) }}</strong>
+                    </article>
+                    <article>
+                      <span>{{ tr('状态来源', 'Status source') }}</span>
+                      <strong v-if="currentTarget.lastAttemptNumber === selected.attemptCount">{{ tr(`第 ${currentTarget.lastAttemptNumber} 次：${statusLabel(currentTarget.status)}`, `Attempt ${currentTarget.lastAttemptNumber}: ${statusLabel(currentTarget.status)}`) }}</strong>
+                      <strong v-else>{{ tr(`历史第 ${currentTarget.lastAttemptNumber || '—'} 次：${statusLabel(currentTarget.status)}`, `Earlier attempt ${currentTarget.lastAttemptNumber || '—'}: ${statusLabel(currentTarget.status)}`) }}<small>{{ tr('（本轮未执行）', ' (not run this round)') }}</small></strong>
+                    </article>
+                  </div>
+                  <div class="route-reason-list">
+                    <span v-for="reason in routeReasonItems" :key="reason">{{
+                      reason
+                    }}</span
+                    ><span v-if="!routeReasonItems.length">{{ tr('暂无分流依据', 'No routing basis yet') }}</span>
+                  </div>
+                </section>
+                <section v-if="webCoverageCatalog.length" class="web-coverage-ledger">
+                  <header>
+                    <div>
+                      <strong>{{ tr('SRC 能力基线与扩展覆盖', 'SRC capability baseline and extended coverage') }}</strong>
+                      <span>{{ webEffectivePolicy.effectiveSkillNames || tr("业务前端深度分析", "Deep business frontend analysis") }} · {{ tr(`任务模式：${routeModeLabel(selected?.requestedScanMode || webEffectivePolicy.webModeCeiling || "standard")}`, `Task mode: ${routeModeLabel(selected?.requestedScanMode || webEffectivePolicy.webModeCeiling || "standard")}`) }}<template v-if="currentTarget?.scanMode"> · {{ tr(`当前目标：${routeModeLabel(currentTarget.scanMode)}`, `Current target: ${routeModeLabel(currentTarget.scanMode)}`) }}</template></span>
+                    </div>
+                    <small>{{ tr('能力就绪不等于当前目标已经测试；真实执行结果以调查图谱和证据为准', 'A ready capability does not mean the current target was tested; the investigation graph and evidence show the actual results') }}</small>
+                  </header>
+                  <div>
+                    <article
+                      v-for="item in webCoverageCatalog"
+                      :key="item.key"
+                      :class="`coverage-${item.status}`"
+                    >
+                      <span>{{ item.label }}</span>
+                      <strong>{{ coverageStatusLabel(item.status) }}</strong>
+                      <small><template v-if="item.standard">{{ item.standard }} · </template>{{ item.prerequisite }}</small>
+                      <details v-if="item.manualFocus"><summary>{{ tr('人工补位重点', 'Manual follow-up focus') }}</summary><p>{{ item.manualFocus }}</p></details>
+                    </article>
+                  </div>
+                </section>
+                <div v-if="!currentTarget?.scanMode && !webCoverageCatalog.length" class="empty-state">{{ t.scanning.process.noRouting }}</div>
+              </div>
+            </template>
+          </section>
+          <NativeRootReconciliation :key="`cost:${selected.id}`" :scan-id="selected.id" :attempt="selected.attemptCount" />
+          <NativeProtectionRecovery :key="`recovery:${selected.id}`" :scan-id="selected.id" />
+        </div>
+        <p v-else-if="dialogTaskId" class="empty-state">{{ t.scanning.process.loadingTask }}</p>
+      </template>
+      </AgentDialog>
     </template>
     <template v-else-if="tab === 'overview'">
-      <section class="panel investigation-hero">
-        <div class="investigation-hero-copy">
-          <span class="eyebrow">AUTONOMOUS INVESTIGATION DESK</span>
-          <h2>先给结论与证据，再决定是否消耗 Token</h2>
-          <p>
-            页面渲染、功能入口触发、HTTP 捕获、参数还原、JS/指纹与本地知识匹配由确定性流程完成；
-            只有形成高价值候选后才把有限上下文交给原生调查。
-          </p>
+      <div class="section-toolbar overview-heading">
+        <div><p>{{ t.scanning.overviewIntro }}</p></div>
+        <div class="overview-heading-actions">
+          <button type="button" class="button ghost compact" @click="tab = 'fuse'">{{ tr('已停止目标', 'Stopped targets') }}<b v-if="stats.activeFuseCount" class="opportunity-count-badge">{{ stats.activeFuseCount }}</b></button>
+          <button type="button" class="button primary compact" @click="startInvestigation"><Play :size="13" />{{ tr('新建扫描', 'New scan') }}</button>
         </div>
-        <div class="investigation-hero-actions">
-          <button class="button primary" @click="tab = 'workbench'">
-            <Play :size="15" /> 新建扫描
-          </button>
-          <button class="button ghost" @click="tab = 'queue'">
-            <Activity :size="15" /> 任务与成本
-          </button>
-        </div>
-      </section>
-      <div class="investigation-layout">
-        <section class="panel opportunity-inbox">
+      </div>
+      <SentinelTaskStrip
+        :scans="visibleScans" :vulnerability-count="taskVulnerabilityCount" :target-count="taskTargetCount"
+        :active-id="selected?.id" @open="(scan) => openScan(scan)" @all="tab = 'queue'"
+      />
+      <section class="panel opportunity-inbox">
           <div class="panel-heading opportunity-heading">
             <div>
-              <span class="eyebrow">OPPORTUNITY INBOX</span>
-              <h3>高价值机会收件箱</h3>
-              <p>每张卡片都必须说明价值、证据来源、接口参数和下一步；它不是漏洞结论。</p>
+              <h3>{{ tr('高价值机会收件箱', 'High-value opportunity inbox') }}</h3>
+              <p>{{ tr('每张卡片都必须说明价值、证据来源、接口参数和下一步；它不是漏洞结论。', 'Each card states its value, evidence source, API parameters, and next step. It is not a vulnerability verdict.') }}</p>
             </div>
             <div class="segmented opportunity-filter">
               <button :class="{ active: opportunityView === 'ready' }" @click="opportunityView = 'ready'">
-                <span>可验证</span><b v-if="stats.readyOpportunityCount" class="opportunity-count-badge">{{ stats.readyOpportunityCount }}</b>
+                <span>{{ tr('可验证', 'Ready') }}</span><b v-if="stats.readyOpportunityCount" class="opportunity-count-badge">{{ stats.readyOpportunityCount }}</b>
               </button>
               <button :class="{ active: opportunityView === 'all' }" @click="opportunityView = 'all'">
-                <span>活跃</span><b v-if="stats.opportunityCount" class="opportunity-count-badge">{{ stats.opportunityCount }}</b>
+                <span>{{ tr('活跃', 'Active') }}</span><b v-if="stats.opportunityCount" class="opportunity-count-badge">{{ stats.opportunityCount }}</b>
               </button>
               <button :class="{ active: opportunityView === 'history' }" @click="opportunityView = 'history'">
-                历史
+                {{ tr('历史', 'History') }}
               </button>
             </div>
           </div>
@@ -2479,19 +3088,19 @@ onUnmounted(() => {
               :class="[`score-${item.score >= 80 ? 'high' : item.score >= 65 ? 'medium' : 'low'}`, item.status]"
             >
               <div class="opportunity-score">
-                <strong>{{ item.score }}</strong><small>价值分</small>
+                <strong>{{ item.score }}</strong><small>{{ tr('价值分', 'Value score') }}</small>
               </div>
               <div class="opportunity-content">
                 <header>
                   <span>{{ opportunityCategoryLabel(item.category) }}</span>
                   <em :class="`opportunity-status ${item.status}`">{{ opportunityStatusLabel(item.status) }}</em>
-                  <b v-if="opportunityEvidenceCount(item)" class="opportunity-evidence-badge">证据 {{ opportunityEvidenceCount(item) }}</b>
+                  <b v-if="opportunityEvidenceCount(item)" class="opportunity-evidence-badge">{{ tr(`证据 ${opportunityEvidenceCount(item)}`, `Evidence ${opportunityEvidenceCount(item)}`) }}</b>
                   <small>{{ item.confidence || 'unknown' }} confidence</small>
                 </header>
                 <h4>{{ item.title }}</h4>
                 <code class="opportunity-endpoint">{{ opportunityEndpoint(item) }}</code>
                 <div v-if="opportunityIdentityRows(item).length" class="opportunity-identity-scope">
-                  <strong>身份范围</strong><span>{{ opportunityIdentitySummary(item) }}</span><span class="identity-compare-label">{{ opportunityIdentityRows(item).length > 1 ? "同一机会 · A/B 分栏" : "单账号证据" }}</span>
+                  <strong>{{ tr('身份范围', 'Identity scope') }}</strong><span>{{ opportunityIdentitySummary(item) }}</span><span class="identity-compare-label">{{ opportunityIdentityRows(item).length > 1 ? tr("同一机会 · A/B 分栏", "Same opportunity · A/B columns") : tr("单账号证据", "Single-account evidence") }}</span>
                   <template v-for="row in opportunityIdentityRows(item)" :key="`${item.id}-${row.label}`">
                     <em :class="`identity-chip ${row.tone}`" :title="row.identityKey || row.detail">{{ row.label }} · {{ row.state }}<small>{{ row.detail }}</small></em>
                   </template>
@@ -2501,70 +3110,73 @@ onUnmounted(() => {
                   <li v-for="reason in item.why.slice(0, 3)" :key="reason">{{ reason }}</li>
                 </ul>
                 <div v-if="opportunityParameters(item).length" class="opportunity-params">
-                  <span>参数</span><code v-for="parameter in opportunityParameters(item).slice(0, 12)" :key="parameter">{{ parameter }}</code>
+                  <span>{{ tr('参数', 'Parameters') }}</span><code v-for="parameter in opportunityParameters(item).slice(0, 12)" :key="parameter">{{ parameter }}</code>
                 </div>
                 <div v-if="opportunityKnowledge(item).length" class="opportunity-knowledge">
-                  <Fingerprint :size="14" /> 已命中 {{ opportunityKnowledge(item).length }} 条本地知识：
+                  <Fingerprint :size="14" /> {{ tr(`已命中 ${opportunityKnowledge(item).length} 条本地知识：`, `Matched ${opportunityKnowledge(item).length} local knowledge entries:`) }}
                   {{ opportunityKnowledgeTitles(item) }}
                 </div>
                 <footer>
-                  <span>{{ item.recommendedAction?.label || '查看完整证据后决定下一步' }}</span>
+                  <span>{{ item.recommendedAction?.label || tr('查看完整证据后决定下一步', 'Review the full evidence before deciding the next step') }}</span>
                   <div>
                     <button class="button primary small" :disabled="opportunityBusy === item.id" @click="openOpportunity(item, true)">
-                      开始验证
+                      {{ tr('开始验证', 'Start validation') }}
                     </button>
-                    <button class="button ghost small" @click="openOpportunity(item)">证据</button>
+                    <button class="button ghost small" @click="openOpportunity(item)">{{ tr('证据', 'Evidence') }}</button>
                     <button
                       v-if="activeOpportunityStatuses.has(item.status)"
                       class="button ghost small"
                       :disabled="opportunityBusy === item.id"
                       @click="setOpportunityStatus(item, 'dismissed')"
-                    >忽略</button>
+                    >{{ tr('忽略', 'Dismiss') }}</button>
                   </div>
                 </footer>
               </div>
             </article>
             <div v-if="!visibleOpportunities.length" class="empty-state opportunity-empty">
               <template v-if="opportunityView === 'ready' && activeOpportunityClues.length">
-                <strong>当前没有达到可直接验证门禁的候选</strong>
-                <span>仍保留 {{ activeOpportunityClues.length }} 条有效线索，没有把它们误标成可验证结果。</span>
+                <strong>{{ tr('当前没有达到可直接验证门禁的候选', 'No candidates currently pass the ready-to-validate gate') }}</strong>
+                <span>{{ tr(`仍保留 ${activeOpportunityClues.length} 条有效线索，没有把它们误标成可验证结果。`, `${activeOpportunityClues.length} valid leads are kept and are not mislabeled as ready to validate.`) }}</span>
                 <div class="opportunity-clue-preview">
                   <button v-for="item in activeOpportunityClues" :key="item.id" @click="openOpportunity(item)">
-                    <b>{{ item.score }}</b><span>{{ item.title }}</span><em>查看证据</em>
+                    <b>{{ item.score }}</b><span>{{ item.title }}</span><em>{{ tr('查看证据', 'View evidence') }}</em>
                   </button>
                 </div>
-                <button class="button ghost compact" @click="opportunityView = 'all'">查看全部活跃线索</button>
+                <button class="button ghost compact" @click="opportunityView = 'all'">{{ tr('查看全部活跃线索', 'View all active leads') }}</button>
               </template>
               <template v-else>
-                <strong>当前没有匹配的机会卡</strong>
-                <span>新任务会先完成浏览器探索与前端侦察；没有 70 分以上候选时自动进入一次性目录/API 兜底发现。</span>
+                <strong>{{ tr('当前没有匹配的机会卡', 'No matching opportunity cards') }}</strong>
+                <span>{{ tr('新任务会先完成浏览器探索与前端侦察；没有 70 分以上候选时自动进入一次性目录/API 兜底发现。', 'New tasks first finish browser exploration and frontend reconnaissance; if no candidate scores 70 or more, a one-time directory/API fallback discovery runs automatically.') }}</span>
               </template>
             </div>
           </div>
         </section>
-        <SentinelOverviewSidebar
-          :ready-opportunity-count="stats.readyOpportunityCount"
-          :overview-loading="overviewLoading" :overview-error="overviewError"
-          :running-scan-count="runningScanCount" :total-request-usage="totalRequestUsage"
-          :total-token-usage="totalTokenUsage" :token-scope-label="tokenScopeLabel"
-          :investigation-stats="investigationStats"
-          :investigation-state="investigationSummaryState"
-        />
-      </div>
-      <SentinelOverviewSummary
-        :stats="stats" :overview-loading="overviewLoading" :overview-error="overviewError"
-        :scans="scans" :running-scan-count="runningScanCount"
-        :total-token-usage="totalTokenUsage" :total-request-usage="totalRequestUsage"
-        :token-scope-label="tokenScopeLabel"
-      />
-      <SentinelTokenOverview v-model:scope="tokenScope" :usage="tokenUsage" @open="openScan" />
-      <SentinelTaskOverview
-        :scans="visibleScans" :project-id="props.projectId" :busy-scan-id="scanControlBusy"
-        @open="openScan" @pause="pauseScan" @resume="resumeScan" @retry="rescan" @remove="askRemove"
-      />
+      <details class="overview-more">
+        <summary>{{ t.scanning.overviewMore }}</summary>
+        <div class="overview-more-body">
+          <SentinelOverviewSummary
+            :stats="stats" :overview-loading="overviewLoading" :overview-error="overviewError"
+            :scans="scans" :running-scan-count="runningScanCount"
+            :total-token-usage="totalTokenUsage" :total-request-usage="totalRequestUsage"
+            :token-scope-label="tokenScopeLabel"
+          />
+          <SentinelTokenOverview v-model:scope="tokenScope" :usage="tokenUsage" @open="openScan" />
+          <SentinelOverviewSidebar
+            :ready-opportunity-count="stats.readyOpportunityCount"
+            :overview-loading="overviewLoading" :overview-error="overviewError"
+            :running-scan-count="runningScanCount" :total-request-usage="totalRequestUsage"
+            :total-token-usage="totalTokenUsage" :token-scope-label="tokenScopeLabel"
+            :investigation-stats="investigationStats"
+            :investigation-state="investigationSummaryState"
+          />
+        </div>
+      </details>
     </template>
 
     <template v-else-if="tab === 'queue'">
+    <div class="queue-sub-nav">
+      <button type="button" class="button ghost compact" @click="tab = 'validations'">{{ tr('人工验证队列', 'Manual validation queue') }}<b v-if="validationWorkStats.pending" class="opportunity-count-badge">{{ validationWorkStats.pending }}</b></button>
+    </div>
     <SentinelTaskCenter
       :scans="queueScans"
       :project-id="projectFilter"
@@ -2581,6 +3193,9 @@ onUnmounted(() => {
       :cache-hit-rate="cacheHitRate"
       :control-busy="scanControlBusy"
       :high-value-count="scanHighValueCount"
+      :vulnerability-count="taskVulnerabilityCount"
+      :target-count="taskTargetCount"
+      :open-scan-id="selected?.id"
       @preview="preview"
       @close="previewScan = undefined"
       @confirm="confirm"
@@ -2593,69 +3208,100 @@ onUnmounted(() => {
       @load-more="loadMoreScanHistory"
       @archived="onTaskArchived"
     />
-      <section class="panel fuse-in-tasks">
-        <header><h3>{{ tr("被熔断的地址", "Fused targets") }}</h3><p>{{ tr("这些地址不会进入新调查，除非从这里移出。", "These targets stay out of new investigations until removed here.") }}</p></header>
-        <SentinelFuseZone
-          v-model:fuse-filter="fuseFilter"
-          v-model:fuse-category-filter="fuseCategoryFilter"
-          v-model:fuse-editor="fuseEditor"
-          v-model:pending-fuse-removal="pendingFuseRemoval"
-          :fuse-entries="fuseEntries"
-          :visible-fuse-entries="visibleFuseEntries"
-          :fuse-busy="fuseBusy"
-          :fuse-form="fuseForm"
-          :fuse-detail-tabs="fuseDetailTabs"
-          :copy-text="copyText"
-          :edit-fuse="editFuse"
-          :fuse-category-label="fuseCategoryLabel"
-          :fuse-reason-category="fuseReasonCategory"
-          :fuse-reason-parts="fuseReasonParts"
-          :fuse-recommended-action="fuseRecommendedAction"
-          :fuse-rows="fuseRows"
-          :fuse-state="fuseState"
-          :fuse-target="fuseTarget"
-          :fuse-validation-rows="fuseValidationRows"
-          :remove-fuse="removeFuse"
-          :same-target-url="sameTargetUrl"
-          :save-fuse="saveFuse"
-          :toggle-fuse-detail="toggleFuseDetail"
-        />
-      </section>
     </template>
 
     <template v-else-if="tab === 'results'">
       <div class="sentinel-result-shell">
         <main class="panel url-intelligence">
-          <div class="result-context-bar">
-            <label class="result-context-control">
-              <span class="eyebrow">TASKS</span>
-              <select :value="selected?.id || ''" @change="selectResultTask">
-                <option value="" disabled>选择扫描任务</option>
-                <option v-for="scan in resultTaskScans" :key="scan.id" :value="scan.id">
-                  {{ scan.projectName || "未命名" }} · {{ statusLabel(scan.status) }} · {{ scan.id }}
-                </option>
-              </select>
-            </label>
-            <label v-if="selected?.scanType === 'web'" class="result-context-control result-context-target">
-              <span class="eyebrow">COMPANY ASSETS</span>
-              <select :value="selectedUrl" @change="selectResultUrl">
+          <!-- Results are locked to the task opened from the task list or a task card. -->
+          <div v-if="selected" class="result-context-bar">
+            <div class="result-context-control result-task-context">
+              <span class="eyebrow">{{ t.scanning.task }}</span><div>
+                <strong :title="selected.id">{{ scanTitle(selected) }}</strong>
+                <button type="button" class="button ghost compact" @click="tab = 'queue'"><ArrowLeft :size="13" />{{ t.scanning.taskList }}</button>
+                <button v-if="selected.status !== 'draft'" type="button" class="button ghost compact" @click="openScanDialog(selected)"><Activity :size="13" />{{ t.scanning.runDetails }}</button>
+                <button v-if="selected.scanType === 'web'" type="button" class="button ghost compact high-risk-trigger" @click="openHighRisk(selected)">⚠ {{ tr("高风险操作", "High-risk ops") }}</button>
+                <span v-if="grantedClasses.length" class="granted-classes">{{ tr("已授权", "Authorized") }} {{ grantedClasses.join(" · ") }}</span>
+                <span v-if="selected.scanType === 'web'" class="task-post-switch">{{ postWriteEnabled ? tr("POST/上传已包含在高危授权中，下面仍须当场确认", "POST/upload is included in high-risk authorization; each write below still needs a live confirmation") : tr("POST/上传未授权。请在创建任务的「启用高危操作」里打开。", "POST/upload is not authorized. Enable it under high-risk operations when creating the task.") }}</span>
+                <label v-if="selected.scanType === 'web'" class="task-post-switch">
+                  <input v-model="ssrfCallback" :placeholder="tr('DNSLog 或 httptool 回连 URL', 'DNSLog or httptool callback URL')" @change="saveSsrfCallback" />
+                </label>
+              </div>
+            </div>
+            <ul v-if="selected.scanType === 'web' && writeConfirmations.some((row) => row.status === 'pending')" class="task-write-confirmations">
+              <li v-for="row in writeConfirmations.filter((item) => item.status === 'pending')" :key="row.id">
+                <strong>{{ row.method }} {{ row.endpoint }}</strong>
+                <small>{{ row.cleanup }} · {{ row.recovery }}</small>
+                <button type="button" class="button danger compact" :disabled="writePathBusy" @click="decideWrite(row.id, true)">{{ tr("确认这一次", "Confirm this series") }}</button>
+                <button type="button" class="button ghost compact" :disabled="writePathBusy" @click="decideWrite(row.id, false)">{{ tr("拒绝", "Reject") }}</button>
+              </li>
+            </ul>
+            <label v-if="selected.scanType === 'web'" class="result-context-control result-context-target">
+              <span class="eyebrow">{{ t.scanning.companyAssets }}</span><select :value="selectedUrl" @change="selectResultUrl">
                 <option v-for="card in filteredUrlCards" :key="card.url" :value="card.url">
-                  {{ card.url === "*" ? "全部目标 / 全局发现" : card.url }} · {{ card.total }} 条 · {{ card.vulnerabilities }} 漏洞
+                  {{ card.url === "*" ? tr("全部目标 / 全局发现", "All targets / global findings") : card.url }} · {{ tr(`${card.total} 条 · ${card.vulnerabilities} 漏洞`, `${card.total} results · ${card.vulnerabilities} vulnerabilities`) }}
                 </option>
               </select>
             </label>
             <div v-else class="result-source-context">
-              <span class="eyebrow">SOURCE CONTEXT</span>
-              <strong>{{ selected?.sourcePath || "未提供源码路径" }}</strong>
-              <small>{{ sourceInventory.architecture || "等待识别" }} · {{ sourceLanguages.join("、") || "等待识别" }}</small>
+              <span class="eyebrow">{{ t.scanning.sourceContext }}</span><strong>{{ selected?.sourcePath || tr("未提供源码路径", "No source path provided") }}</strong>
+              <small>{{ sourceInventory.architecture || tr("等待识别", "Pending detection") }} · {{ sourceLanguages.join("、") || tr("等待识别", "Pending detection") }}</small>
             </div>
             <div class="result-context-summary">
-              <span>{{ selected ? statusLabel(selected.status) : "未选择任务" }}</span>
-              <span v-if="selected?.scanType === 'web'">{{ filteredUrlCards.length }} 个目标</span>
-              <span v-else>{{ sourceStats.findings }} 条发现</span>
+              <span>{{ statusLabel(selected.status) }}</span>
+              <span v-if="selected.scanType === 'web'">{{ tr(`${filteredUrlCards.length} 个目标`, `${filteredUrlCards.length} targets`) }}</span>
+              <span v-else>{{ tr(`${sourceStats.findings} 条发现`, `${sourceStats.findings} findings`) }}</span>
             </div>
           </div>
-          <div v-if="!selected" class="empty-state">请先选择扫描任务。</div>
+          <ScanRequestLog v-if="selected" :scan-id="selected.id" :active="tab === 'results'" />
+          <!-- Track A · A2/A3 — per-URL subtask list: the scan's children, one
+               row per URL with its own status (incl. fuse-skipped), findings and
+               vulnerabilities. Clicking a row drills into that URL's detail. -->
+          <section
+            v-if="selected?.scanType === 'web' && filteredUrlCards.length"
+            class="url-subtasks"
+            :aria-label="tr('按 URL 的子任务', 'Per-URL subtasks')"
+          >
+            <header class="url-subtasks-head">
+              <div>
+                <span class="eyebrow">SUBTASKS · PER URL</span>
+                <strong>{{ tr("按 URL 的子任务", "Per-URL subtasks") }} · {{ filteredUrlCards.length }}</strong>
+              </div>
+              <small>{{ tr("每个 URL 一行，显示状态、发现与漏洞；点开看它自己的详情。", "One row per URL with its status, findings and vulnerabilities — open it for that URL's details.") }}</small>
+            </header>
+            <ol class="url-subtask-list">
+              <li v-for="card in filteredUrlCards" :key="card.url">
+                <button
+                  type="button"
+                  class="url-subtask-row"
+                  :class="{ active: selectedUrl === card.url, fused: card.status === 'fuse_excluded' || card.status === 'limited' }"
+                  :aria-current="selectedUrl === card.url ? 'true' : undefined"
+                  @click="selectUrl(card.url)"
+                >
+                  <span class="url-subtask-main">
+                    <b class="url-subtask-url">{{ card.url === "*" ? tr("全部目标 / 全局发现", "All targets / global findings") : card.url }}</b>
+                    <small class="url-subtask-sub">{{ card.url === "*" ? tr("跨目标汇总", "Cross-target summary") : card.company }}<template v-if="urlFingerprintHint(card.url)"> · {{ urlFingerprintHint(card.url) }}</template></small>
+                  </span>
+                  <span class="url-subtask-status">
+                    <em v-if="card.status === 'fuse_excluded' || card.status === 'limited'" class="status-chip fused-chip">{{ tr("已跳过 · 熔断区", "Skipped · fuse zone") }}</em>
+                    <em v-else-if="card.url !== '*' && card.status" class="status-chip" :class="card.status">{{ statusLabel(card.status) }}</em>
+                  </span>
+                  <span class="url-subtask-metrics">
+                    <span :title="tr('发现条数', 'Findings')"><Layers3 :size="12" />{{ card.total }}</span>
+                    <span class="risk" :class="{ warn: card.vulnerabilities > 0 }" :title="tr('漏洞', 'Vulnerabilities')"><Bug :size="12" />{{ card.vulnerabilities }}<i v-if="card.high"> · {{ tr("高危", "High") }} {{ card.high }}</i></span>
+                  </span>
+                </button>
+              </li>
+            </ol>
+          </section>
+          <div v-if="!selected" class="result-task-empty">
+            <p>{{ t.scanning.resultsOneTask }}</p>
+            <SentinelTaskStrip
+              :title="t.scanning.chooseTask" :scans="visibleScans" :limit="12"
+              :vulnerability-count="taskVulnerabilityCount" :target-count="taskTargetCount"
+              @open="(scan) => openScan(scan)" @all="tab = 'queue'"
+            />
+          </div>
           <template v-else
             ><template v-if="selected.scanType !== 'web'"
               ><SentinelSourceResults
@@ -2707,13 +3353,13 @@ onUnmounted(() => {
               ><header class="url-intelligence-head">
                 <div>
                   <span class="eyebrow"
-                    >{{ companyForUrl(selectedUrl) }} · 调查工作台</span
+                    >{{ companyForUrl(selectedUrl) }} · {{ tr('调查工作台', 'Investigation workbench') }}</span
                   >
                   <h3>
                     {{
                       selectedUrl === "*"
-                        ? "全部目标 / 全局发现"
-                        : selectedUrl || "未选择 URL"
+                        ? tr("全部目标 / 全局发现", "All targets / global findings")
+                        : selectedUrl || tr("未选择 URL", "No URL selected")
                     }}
                   </h3>
                   <p>
@@ -2739,8 +3385,8 @@ onUnmounted(() => {
                   >
                     <Pause :size="14" />{{
                       selected.status === "pausing"
-                        ? "正在停止"
-                        : "停止并保留"
+                        ? tr("正在停止", "Stopping")
+                        : tr("停止并保留", "Stop and keep")
                     }}</button
                   ><button
                     v-else-if="selected.status === 'paused' || selected.status === 'partial'"
@@ -2748,7 +3394,7 @@ onUnmounted(() => {
                     :disabled="scanControlBusy === selected.id"
                     @click="resumeScan(selected)"
                   >
-                    <Play :size="14" />{{ selected.status === 'partial' ? '继续未完成' : '继续扫描' }}</button
+                    <Play :size="14" />{{ selected.status === 'partial' ? tr('继续未完成', 'Resume unfinished') : tr('继续扫描', 'Resume scan') }}</button
                   ><button
                     v-else-if="
                       selected.status !== 'draft' &&
@@ -2761,79 +3407,62 @@ onUnmounted(() => {
                   >
                     <RefreshCw :size="14" />{{ retryActionLabel(selected) }}</button
                   ><button class="button ghost compact" @click="exportProject">
-                    <Download :size="14" />导出整个项目
+                    <Download :size="14" />{{ tr('导出整个项目', 'Export entire project') }}
+                  </button>
+                  <button
+                    v-if="scanAnalysisHandoff"
+                    class="button ghost compact"
+                    @click="analyzeSelectedScan()"
+                  >
+                    <Activity :size="14" />{{ tr('交给 Agent 分析', 'Send to Agent for analysis') }}
                   </button>
                 </div>
               </header>
-              <NativeRunStatus v-if="selected" class="agent-workspace" :scan-id="selected.id" :attempt="selected.attemptCount" :status="selected.status" @attempt-closed="onAttemptClosed" @prepare-handoff="prepareClosureHandoff" />
-              <details class="result-drawer">
-                <summary>覆盖、接口和漏洞结果</summary>
-              <section v-if="webCoverageCatalog.length" class="web-coverage-ledger">
-                <header>
-                  <div>
-                    <strong>SRC 能力基线与扩展覆盖</strong>
-                    <span>{{ webEffectivePolicy.effectiveSkillNames || "业务前端深度分析" }} · 任务模式：{{ routeModeLabel(selected?.requestedScanMode || webEffectivePolicy.webModeCeiling || "standard") }}<template v-if="currentTarget?.scanMode"> · 当前目标：{{ routeModeLabel(currentTarget.scanMode) }}</template></span>
-                  </div>
-                  <small>能力就绪不等于当前目标已经测试；真实执行结果以调查图谱和证据为准</small>
-                </header>
-                <div>
-                  <article
-                    v-for="item in webCoverageCatalog"
-                    :key="item.key"
-                    :class="`coverage-${item.status}`"
-                  >
-                    <span>{{ item.label }}</span>
-                    <strong>{{ coverageStatusLabel(item.status) }}</strong>
-                    <small><template v-if="item.standard">{{ item.standard }} · </template>{{ item.prerequisite }}</small>
-                    <details v-if="item.manualFocus"><summary>人工补位重点</summary><p>{{ item.manualFocus }}</p></details>
-                  </article>
-                </div>
-              </section>
               <div v-if="selectedUrl" class="url-metric-strip">
                 <span v-if="currentTarget?.scanMode" class="route"
                   ><Activity :size="14" /><b>{{ currentTarget.valueScore }}</b>
                   {{ routeModeLabel(currentTarget.scanMode) }}</span
                 ><button
                   type="button"
-                  title="查看指纹与配置"
+                  :title="tr('查看指纹与配置', 'View fingerprints and configuration')"
                   @click="jumpToResult('fingerprint')"
                   ><Fingerprint :size="14" /><b>{{
                     currentCard?.fingerprints || 0
                   }}</b>
-                  指纹</button
+                  {{ tr('指纹', 'Fingerprints') }}</button
                 ><button
                   type="button"
-                  title="查看 JS、路由与 API"
+                  :title="tr('查看 JS、路由与 API', 'View JS, routes, and APIs')"
                   @click="jumpToResult('api')"
                   ><Code2 :size="14" /><b>{{ currentCard?.apis || 0 }}</b>
                   API/JS</button
                 ><button
                   type="button"
-                  title="查看端点验证"
+                  :title="tr('查看端点验证', 'View endpoint validation')"
                   @click="jumpToResult('endpoints')"
                   ><Network :size="14" /><b>{{
                     currentCard?.endpoints || 0
                   }}</b>
-                  端点</button
+                  {{ tr('端点', 'Endpoints') }}</button
                 ><button
                   type="button"
                   class="risk"
-                  title="查看漏洞与人工验证"
+                  :title="tr('查看漏洞与人工验证', 'View vulnerabilities and manual validation')"
                   @click="jumpToResult('vulnerabilities')"
                   ><Bug :size="14" /><b>{{
                     currentCard?.vulnerabilities || 0
                   }}</b>
-                  漏洞</button
+                  {{ tr('漏洞', 'Vulnerabilities') }}</button
                 ><span class="url-token-metric"
                   ><Activity :size="14" /><b>{{
                     formatNumber(selected.inputTokens)
                   }}</b>
-                  输入</span
+                  {{ tr('输入', 'Input') }}</span
                 ><span class="url-token-metric"
-                  ><b>{{ formatNumber(selected.outputTokens) }}</b> 输出</span
+                  ><b>{{ formatNumber(selected.outputTokens) }}</b> {{ tr('输出', 'Output') }}</span
                 ><span class="url-token-metric"
                   ><RefreshCw :size="14" /><b>{{ selected.attemptCount || 0 }}</b>
-                  次执行</span
+                  {{ tr('次执行', 'attempts') }}</span
                 >
               </div>
               <button
@@ -2842,38 +3471,32 @@ onUnmounted(() => {
                 :class="`evidence-next-action ${evidenceNextAction.tone}`"
                 @click="followEvidenceNextAction"
               >
-                <span>建议下一步</span><strong>{{ evidenceNextAction.label }}</strong><em>打开处理</em>
+                <span>{{ tr('建议下一步', 'Suggested next step') }}</span><strong>{{ evidenceNextAction.label }}</strong><em>{{ tr('打开处理', 'Open') }}</em>
               </button>
               <nav class="result-subtabs">
                 <button
                   v-for="item in [
-                    { key: 'summary', label: '概要' },
-                    { key: 'investigation', label: '调查图谱' },
-                    { key: 'opportunities', label: '机会与下一步' },
-                    { key: 'fingerprint', label: '指纹与配置' },
+                    { key: 'summary', label: tr('概要', 'Summary') },
+                    { key: 'fingerprint', label: tr('指纹与配置', 'Fingerprints and configuration') },
                     { key: 'api', label: 'JS / API' },
-                    { key: 'endpoints', label: '端点验证' },
-                    { key: 'vulnerabilities', label: '漏洞与验证' },
+                    { key: 'endpoints', label: tr('端点验证', 'Endpoint validation') },
+                    { key: 'vulnerabilities', label: tr('漏洞与验证', 'Vulnerabilities and validation') },
                   ]"
                   :key="item.key"
                   :class="{ active: resultTab === item.key }"
                   @click="resultTab = item.key as ResultTab"
                 >
                   {{ item.label
-                  }}<em v-if="item.key === 'investigation'" :title="`信息增益 ${investigationGraph?.metrics?.informationGain || 0}/100`">图 {{
-                    investigationGraph?.nodes?.length || 0
-                  }}</em><em v-if="item.key === 'opportunities'">{{
-                    selectedUrlOpportunities.length
-                  }}</em><em v-if="item.key === 'api' && currentCard?.sensitive" class="sensitive-tab-count">{{
+                  }}<em v-if="item.key === 'api' && currentCard?.sensitive" class="sensitive-tab-count">{{
                     currentCard.sensitive
                   }}</em><em v-if="item.key === 'vulnerabilities'">{{
                     vulnerabilityRows.length
                   }}</em>
                 </button>
               </nav>
-              <div v-if="detailBusy" class="empty-state">正在解析结果…</div>
+              <div v-if="detailBusy" class="empty-state">{{ tr('正在解析结果…', 'Parsing results…') }}</div>
               <div v-else-if="!selectedUrl" class="empty-state">
-                该任务没有 URL 结果。可先在任务中心查看待扫 URL。
+                {{ tr('该任务没有 URL 结果。可先在任务中心查看待扫 URL。', 'This task has no URL results. Check the URLs waiting to be scanned in the task center.') }}
               </div>
 
               <div
@@ -2894,8 +3517,8 @@ onUnmounted(() => {
                       >
                         {{ selectedUrl }} <ExternalLink :size="14" /></button
                       ><small
-                        >{{ companyForUrl(selectedUrl) }} · 历史扫描
-                        {{ currentTarget?.scanCount || 0 }} 次</small
+                        >{{ companyForUrl(selectedUrl) }} ·
+                        {{ tr(`历史扫描 ${currentTarget?.scanCount || 0} 次`, `Scanned ${currentTarget?.scanCount || 0} times`) }}</small
                       >
                     </div>
                     <button
@@ -2903,55 +3526,8 @@ onUnmounted(() => {
                       type="button"
                       @click="openTargetUrl(selectedUrl)"
                     >
-                      <ExternalLink :size="14" />在浏览器打开
+                      <ExternalLink :size="14" />{{ tr('在浏览器打开', 'Open in browser') }}
                     </button>
-                  </div>
-                </section>
-                <section
-                  v-if="currentTarget?.scanMode"
-                  class="result-block adaptive-route-block"
-                >
-                  <div class="block-title">
-                    <Activity :size="16" />
-                    <div>
-                      <strong>自适应扫描决策</strong
-                      ><small
-                        >{{ currentTarget.scanMode === 'manual_review'
-                          ? '复杂前端只保留高价值线索，等待人工复核。'
-                          : '本地前置分析决定候选价值，自动调查只验证高价值证据。' }}</small
-                      >
-                    </div>
-                    <span class="route-mode" :class="currentTarget.scanMode">{{
-                      routeModeLabel(currentTarget.scanMode)
-                    }}</span>
-                  </div>
-                  <div class="adaptive-route-summary">
-                    <article>
-                      <span>前端价值</span
-                      ><strong
-                        >{{ currentTarget.valueScore
-                        }}<small>/ 100</small></strong
-                      >
-                    </article>
-                    <article>
-                      <span>任务模式</span
-                      ><strong>{{ routeModeLabel(selected?.requestedScanMode || webEffectivePolicy.webModeCeiling || "standard") }}</strong>
-                    </article>
-                    <article>
-                      <span>实际分流</span
-                      ><strong>{{ routeModeLabel(currentTarget.scanMode) }}</strong>
-                    </article>
-                    <article>
-                      <span>状态来源</span>
-                      <strong v-if="currentTarget.lastAttemptNumber === selected.attemptCount">第 {{ currentTarget.lastAttemptNumber }} 次：{{ statusLabel(currentTarget.status) }}</strong>
-                      <strong v-else>历史第 {{ currentTarget.lastAttemptNumber || '—' }} 次：{{ statusLabel(currentTarget.status) }}<small>（本轮未执行）</small></strong>
-                    </article>
-                  </div>
-                  <div class="route-reason-list">
-                    <span v-for="reason in routeReasonItems" :key="reason">{{
-                      reason
-                    }}</span
-                    ><span v-if="!routeReasonItems.length">暂无分流依据</span>
                   </div>
                 </section>
                 <section
@@ -2961,8 +3537,8 @@ onUnmounted(() => {
                   <div class="block-title">
                     <ShieldCheck :size="16" />
                     <div>
-                      <strong>覆盖与完整性</strong>
-                      <small>区分“已测试且未发现”“不适用”和“尚需跟进”；这些覆盖记录不会计入漏洞数量。</small>
+                      <strong>{{ tr('覆盖与完整性', 'Coverage and completeness') }}</strong>
+                      <small>{{ tr('区分“已测试且未发现”“不适用”和“尚需跟进”；这些覆盖记录不会计入漏洞数量。', 'Separates "tested, nothing found", "not applicable", and "needs follow-up"; these coverage records do not count as vulnerabilities.') }}</small>
                     </div>
                     <span
                       :class="[
@@ -2971,25 +3547,25 @@ onUnmounted(() => {
                       ]"
                     >{{
                       agentCoverage.completeness?.complete
-                        ? "覆盖记录完整"
-                        : "存在覆盖缺口"
+                        ? tr("覆盖记录完整", "Coverage records complete")
+                        : tr("存在覆盖缺口", "Coverage gaps remain")
                     }}</span>
                   </div>
                   <div class="agent-coverage-summary">
                     <article>
-                      <span>已复核攻击面</span>
+                      <span>{{ tr('已复核攻击面', 'Surfaces reviewed') }}</span>
                       <strong>{{ agentCoverage.summary?.surfaces_reviewed || 0 }}</strong>
                     </article>
                     <article>
-                      <span>形成发现</span>
+                      <span>{{ tr('形成发现', 'Findings filed') }}</span>
                       <strong>{{ agentCoverage.summary?.findings_filed || 0 }}</strong>
                     </article>
                     <article>
-                      <span>待补覆盖</span>
+                      <span>{{ tr('待补覆盖', 'Coverage gaps') }}</span>
                       <strong>{{ agentCoverage.summary?.gaps || 0 }}</strong>
                     </article>
                     <article>
-                      <span>执行 Agent</span>
+                      <span>{{ tr('执行 Agent', 'Agents run') }}</span>
                       <strong>{{ agentCoverage.machine_observed?.agents?.length || 0 }}</strong>
                     </article>
                   </div>
@@ -2997,7 +3573,7 @@ onUnmounted(() => {
                     v-if="agentCoverage.completeness?.caveats?.length"
                     class="coverage-caveats"
                   >
-                    <b>完整性说明</b>
+                    <b>{{ tr('完整性说明', 'Completeness notes') }}</b>
                     <span
                       v-for="caveat in agentCoverage.completeness.caveats"
                       :key="String(caveat)"
@@ -3008,8 +3584,8 @@ onUnmounted(() => {
                       v-for="(gap, index) in agentCoverageGaps.slice(0, 8)"
                       :key="`${gap.kind || 'gap'}-${gap.risk_area || gap.riskArea || index}`"
                     >
-                      <strong>{{ gap.risk_area || gap.riskArea || gap.kind || "未命名覆盖缺口" }}</strong>
-                      <span>{{ gap.surface || gap.detail || gap.reason || "缺少足够执行证据" }}</span>
+                      <strong>{{ gap.risk_area || gap.riskArea || gap.kind || tr("未命名覆盖缺口", "Unnamed coverage gap") }}</strong>
+                      <span>{{ gap.surface || gap.detail || gap.reason || tr("缺少足够执行证据", "Not enough run evidence") }}</span>
                       <em>{{ gap.kind || "follow_up" }}</em>
                     </article>
                   </div>
@@ -3021,34 +3597,29 @@ onUnmounted(() => {
                     :target-url="selectedUrl"
                   />
                   <details v-if="agentCoverageEntries.length" class="coverage-entry-details">
-                    <summary>查看 {{ agentCoverageEntries.length }} 条覆盖结论</summary>
+                    <summary>{{ tr(`查看 ${agentCoverageEntries.length} 条覆盖结论`, `View ${agentCoverageEntries.length} coverage conclusions`) }}</summary>
                     <div>
                       <article
                         v-for="(entry, index) in agentCoverageEntries"
                         :key="`${entry.risk_area || 'coverage'}-${entry.surface || index}`"
                       >
-                        <span>{{ entry.risk_area || "未标注风险域" }}</span>
-                        <strong>{{ entry.surface || "未标注攻击面" }}</strong>
+                        <span>{{ entry.risk_area || tr("未标注风险域", "No risk area marked") }}</span>
+                        <strong>{{ entry.surface || tr("未标注攻击面", "No surface marked") }}</strong>
                         <em :class="`outcome-${entry.outcome || 'unknown'}`">{{
                           agentCoverageOutcomeLabel(entry.outcome)
                         }}</em>
-                        <p>{{ entry.evidence || "未提供证据摘要" }}</p>
+                        <p>{{ entry.evidence || tr("未提供证据摘要", "No evidence summary provided") }}</p>
                       </article>
                     </div>
                   </details>
                 </section>
-                <SentinelTraceTimeline
-                  :detail="liveTrace" :busy="liveTraceBusy"
-                  :target-url="selectedUrl" :task-status="selected.status"
-                />
                 <section class="result-block">
                   <div class="block-title">
                     <Fingerprint :size="16" />
                     <div>
-                      <strong>技术指纹</strong
+                      <strong>{{ tr('技术指纹', 'Technology fingerprints') }}</strong
                       ><small
-                        >已将识别结果拆分为名称、版本、置信度和依据，不再显示对象
-                        JSON。</small
+                        >{{ tr('已将识别结果拆分为名称、版本、置信度和依据，不再显示对象 JSON。', 'Detection results are split into name, version, confidence, and basis instead of raw object JSON.') }}</small
                       >
                     </div>
                   </div>
@@ -3060,149 +3631,53 @@ onUnmounted(() => {
                       <span>{{ card.label }}</span
                       ><strong>{{ displayName(card.data) }}</strong
                       ><small>{{ displayVersion(card.data) }}</small
-                      ><em>{{ card.data?.confidence || "未知置信度" }}</em>
+                      ><em>{{ card.data?.confidence || tr("未知置信度", "Unknown confidence") }}</em>
                       <p v-if="card.data?.evidence?.length">
-                        依据：{{ card.data.evidence.join("、") }}
+                        {{ tr(`依据：${card.data.evidence.join("、")}`, `Basis: ${card.data.evidence.join(", ")}`) }}
                       </p>
                     </article>
                   </div>
-                  <div v-else class="empty-inline">未解析到技术指纹</div>
+                  <div v-else class="empty-inline">{{ tr('未解析到技术指纹', 'No technology fingerprints detected') }}</div>
                 </section>
                 <section v-if="selected.previousScanId" class="result-block">
                   <div class="block-title">
                     <RefreshCw :size="16" />
                     <div>
-                      <strong>与上一次扫描对比</strong
+                      <strong>{{ tr('与上一次扫描对比', 'Compared with the previous scan') }}</strong
                       ><small
-                        >基于
-                        URL、结果类型和稳定记录键比较；内容变化单独计数。</small
+                        >{{ tr('基于 URL、结果类型和稳定记录键比较；内容变化单独计数。', 'Compared by URL, result type, and stable record key; content changes are counted separately.') }}</small
                       >
                     </div>
                   </div>
                   <div class="comparison-grid">
                     <article>
-                      <span>新增</span><strong>{{ comparison.added }}</strong>
+                      <span>{{ tr('新增', 'Added') }}</span><strong>{{ comparison.added }}</strong>
                     </article>
                     <article>
-                      <span>消失</span><strong>{{ comparison.removed }}</strong>
+                      <span>{{ tr('消失', 'Removed') }}</span><strong>{{ comparison.removed }}</strong>
                     </article>
                     <article>
-                      <span>发生变化</span
+                      <span>{{ tr('发生变化', 'Changed') }}</span
                       ><strong>{{ comparison.changed }}</strong>
                     </article>
                     <article>
-                      <span>保持不变</span
+                      <span>{{ tr('保持不变', 'Unchanged') }}</span
                       ><strong>{{ comparison.unchanged }}</strong>
-                    </article>
-                  </div>
-                </section>
-                <section class="result-block">
-                  <div class="block-title">
-                    <Activity :size="16" />
-                    <div>
-                      <strong>Token 消耗</strong
-                      ><small
-                        >{{ selected.totalTokens ? `${scanTypeLabel(selected.scanType)} · ${selected.skillNames || "默认扫描策略"}` : "当前模型请求 0、Token 0；前端/CDP 确定性侦察不会消耗模型 Token" }}</small
-                      >
-                    </div>
-                  </div>
-                  <div class="comparison-grid token-grid">
-                    <article>
-                      <span>请求次数</span
-                      ><strong>{{ formatNumber(selected.llmRequests) }}</strong>
-                    </article>
-                    <article>
-                      <span>输入 Token</span
-                      ><strong>{{ formatNumber(selected.inputTokens) }}</strong>
-                    </article>
-                    <article>
-                      <span>输出 Token</span
-                      ><strong>{{
-                        formatNumber(selected.outputTokens)
-                      }}</strong>
-                    </article>
-                    <article>
-                      <span>缓存 Token</span
-                      ><strong>{{
-                        formatNumber(selected.cachedTokens)
-                      }}</strong>
-                    </article>
-                    <article>
-                      <span>新增输入 Token</span
-                      ><strong>{{
-                        formatNumber(uncachedInput(selected))
-                      }}</strong>
-                    </article>
-                    <article>
-                      <span>输入 + 输出总计</span
-                      ><strong>{{ formatNumber(scanTokenTotal(selected)) }}</strong>
-                    </article>
-                  </div>
-                </section>
-                <section v-if="runtimeDiagnosticsFindings.length" class="result-block runtime-diagnostics-block">
-                  <div class="block-title">
-                    <Activity :size="16" />
-                    <div>
-                      <strong>runtimeDiagnostics</strong>
-                      <small>本地浏览器采集失败时保留错误码；不再只显示一句摘要。</small>
-                    </div>
-                  </div>
-                  <div class="runtime-diagnostics-list">
-                    <article v-for="finding in runtimeDiagnosticsFindings" :key="finding.id">
-                      <header><strong>{{ finding.title }}</strong><em> · {{ kindLabel(finding.kind) }}</em></header>
-                      <div v-for="row in runtimeDiagnosticRows(finding)" :key="row.key" class="runtime-diagnostic-row">
-                        <div class="runtime-diagnostic-head"><b>{{ row.identity }}</b><span> · </span><code>{{ row.captureStatus }}</code></div>
-                        <dl>
-                          <div v-if="row.captureError"><dt>captureError</dt><dd><code>{{ row.captureError }}</code></dd></div>
-                          <div v-if="row.stopReason"><dt>stopReason</dt><dd><code>{{ row.stopReason }}</code></dd></div>
-                          <div v-if="row.failedStage"><dt>failedStage</dt><dd><code>{{ row.failedStage }}</code></dd></div>
-                          <div v-if="row.transport"><dt>cdpTransport</dt><dd><code>{{ row.transport }}</code></dd></div>
-                          <div v-if="row.browser"><dt>browser</dt><dd><code>{{ row.browser }}</code></dd></div>
-                          <div v-if="row.exitCode"><dt>exitCode</dt><dd><code>{{ row.exitCode }}</code></dd></div>
-                          <div v-if="row.signal"><dt>signal</dt><dd><code>{{ row.signal }}</code></dd></div>
-                        </dl>
-                        <pre v-if="row.stderr" class="runtime-diagnostic-stderr">{{ row.stderr }}</pre>
-                      </div>
-                    </article>
-                  </div>
-                </section>
-                <section v-if="scanAttempts.length" class="result-block attempt-ledger-block">
-                  <div class="block-title">
-                    <RefreshCw :size="16" />
-                    <div><strong>本次执行结果与增量成本</strong><small>默认只显示最新一次最终状态；重新执行与继续未完成阶段按不同规则隔离。</small></div>
-                    <button v-if="scanAttempts.length > 1" class="attempt-history-toggle" @click="showAttemptHistory = !showAttemptHistory">{{showAttemptHistory ? '收起历史' : `查看历史 ${scanAttempts.length - 1} 次`}}</button>
-                  </div>
-                  <div class="attempt-ledger">
-                    <article v-for="attempt in visibleScanAttempts" :key="attempt.attemptNumber" :class="[`attempt-${attempt.status}`, { current: attempt.attemptNumber === selected.attemptCount }]">
-                      <header><span>第 {{attempt.attemptNumber}} 次 · {{attemptModeLabel(attempt.executionMode, attempt.attemptNumber)}}</span><b>{{attemptStageLabel(attempt.stage)}}</b><em class="status-chip" :class="attempt.status">{{statusLabel(attempt.status)}}</em></header>
-                      <ol class="execution-stage-strip" aria-label="执行六段状态">
-                        <li v-for="step in EXECUTION_STAGE_STEPS" :key="`${attempt.attemptNumber}-${step.key}`" :class="executionStageTone(attempt, step.key)">{{ step.label }}</li>
-                      </ol>
-                      <small v-if="executionStageStatusLabel(attempt)" class="execution-stage-note">{{ executionStageStatusLabel(attempt) }}</small>
-                      <div class="attempt-backend-grid">
-                        <span>执行后端 <b>{{ attemptBackendSummary(attempt).backend }}</b></span>
-                        <span>执行环境 <b>{{ attemptBackendSummary(attempt).environment }}</b></span>
-                        <span>任务状态 <b>{{ statusLabel(attemptBackendSummary(attempt).taskStatus) }}</b></span>
-                      </div>
-                      <p>{{attempt.checkpoint || (resolveExecutionStage(attempt).historyMissing ? '历史记录未提供' : '尚无阶段详情')}}</p>
-                      <div class="attempt-cost"><span>请求 <b>{{formatNumber(attempt.llmRequests)}}</b></span><span>输入 <b>{{formatNumber(attempt.inputTokens)}}</b></span><span>缓存 <b>{{formatNumber(attempt.cachedTokens)}}</b></span><span>输出 <b>{{formatNumber(attempt.outputTokens)}}</b></span><span>本次总计 <b>{{formatNumber(attempt.totalTokens)}}</b></span></div>
-                      <small>{{attemptTime(attempt)}}</small><code v-if="attempt.workDir" :title="attempt.workDir">{{attempt.workDir}}</code><mark v-if="attemptEndReason(attempt)">结束说明：{{attemptEndReason(attempt)}}</mark>
-                      <button class="attempt-history-toggle" @click="emit('open-runner-log', selected.id, attempt.attemptNumber)">运行日志与诊断</button>
                     </article>
                   </div>
                 </section>
                 <section v-if="evidenceChainRows.length" class="result-block evidence-chain-block">
                   <div class="block-title">
                     <Layers3 :size="16" />
-                    <div><strong>接口证据链</strong><small>把前端解析、运行时请求、端点验证、机会评分与漏洞结果合并到同一行；不再需要在多个页签之间手工拼接。</small></div>
+                    <div><strong>{{ tr('接口证据链', 'API evidence chain') }}</strong><small>{{ tr('把前端解析、运行时请求、端点验证、机会评分与漏洞结果合并到同一行；不再需要在多个页签之间手工拼接。', 'Frontend analysis, runtime requests, endpoint validation, opportunity scores, and vulnerability results share one row, so nothing has to be pieced together across tabs.') }}</small></div>
                   </div>
                   <div class="evidence-chain-table">
-                    <div class="table-head"><span>方法</span><span>接口</span><span>来源 / 参数</span><span>验证</span><span>价值</span><span>漏洞</span></div>
+                    <div class="table-head"><span>{{ tr('方法', 'Method') }}</span><span>{{ tr('接口', 'API') }}</span><span>{{ tr('来源 / 参数', 'Source / parameters') }}</span><span>{{ tr('验证', 'Validation') }}</span><span>{{ tr('价值', 'Value') }}</span><span>{{ tr('漏洞', 'Vulnerabilities') }}</span></div>
                     <div v-for="row in evidenceChainRows" :key="row.key">
                       <b class="method-badge" :class="methodTone(row.method)">{{row.method}}</b>
                       <code :title="row.url">{{row.url}}</code>
-                      <span><em>{{row.sources.join(' · ')}}</em><small v-if="row.parameters.length">参数：{{row.parameters.join('、')}}</small><small v-else>尚未还原参数</small></span>
-                      <span><b v-if="row.verified" class="evidence-verified">HTTP {{row.statusCode || '已响应'}}</b><i v-else>仅候选</i></span>
+                      <span><em>{{row.sources.join(' · ')}}</em><small v-if="row.parameters.length">{{ tr(`参数：${row.parameters.join('、')}`, `Parameters: ${row.parameters.join(', ')}`) }}</small><small v-else>{{ tr('尚未还原参数', 'Parameters not recovered yet') }}</small></span>
+                      <span><b v-if="row.verified" class="evidence-verified">HTTP {{row.statusCode || tr('已响应', 'responded')}}</b><i v-else>{{ tr('仅候选', 'Candidate only') }}</i></span>
                       <strong :class="{ valuable: row.opportunityScore >= 65 }">{{row.opportunityScore || '—'}}</strong>
                       <button :class="{ risk: row.vulnerabilities }" @click="resultTab='vulnerabilities'">{{row.vulnerabilities}}</button>
                     </div>
@@ -3212,15 +3687,15 @@ onUnmounted(() => {
                   <div class="block-title">
                     <Shield :size="16" />
                     <div>
-                      <strong>风险概况</strong
+                      <strong>{{ tr('风险概况', 'Risk overview') }}</strong
                       ><small
-                        >统计采用人工验证后的等级；误报不再计入风险。</small
+                        >{{ tr('统计采用人工验证后的等级；误报不再计入风险。', 'Counts use severities after manual validation; false positives are not counted as risk.') }}</small
                       >
                     </div>
                   </div>
                   <div class="risk-overview">
                     <article>
-                      <span>严重 / 高危</span
+                      <span>{{ tr('严重 / 高危', 'Critical / high') }}</span
                       ><strong class="severity-critical">{{
                         vulnerabilityRows.filter((v) =>
                           ["critical", "high"].includes(effectiveSeverity(v)),
@@ -3228,7 +3703,7 @@ onUnmounted(() => {
                       }}</strong>
                     </article>
                     <article>
-                      <span>中危</span
+                      <span>{{ tr('中危', 'Medium') }}</span
                       ><strong class="severity-medium">{{
                         vulnerabilityRows.filter(
                           (v) => effectiveSeverity(v) === "medium",
@@ -3236,7 +3711,7 @@ onUnmounted(() => {
                       }}</strong>
                     </article>
                     <article>
-                      <span>低危 / 信息</span
+                      <span>{{ tr('低危 / 信息', 'Low / info') }}</span
                       ><strong>{{
                         vulnerabilityRows.filter((v) =>
                           ["low", "info"].includes(effectiveSeverity(v)),
@@ -3244,7 +3719,7 @@ onUnmounted(() => {
                       }}</strong>
                     </article>
                     <article>
-                      <span>误报 / 无风险</span
+                      <span>{{ tr('误报 / 无风险', 'False positive / no risk') }}</span
                       ><strong>{{
                         vulnerabilityRows.filter(
                           (v) => effectiveSeverity(v) === "none",
@@ -3257,8 +3732,8 @@ onUnmounted(() => {
                   <div class="block-title">
                     <Activity :size="16" />
                     <div>
-                      <strong>关键信息</strong
-                      ><small>按 URL 汇总，已应用人工确认后的风险等级。</small>
+                      <strong>{{ tr('关键信息', 'Key findings') }}</strong
+                      ><small>{{ tr('按 URL 汇总，已应用人工确认后的风险等级。', 'Summarized by URL, with manually confirmed severities applied.') }}</small>
                     </div>
                   </div>
                   <div class="key-finding-list">
@@ -3281,42 +3756,13 @@ onUnmounted(() => {
                       :class="{ warning: agentUnclosedGaps > 0 }"
                     >
                       <template v-if="agentUnclosedGaps > 0">
-                        验证尚未收口：还有 {{ agentUnclosedGaps }} 个覆盖族未完成，这不等于没有漏洞
+                        {{ tr(`验证尚未收口：还有 ${agentUnclosedGaps} 个覆盖族未完成，这不等于没有漏洞`, `Validation is not closed: ${agentUnclosedGaps} coverage families are unfinished, which does not mean there are no vulnerabilities`) }}
                       </template>
-                      <template v-else>当前 URL 已完成覆盖账本，且未发现漏洞</template>
+                      <template v-else>{{ tr('当前 URL 已完成覆盖账本，且未发现漏洞', 'This URL completed its coverage ledger and no vulnerabilities were found') }}</template>
                     </div>
                   </div>
                 </section>
               </div>
-
-              <div
-                v-else-if="resultTab === 'investigation'"
-                class="result-section-stack"
-              >
-                <InvestigationGraphPanel
-                  :graph="investigationGraph"
-                  :busy="investigationBusy"
-                  :updating-id="investigationUpdatingId"
-                  @status="updateInvestigationStatus"
-                  @replay="openRepeaterForGraphApi"
-                  @replay-hypothesis="openRepeaterForHypothesis"
-                />
-              </div>
-
-              <SentinelOpportunitiesPane
-                v-else-if="resultTab === 'opportunities'"
-                :selected-url-opportunities="selectedUrlOpportunities"
-                :opportunity-category-label="opportunityCategoryLabel"
-                :opportunity-status-label="opportunityStatusLabel"
-                :opportunity-endpoint="opportunityEndpoint"
-                :opportunity-parameters="opportunityParameters"
-                :opportunity-knowledge="opportunityKnowledge"
-                :opportunity-knowledge-titles="opportunityKnowledgeTitles"
-                :opportunity-identity-rows="opportunityIdentityRows"
-                :opportunity-identity-summary="opportunityIdentitySummary"
-                :open-opportunity="openOpportunity"
-                :set-opportunity-status="setOpportunityStatus"
-              />
 
               <SentinelFingerprintPane
                 v-else-if="resultTab === 'fingerprint'"
@@ -3324,6 +3770,7 @@ onUnmounted(() => {
                 :security-headers="securityHeaders"
                 :tech-stack="techStack"
                 :wordpress="wordpress"
+                :identified-products="identifiedProducts"
                 :rows="rows"
               />
 
@@ -3372,24 +3819,29 @@ onUnmounted(() => {
                 :selected-url="selectedUrl"
               />
 
-              <SentinelVulnerabilitiesPane
-                v-else
-                :vulnerability-rows="vulnerabilityRows"
-                :focused-vulnerability-rows="focusedVulnerabilityRows"
-                :poc-rows="pocRows"
-                :selected-finding-id="selectedFindingId"
-                :selected-url="selectedUrl"
-                :validation-editor="validationEditor"
-                :validation-form="validationForm"
-                :edit-validation="editValidation"
-                :save-validation="saveValidation"
-                :validation-for="validationFor"
-                :effective-severity="effectiveSeverity"
-                :vulnerability-update-history="vulnerabilityUpdateHistory"
-                @select-finding="selectedFindingId = $event"
-                @close-validation="validationEditor = undefined"
-              />
-              </details>
+              <template v-else>
+                <SentinelVulnerabilitiesPane
+                  :vulnerability-rows="vulnerabilityRows"
+                  :focused-vulnerability-rows="focusedVulnerabilityRows"
+                  :poc-rows="pocRows"
+                  :selected-finding-id="selectedFindingId"
+                  :selected-url="selectedUrl"
+                  :validation-editor="validationEditor"
+                  :validation-form="validationForm"
+                  :edit-validation="editValidation"
+                  :save-validation="saveValidation"
+                  :validation-for="validationFor"
+                  :effective-severity="effectiveSeverity"
+                  :vulnerability-update-history="vulnerabilityUpdateHistory"
+                  :finding-exploits="findingExploits"
+                  :deep-dive-busy-id="deepDiveBusyId"
+                  :deep-dive-disabled-reason="deepDiveNote"
+                  @select-finding="selectedFindingId = $event"
+                  @close-validation="validationEditor = undefined"
+                  @deep-dive="runDeepDive"
+                />
+                <AgentFindingsPanel :project-id="projectFilter" />
+              </template>
             </template></template
           >
         </main>
@@ -3397,6 +3849,7 @@ onUnmounted(() => {
     </template>
 
     <template v-else-if="tab === 'fuse'">
+      <div class="section-back-nav"><button type="button" class="button ghost compact" @click="tab = 'overview'"><ArrowLeft :size="13" />{{ tr('返回总览', 'Back to overview') }}</button></div>
       <SentinelFuseZone
         v-model:fuse-filter="fuseFilter"
         v-model:fuse-category-filter="fuseCategoryFilter"
@@ -3424,9 +3877,20 @@ onUnmounted(() => {
       />
     </template>
 
+    <template v-else-if="tab === 'knowledge'">
+      <section class="panel sentinel-guide">
+        <div class="guide-icon"><BookOpen :size="23" /></div>
+        <h3>{{ tr('知识库已搬到库区', 'Knowledge base moved to the Library') }}</h3>
+        <p>{{ tr('蒸馏、技法卡和记忆库现在统一在顶层「库」区管理，跟扫描任务脱钩。', 'Distillation, technique cards and memory are now managed together in the top-level Library, decoupled from scan tasks.') }}</p>
+        <button type="button" class="button primary compact" @click="emit('open-library')">{{ tr('打开库', 'Open Library') }}</button>
+      </section>
+    </template>
+
     <template v-else-if="tab === 'workbench'">
+      <div class="section-back-nav"><button type="button" class="button ghost compact" @click="tab = 'overview'"><ArrowLeft :size="13" />{{ tr('返回总览', 'Back to overview') }}</button></div>
       <AgentTraceHub
         v-if="(workbenchIntent || props.workbenchMode) === 'traces'"
+        :project-id="props.projectId"
         @notify="(type, text) => emit('notify', type, text)"
       />
       <AgentWorkbench
@@ -3445,28 +3909,28 @@ onUnmounted(() => {
       />
     </template>
 
-    <SentinelValidationWorkbench
-      v-else-if="tab === 'validations'"
-      :filter="validationFilter"
-      :stats="validationWorkStats"
-      :items="selectedValidationWorkItems"
-      :editor="validationWorkEditor"
-      :form="validationWorkForm"
-      @update:filter="validationFilter = $event"
-      @select="editValidationWorkItem"
-      @evidence="openValidationEvidence"
-      @save="saveValidationWorkItem"
-    />
+    <template v-else-if="tab === 'validations'">
+      <div class="section-back-nav"><button type="button" class="button ghost compact" @click="tab = 'queue'"><ArrowLeft :size="13" />{{ t.scanning.taskList }}</button></div>
+      <SentinelValidationWorkbench
+        :filter="validationFilter"
+        :stats="validationWorkStats"
+        :items="selectedValidationWorkItems"
+        :editor="validationWorkEditor"
+        :form="validationWorkForm"
+        @update:filter="validationFilter = $event"
+        @select="editValidationWorkItem"
+        @evidence="openValidationEvidence"
+        @save="saveValidationWorkItem"
+      />
+    </template>
 
     <template v-else
       ><section class="panel sentinel-guide">
         <div class="guide-icon"><HelpCircle :size="23" /></div>
         <div>
-          <h3>安全分析工作台</h3>
+          <h3>{{ tr('安全分析工作台', 'Security analysis workbench') }}</h3>
           <p>
-            资产 URL 使用 Web 扫描；工作台提供代码审计、URL + 源码灰盒联测和
-            CI/CD
-            变更范围检查。所有结果统一进入任务、URL/源码目标、漏洞和人工验证页面。
+            {{ tr('资产 URL 使用 Web 扫描；工作台提供代码审计、URL + 源码灰盒联测和 CI/CD 变更范围检查。所有结果统一进入任务、URL/源码目标、漏洞和人工验证页面。', 'Asset URLs use Web scanning; the workbench offers code audit, combined URL + source gray-box testing, and CI/CD change-scope checks. All results flow into the task, URL/source target, vulnerability, and manual validation pages.') }}
           </p>
         </div>
       </section></template
@@ -3481,56 +3945,117 @@ onUnmounted(() => {
       @close="repeaterOpportunity = undefined"
       @saved="handleRepeaterSaved"
     />
-    <div
-      v-if="pendingDelete"
-      class="sentinel-confirm-backdrop"
-      @click.self="cancelRemove"
-    >
-      <InlineConfirm
-        class="sentinel-delete-confirm-modal"
-        :title="
-          `确认删除任务「${scanTitle(pendingDelete)}」？`
-        "
-        :detail="
-          ['scanning', 'pausing'].includes(pendingDelete.status)
-            ? '当前任务仍在执行或等待退出，后端将拒绝删除。请先暂停并确认执行退出、请求已核清；删除不会强杀进程或清理磁盘文件。'
-            : '这是整任务记录删除：删除关联 URL、解析结果、对话和人工验证记录；如有未知请求或未结算执行，将保留任务并拒绝删除。历史源文件与任务产物文件保留，不释放磁盘空间。仅需整理列表时，请使用归档。'
-        "
-        :busy="deleting"
-        @cancel="cancelRemove"
-        @confirm="remove"
-      />
+    <div v-if="highRiskTask" class="high-risk-backdrop" @click.self="cancelHighRisk">
+      <div class="high-risk-card">
+        <header>
+          <strong>{{ tr("高风险操作授权", "High-risk operation authorization") }}</strong>
+          <small :title="highRiskTask.id">{{ scanTitle(highRiskTask) }}</small>
+        </header>
+        <p class="high-risk-note">{{ tr("仅在你对该目标拥有合法授权时开启。默认全部关闭;即使开启,每次具体高危动作仍需你逐次人工批准,范围/熔断/审计等安全边界不变。设定后对该任务不可更改。", "Enable only if you are legally authorized against this target. Everything is off by default; even when enabled, each concrete high-risk action still needs your per-action approval, and the scope / fuse / audit boundaries are unchanged. Immutable once set for this task.") }}</p>
+        <ul class="high-risk-classes">
+          <li v-for="key in HIGH_RISK_CLASSES" :key="key">
+            <label><input type="checkbox" :checked="highRiskClasses.includes(key)" @change="toggleHighRiskClass(key)" />{{ highRiskLabel(key) }}</label>
+          </li>
+        </ul>
+        <label class="high-risk-attest">
+          <input type="checkbox" v-model="highRiskAttested" />
+          {{ tr("我确认已获得对该任务目标的合法授权,并对由此发起的高危操作负责。", "I confirm I am legally authorized against this task's targets and accept responsibility for the high-risk operations enabled.") }}
+        </label>
+        <footer>
+          <button type="button" class="button ghost compact" :disabled="highRiskBusy" @click="cancelHighRisk">{{ tr("取消", "Cancel") }}</button>
+          <button type="button" class="button danger compact" :disabled="highRiskBusy || (highRiskClasses.length > 0 && !highRiskAttested)" @click="submitHighRisk">{{ highRiskBusy ? tr("保存中…", "Saving…") : tr("授权(不可更改)", "Authorize (immutable)") }}</button>
+        </footer>
+      </div>
     </div>
   </div>
 </template>
 
+<style src="./sentinelSections.css"></style>
 <style src="../../../sentinel.css">
+.high-risk-trigger { color: var(--red, #d16666); }
+.granted-classes { font-size: 11px; color: var(--ui-muted, #72746f); }
+.task-post-switch { display: inline-flex; gap: 6px; align-items: center; margin-left: 8px; font-size: 12px; }
+.task-write-confirmations { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
+.task-write-confirmations li { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 12px; }
+.task-write-confirmations small { color: var(--muted, #72746f); }
+.high-risk-backdrop { position: fixed; inset: 0; background: #0b142480; display: grid; place-items: center; z-index: 120; padding: 24px; }
+.high-risk-card { width: min(460px, 94vw); max-height: 88vh; overflow: auto; background: var(--surface, #fff); border: 1px solid var(--border, #e5e6e1); border-radius: var(--radius-lg, 12px); padding: 18px; display: grid; gap: 12px; box-shadow: 0 24px 70px #0b142450; }
+.high-risk-card header { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.high-risk-card header strong { font-size: 15px; }
+.high-risk-card header small { color: var(--muted, #72746f); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 55%; }
+.high-risk-note { font-size: 12px; color: var(--muted, #72746f); line-height: 1.6; margin: 0; }
+.high-risk-classes { list-style: none; margin: 0; padding: 0; display: grid; gap: 7px; }
+.high-risk-classes label { display: flex; gap: 8px; align-items: center; font-size: 13px; cursor: pointer; }
+.high-risk-attest { display: flex; gap: 8px; align-items: flex-start; font-size: 12px; line-height: 1.5; cursor: pointer; background: color-mix(in srgb, var(--red, #d16666) 8%, transparent); border: 1px solid color-mix(in srgb, var(--red, #d16666) 30%, var(--border, #e5e6e1)); border-radius: 8px; padding: 10px; }
+.high-risk-card footer { display: flex; justify-content: flex-end; gap: 8px; }
 .runtime-diagnostics-list { display:grid; gap:10px; }
-.runtime-diagnostics-list>article { padding:12px; border:1px solid var(--border); border-radius:12px; background:var(--surface); }
+.runtime-diagnostics-list>article { padding:12px; border:1px solid var(--border); border-radius:var(--radius-lg); background:var(--surface); }
 .runtime-diagnostics-list>article>header { display:flex; justify-content:space-between; gap:8px; align-items:center; margin-bottom:8px; }
-.runtime-diagnostics-list>article>header em { color:var(--muted); font-style:normal; font-size:11px; }
-.runtime-diagnostic-row { display:grid; gap:6px; padding:10px; border:1px dashed color-mix(in srgb, var(--border) 80%, #c9d6e6); border-radius:10px; background:var(--panel); }
+.runtime-diagnostics-list>article>header em { color:var(--muted); font-style:normal; font-size:var(--text-meta); }
+.runtime-diagnostic-row { display:grid; gap:6px; padding:10px; border:1px dashed color-mix(in srgb, var(--border) 80%, color-mix(in srgb, var(--blue) 37%, var(--ui-line))); border-radius:var(--radius-md); background:var(--panel); }
 .runtime-diagnostic-row + .runtime-diagnostic-row { margin-top:8px; }
 .runtime-diagnostic-head { display:flex; justify-content:flex-start; gap:8px; align-items:center; }
-.runtime-diagnostic-head code { padding:2px 7px; border-radius:999px; background:color-mix(in srgb, var(--warning) 18%, transparent); color:var(--text); font-size:10px; }
+.runtime-diagnostic-head code { padding:2px 8px; border-radius:var(--radius-pill); background:color-mix(in srgb, var(--warning) 18%, transparent); color:var(--text); font-size:var(--text-micro); }
 .runtime-diagnostic-row dl { display:grid; gap:4px; margin:0; }
 .runtime-diagnostic-row dl>div { display:grid; grid-template-columns:110px minmax(0,1fr); gap:8px; }
-.runtime-diagnostic-row dt { margin:0; color:var(--muted); font-size:10px; }
+.runtime-diagnostic-row dt { margin:0; color:var(--muted); font-size:var(--text-micro); }
 .runtime-diagnostic-row dd { margin:0; min-width:0; }
-.runtime-diagnostic-row dd code { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:11px; }
-.runtime-diagnostic-stderr { margin:0; max-height:110px; overflow:auto; padding:8px; border-radius:8px; background:#091019; color:#b9c8da; font-size:10px; white-space:pre-wrap; word-break:break-word; }
+.runtime-diagnostic-row dd code { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:var(--text-meta); }
+.runtime-diagnostic-stderr { margin:0; max-height:110px; overflow:auto; padding:8px; border-radius:var(--radius-md); background:#091019; color:#b9c8da; font-size:var(--text-micro); white-space:pre-wrap; word-break:break-word; }
 
 .execution-stage-strip { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:4px; margin:8px 0 6px; padding:0; list-style:none; }
-.execution-stage-strip li { min-width:0; padding:5px 4px; border-radius:8px; border:1px solid var(--border); background:var(--panel); color:var(--muted); font-size:10px; text-align:center; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.execution-stage-strip li { min-width:0; padding:6px 4px; border-radius:var(--radius-md); border:1px solid var(--border); background:var(--panel); color:var(--muted); font-size:var(--text-micro); text-align:center; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .execution-stage-strip li.done { border-color:color-mix(in srgb,#3d9a6a 45%,var(--border)); background:color-mix(in srgb,#3d9a6a 12%,transparent); color:#2f6b4d; }
 .execution-stage-strip li.current { border-color:color-mix(in srgb,var(--accent) 55%,var(--border)); background:color-mix(in srgb,var(--accent) 14%,transparent); color:var(--text); font-weight:700; }
 .execution-stage-strip li.idle,.execution-stage-strip li.pending { opacity:0.72; }
 .execution-stage-strip li.missing { opacity:0.5; }
-.execution-stage-note { display:block; margin:0 0 6px; color:var(--muted); font-size:11px; }
+.execution-stage-note { display:block; margin:0 0 6px; color:var(--muted); font-size:var(--text-meta); }
 @media (max-width:900px) { .execution-stage-strip { grid-template-columns:repeat(3,minmax(0,1fr)); } }
 
 .attempt-backend-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin:0 0 8px}
-.attempt-backend-grid span{min-width:0;padding:6px 8px;border:1px solid var(--border);border-radius:8px;background:var(--panel);color:var(--muted);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.attempt-backend-grid span{min-width:0;padding:6px 8px;border:1px solid var(--border);border-radius:var(--radius-md);background:var(--panel);color:var(--muted);font-size:var(--text-micro);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .attempt-backend-grid b{color:var(--text);font-weight:700}
 @media (max-width:900px){.attempt-backend-grid{grid-template-columns:1fr}}
+</style>
+
+<style scoped>
+/* Track A · A2/A3 — per-URL subtask list (results tab). Additive block kept
+   separate from the global sentinel.css import to stay merge-friendly. Colours
+   use the tokens this worktree actually defines (--line / --muted / --blue /
+   --app-surface / --app-ink, with --amber / --red for the fuse + risk tints),
+   each with a literal fallback so it renders correctly in both themes whether
+   or not the later design-system token aliases are present. */
+/* 任务 tab: 人工验证队列 folded in as a sub-section entry (§4 of the scan UI redesign). */
+.queue-sub-nav { display: flex; justify-content: flex-end; margin-bottom: 10px; }
+/* fuse/workbench/validations are no longer top-level nav tabs (§4); they're
+   reached from 总览/任务 actions, so each needs its own way back. */
+.section-back-nav { margin-bottom: 10px; }
+.url-subtasks { margin: 10px 0 4px; border: 1px solid var(--line, #e5e6e1); border-radius: 12px; background: var(--app-surface, #fff); overflow: hidden; }
+.url-subtasks-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; padding: 11px 13px; border-bottom: 1px solid var(--line, #e5e6e1); background: color-mix(in srgb, var(--app-ink, #252624) 4%, var(--app-surface, #fff)); }
+.url-subtasks-head .eyebrow { display: block; color: var(--muted, #72746f); font-size: 10px; letter-spacing: 0.08em; }
+.url-subtasks-head strong { font-size: 13px; color: var(--app-ink, #252624); }
+.url-subtasks-head small { color: var(--muted, #72746f); font-size: 11px; line-height: 1.5; max-width: 52ch; }
+.url-subtask-list { margin: 0; padding: 4px; list-style: none; display: grid; gap: 3px; max-height: 320px; overflow: auto; }
+.url-subtask-list li { min-width: 0; }
+.url-subtask-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px; width: 100%; padding: 9px 10px; border: 1px solid transparent; border-radius: 9px; background: transparent; color: var(--app-ink, #252624); text-align: left; cursor: pointer; }
+.url-subtask-row:hover { background: color-mix(in srgb, var(--blue, #2878ff) 8%, transparent); }
+.url-subtask-row.active { border-color: color-mix(in srgb, var(--blue, #2878ff) 45%, var(--line, #e5e6e1)); background: color-mix(in srgb, var(--blue, #2878ff) 12%, transparent); box-shadow: inset 3px 0 var(--blue, #2878ff); }
+.url-subtask-row:focus-visible { outline: 2px solid var(--blue, #2878ff); outline-offset: 2px; }
+.url-subtask-row.fused { opacity: 0.86; }
+.url-subtask-main { display: grid; gap: 2px; min-width: 0; }
+.url-subtask-url { font-size: 12px; font-weight: 600; color: var(--app-ink, #252624); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.url-subtask-sub { color: var(--muted, #72746f); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.url-subtask-status { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+.url-subtask-status .status-chip { font-size: 10px; }
+.url-subtask-status .fused-chip { border: 1px solid color-mix(in srgb, var(--amber, #c98222) 45%, var(--line, #e5e6e1)); background: color-mix(in srgb, var(--amber, #c98222) 16%, transparent); color: color-mix(in srgb, var(--amber, #c98222) 72%, var(--app-ink, #252624)); }
+.url-subtask-metrics { display: flex; gap: 10px; align-items: center; color: var(--muted, #72746f); font-size: 11px; white-space: nowrap; }
+.url-subtask-metrics > span { display: inline-flex; gap: 3px; align-items: center; font-variant-numeric: tabular-nums; }
+.url-subtask-metrics .risk.warn { color: var(--red, #d16666); font-weight: 600; }
+.url-subtask-metrics i { font-style: normal; }
+@media (max-width: 760px) {
+  .url-subtask-row { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "main metrics" "status status"; row-gap: 5px; }
+  .url-subtask-main { grid-area: main; }
+  .url-subtask-metrics { grid-area: metrics; justify-content: flex-end; }
+  .url-subtask-status { grid-area: status; justify-content: flex-start; }
+}
 </style>

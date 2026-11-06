@@ -25,6 +25,14 @@ pub fn confirm_sentinel_scan(
     start_web_scan(app, state, scan_id, WebStartMode::Confirm)
 }
 
+/// Fields copied into every web startup plan. Browser exploration is not executable.
+pub(crate) fn web_startup_capability_fields() -> serde_json::Value {
+    serde_json::json!({
+        "frontendReconStrategy": "coverage-led-http-evidence-validation",
+        "notExecutable": ["browser", "uploadRole", "concurrencyRole", "sandbox"]
+    })
+}
+
 fn start_web_scan(
     app: AppHandle,
     state: State<AppState>,
@@ -36,13 +44,29 @@ fn start_web_scan(
     )
 }
 
-fn start_web_scan_with_environment(
+/// Confirm, resume, and retry all stop here when the current preflight blocks
+/// start. This runs before the scan control claim and before any status change.
+pub(crate) fn web_start_capability_refusal(db_path: &Path, scan_id: &str) -> Result<(), String> {
+    let connection = db::open(db_path)?;
+    let project_id: i64 = connection.query_row(
+        "SELECT project_id FROM sentinel_scans WHERE id=?1",
+        [scan_id],
+        |row| row.get(0),
+    ).map_err(|_| "任务不存在".to_string())?;
+    if let Some(reason) = agent_channel::fresh_execution_preflight_block(&connection, project_id, scan_id)? {
+        return Err(reason);
+    }
+    Ok(())
+}
+
+pub(crate) fn start_web_scan_with_environment(
     environment: &dyn ScanEnvironment,
     db_path: &Path,
     app_data_dir: &Path,
     scan_id: String,
     mode: WebStartMode,
 ) -> Result<SentinelScan, String> {
+    web_start_capability_refusal(db_path, &scan_id)?;
     let _owner = claim_scan_control(db_path, &scan_id)?;
     let tool_configuration = environment.tool_configuration()?;
     let mut database = db::open(db_path)?;
@@ -85,7 +109,10 @@ fn start_web_scan_with_environment(
     // live only in sentinel_scans/sentinel_scan_attempts; duplicating them here
     // left every completed plan permanently saying `queued` and encouraged
     // accidental reuse of stale state during diagnostics.
-    let mut payload = serde_json::json!({"scanId":scan_id,"projectId":project_id,"projectName":project_name,"targets":targets.iter().map(|(company,url)|serde_json::json!({"company":company,"url":url})).collect::<Vec<_>>(),"frontendReconStrategy":"coverage-led-browser-exploration+evidence-validation","queueOrder":"fifo","effectiveWebPolicy":web_policy.clone(),"skills":skill_names.clone(),"adaptiveRouting":{"enabled":true,"forcedMode":"coverage-led","modeCeiling":adaptive.max_mode.clone(),"maxBudgetUsd":adaptive.max_budget_usd,"quickScore":adaptive.quick_score,"standardScore":adaptive.standard_score,"deepScore":adaptive.deep_score,"quickTimeout":adaptive.quick_timeout,"standardTimeout":adaptive.standard_timeout,"deepTimeout":adaptive.deep_timeout,"quickTokenLimit":adaptive.quick_tokens,"standardTokenLimit":adaptive.standard_tokens,"deepTokenLimit":adaptive.deep_tokens,"quickRequestLimit":adaptive.quick_requests,"standardRequestLimit":adaptive.standard_requests,"deepRequestLimit":adaptive.deep_requests,"noToolTurnLimit":adaptive.no_tool_turn_limit,"startupIdleTimeout":startup_idle_timeout,"startupHardTimeout":startup_hard_timeout},"llmPolicy":{"model":model_environment.llm,"deployment":model_environment.deployment,"fullPower":model_environment.full_power,"promptAuditMode":model_environment.prompt_audit_mode},"runtimePolicy":{"backend":"native-agent"},"authorizedProxyPool":!proxies.is_empty(),"createdAt":chrono::Utc::now().to_rfc3339()});
+    let mut payload = serde_json::json!({"scanId":scan_id,"projectId":project_id,"projectName":project_name,"targets":targets.iter().map(|(company,url)|serde_json::json!({"company":company,"url":url})).collect::<Vec<_>>(),"frontendReconStrategy":"coverage-led-http-evidence-validation","notExecutable":["browser","uploadRole","concurrencyRole","sandbox"],"queueOrder":"fifo","effectiveWebPolicy":web_policy.clone(),"skills":skill_names.clone(),"adaptiveRouting":{"enabled":true,"forcedMode":"coverage-led","modeCeiling":adaptive.max_mode.clone(),"maxBudgetUsd":adaptive.max_budget_usd,"quickScore":adaptive.quick_score,"standardScore":adaptive.standard_score,"deepScore":adaptive.deep_score,"quickTimeout":adaptive.quick_timeout,"standardTimeout":adaptive.standard_timeout,"deepTimeout":adaptive.deep_timeout,"quickTokenLimit":adaptive.quick_tokens,"standardTokenLimit":adaptive.standard_tokens,"deepTokenLimit":adaptive.deep_tokens,"quickRequestLimit":adaptive.quick_requests,"standardRequestLimit":adaptive.standard_requests,"deepRequestLimit":adaptive.deep_requests,"noToolTurnLimit":adaptive.no_tool_turn_limit,"startupIdleTimeout":startup_idle_timeout,"startupHardTimeout":startup_hard_timeout},"llmPolicy":{"model":model_environment.llm,"deployment":model_environment.deployment,"fullPower":model_environment.full_power,"promptAuditMode":model_environment.prompt_audit_mode},"runtimePolicy":{"backend":"native-agent"},"authorizedProxyPool":!proxies.is_empty(),"createdAt":chrono::Utc::now().to_rfc3339()});
+    let capability = web_startup_capability_fields();
+    payload["frontendReconStrategy"] = capability["frontendReconStrategy"].clone();
+    payload["notExecutable"] = capability["notExecutable"].clone();
     payload["agentPolicySnapshot"]=json!(agent_runtime.agent_policy_snapshot);
     fs::write(
         &task_path,
@@ -128,18 +155,44 @@ fn start_web_scan_with_environment(
     write_model_prompt_audit(&work_dir, instruction.as_str(), &model_environment)?;
     let checkpoint = if model_environment.full_power { format!("第 {attempt_number} 次执行：{} 个 URL；逐 URL 前端探测后进入后端队列；本地火力全开仅放宽普通 Web，现代前端仍执行定向验证硬上限",targets.len()) } else { format!("第 {attempt_number} 次执行：{} 个 URL；逐 URL 探测后立即进入任务队列",targets.len()) };
     let result = persist_web_startup_in(&connection, &startup, &checkpoint, &skill_names, &web_policy)?;
+    if matches!(mode, WebStartMode::Resume) {
+        // Status is already scanning on this attempt. Bookkeeping does not
+        // resume again, and thread spawn is not this signal.
+        task_binding::promote_completed_resume(&connection, &startup.scan_id, i64::from(startup.attempt))?;
+    }
     let runtime_binding = web_dispatch_runtime_binding(&connection, &agent_runtime, &model_environment, &runtime_path)?;
     register_web_dispatch_binding_in(&connection, &startup, &runtime_binding)?;
     register_private_web_mode_on(&connection,&startup,&runtime_binding)?;
-    let admission = WebDispatchAdmission { home, settings, claimed_guard: None,
+    let admission = WebDispatchAdmission { home: home.clone(), settings, claimed_guard: None,
         recon_config: serde_json::from_value(runtime_binding["frontendConfig"].clone())
             .map_err(|_| "web_binding_frontend_config_invalid")? };
     // A commit error can be ambiguous. Keep the owned files, never dispatch a
     // worker on error, and do not compensate by overwriting another attempt.
     startup.files.preserve = true;
     connection.commit().map_err(|error| format!("web_start_commit_unconfirmed:{error}"))?;
+    let launch_db = match scan_detail_store::materialize(db_path, app_data_dir, &scan_id) {
+        Ok(path) => {
+            let verified = (|| {
+                let mut copy = db::open(&path)?;
+                let tx = copy.transaction().map_err(|error| error.to_string())?;
+                verify_live_web_dispatch_binding_in(&tx, &scan_id, attempt_number as i64, &work_dir, &worker, &home)?;
+                Ok::<(), String>(())
+            })();
+            match verified {
+                Ok(()) => {
+                    scan_detail_store::start_publisher(&path, &scan_id);
+                    path
+                }
+                Err(_) => {
+                    scan_detail_store::mark_main(db_path, &scan_id);
+                    db_path.to_path_buf()
+                }
+            }
+        }
+        Err(_) => db_path.to_path_buf(),
+    };
     launch_sentinel_url_pipeline_with_tool_configuration(
-        db_path.to_path_buf(),
+        launch_db,
         scan_id,
         attempt_number as i64,
         worker,
@@ -154,6 +207,7 @@ fn start_web_scan_with_environment(
         auth_session_path,
         Some(admission),
         Some(tool_configuration),
+        None,
     )?;
     Ok(result)
 }
@@ -319,6 +373,17 @@ pub fn delete_sentinel_scan(state: State<AppState>, scan_id: String) -> Result<(
     delete_sentinel_scan_inner(&state.db_path, &scan_id)
 }
 
+/// Operator hard-override deletion for a crashed, dead scan whose normal
+/// deletion is refused because the crash orphaned budget reservations or
+/// unsettled assignments. It is a distinct command (never a flag on the normal
+/// one) so the override is explicit and cannot be reached by accident: the UI
+/// gates it behind a second, spelled-out confirmation. It still refuses while a
+/// local process is alive and still archives the retained financial rows raw.
+#[tauri::command]
+pub fn force_delete_sentinel_scan(state: State<AppState>, scan_id: String) -> Result<(), String> {
+    delete_sentinel_scan_inner_mode(&state.db_path, &scan_id, true)
+}
+
 pub(crate) fn list_sentinel_scans_inner(
     db_path: &Path,
     project_id: Option<i64>,
@@ -350,7 +415,11 @@ pub(crate) fn list_sentinel_scans_on(
         .map_err(|e| e.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string());
-    rows
+    let mut scans = rows?;
+    for scan in &mut scans {
+        attach_last_command(connection, scan);
+    }
+    Ok(scans)
 }
 
 #[tauri::command]
@@ -444,7 +513,7 @@ fn archive_sentinel_scan_inner(
     let connection = db::open(db_path)?;
     let changed = connection.execute(
         "UPDATE sentinel_scans SET archived_at=CASE WHEN ?3=1 THEN datetime('now','localtime') ELSE '' END \
-         WHERE id=?1 AND project_id=?2 AND (?3=0 OR status IN ('completed','completed_with_gaps','cancelled','failed'))",
+         WHERE id=?1 AND project_id=?2 AND (?3=0 OR status IN ('completed','completed_with_gaps','cancelled','failed','partial','protected_stop','persistence_failure','resume_incompatible','limited','recon_only','manual_review','fuse_excluded','deferred'))",
         params![scan_id, project_id, archive as i64],
     ).map_err(|error| error.to_string())?;
     if changed == 0 {
@@ -521,30 +590,97 @@ fn sentinel_vulnerability_scan_ids_in(
     // the detail reader, not SQLite coercion of arbitrary JSON into strings.
     let mut statement = connection
         .prepare(
-            "SELECT f.scan_id,c.policy_json,f.record_json FROM sentinel_findings f \
+            "SELECT f.scan_id,c.policy_json,f.record_json,f.stage FROM sentinel_findings f \
              JOIN sentinel_scans s ON s.id=f.scan_id \
              LEFT JOIN sentinel_scan_contexts c ON c.scan_id=f.scan_id \
-             WHERE f.kind='vulnerability' AND (?1 IS NULL OR s.project_id=?1) \
+             WHERE (f.kind='vulnerability' OR f.stage='attack') AND (?1 IS NULL OR s.project_id=?1) \
                AND NOT EXISTS(SELECT 1 FROM sentinel_deleted_scans d WHERE d.scan_id=s.id) \
              ORDER BY s.updated_at DESC,s.id DESC,f.id",
         )
         .map_err(|error| error.to_string())?;
     let rows = statement.query_map([project_id], |row| Ok((
-        row.get::<_,String>(0)?, row.get::<_,Option<String>>(1)?, row.get::<_,String>(2)?,
+        row.get::<_,String>(0)?, row.get::<_,Option<String>>(1)?, row.get::<_,String>(2)?, row.get::<_,String>(3)?,
     ))).map_err(|error| error.to_string())?;
     let mut selected = Vec::new();
     let mut current: Option<(String, bool)> = None;
     for row in rows {
-        let (scan_id, policy, record) = row.map_err(|error| error.to_string())?;
+        let (scan_id, policy, record, stage) = row.map_err(|error| error.to_string())?;
         if current.as_ref().is_none_or(|(id,_)| id != &scan_id) {
             current = Some((scan_id.clone(), findings_require_proof(policy.as_deref())?));
         }
         if selected.last() == Some(&scan_id) { continue; }
-        if !current.as_ref().is_some_and(|(_,proof)| *proof) || proof_finding_is_visible(&record) {
+        // stage='attack' findings are always visible (see the counts fn above).
+        if stage == "attack" || !current.as_ref().is_some_and(|(_,proof)| *proof) || proof_finding_is_visible(&record) {
             selected.push(scan_id);
         }
     }
     Ok(selected)
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SentinelVulnerabilityCount {
+    scan_id: String,
+    count: i64,
+}
+
+/// Per-scan count of *visible* vulnerability findings, for the task list's
+/// headline number. Uses exactly the same visibility predicate as
+/// `sentinel_vulnerability_scan_ids_in` (policy-gated `proof_finding_is_visible`)
+/// — it just counts each visible finding instead of collapsing to one id. Scans
+/// with zero visible findings are omitted, so a missing scan means zero.
+#[tauri::command]
+pub async fn list_sentinel_vulnerability_counts(
+    state: State<'_, AppState>,
+    project_id: Option<i64>,
+) -> Result<Vec<SentinelVulnerabilityCount>, String> {
+    let database = state.db_path.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let connection = db::open(&database)?;
+        sentinel_vulnerability_counts_in(&connection, project_id)
+    }).await.map_err(|_| "findings_index_reader_failed".to_string())?
+}
+
+fn sentinel_vulnerability_counts_in(
+    connection: &rusqlite::Connection, project_id: Option<i64>,
+) -> Result<Vec<SentinelVulnerabilityCount>, String> {
+    // sentinel_scan_contexts.scan_id is PRIMARY KEY, so the LEFT JOIN yields at
+    // most one policy row per scan and findings are never multiplied; counting
+    // consecutive same-scan visible rows is exact.
+    let mut statement = connection
+        .prepare(
+            "SELECT f.scan_id,c.policy_json,f.record_json,f.stage FROM sentinel_findings f \
+             JOIN sentinel_scans s ON s.id=f.scan_id \
+             LEFT JOIN sentinel_scan_contexts c ON c.scan_id=f.scan_id \
+             WHERE (f.kind='vulnerability' OR f.stage='attack') AND (?1 IS NULL OR s.project_id=?1) \
+               AND NOT EXISTS(SELECT 1 FROM sentinel_deleted_scans d WHERE d.scan_id=s.id) \
+             ORDER BY s.updated_at DESC,s.id DESC,f.id",
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = statement.query_map([project_id], |row| Ok((
+        row.get::<_,String>(0)?, row.get::<_,Option<String>>(1)?, row.get::<_,String>(2)?, row.get::<_,String>(3)?,
+    ))).map_err(|error| error.to_string())?;
+    let mut counts: Vec<SentinelVulnerabilityCount> = Vec::new();
+    let mut current: Option<(String, bool)> = None;
+    for row in rows {
+        let (scan_id, policy, record, stage) = row.map_err(|error| error.to_string())?;
+        if current.as_ref().is_none_or(|(id,_)| id != &scan_id) {
+            current = Some((scan_id.clone(), findings_require_proof(policy.as_deref())?));
+        }
+        // A stage='attack' finding is a confirmed active-test result carrying its
+        // own request/response evidence, not the agent pipeline's
+        // control/test/impact triple, so it is always visible and is never
+        // dropped by the proof gate.
+        if stage != "attack" && current.as_ref().is_some_and(|(_,proof)| *proof) && !proof_finding_is_visible(&record) {
+            continue;
+        }
+        if counts.last().map(|entry| entry.scan_id.as_str()) == Some(scan_id.as_str()) {
+            counts.last_mut().expect("non-empty when last matched").count += 1;
+        } else {
+            counts.push(SentinelVulnerabilityCount { scan_id, count: 1 });
+        }
+    }
+    Ok(counts)
 }
 
 /// A runner-log read located through the attempt row instead of a guessed
@@ -1050,18 +1186,20 @@ fn findings_read_policy_in(connection: &rusqlite::Connection, scan_id: &str) -> 
 }
 
 fn findings_require_proof(policy: Option<&str>) -> Result<bool, String> {
-    // Context-free historical tasks predate closure policy. A missing field in
-    // a valid object also keeps that compatibility; malformed/unknown explicit
-    // policy must not silently broaden visibility.
-    let Some(policy) = policy else { return Ok(false) };
-    let policy: JsonValue = serde_json::from_str(policy).map_err(|_| "findings_policy_invalid")?;
-    let policy = policy.as_object().ok_or("findings_policy_invalid")?;
-    match policy.get("closure") {
-        None => Ok(false),
-        Some(JsonValue::String(value)) if value == "breadth" => Ok(false),
-        Some(JsonValue::String(value)) if value == "proof" => Ok(true),
-        _ => Err("findings_policy_invalid".into()),
+    // Single-agent authority: the proof display-gate is removed. Every published
+    // finding (the investigator agent's candidate) is shown to the operator
+    // regardless of whether it carries the control/test/impact proof triple — the
+    // operator triages. The policy is still validated below for its other fields,
+    // but it never hides a finding. (Return Ok(true) here to restore the gate.)
+    if let Some(policy) = policy {
+        let policy: JsonValue = serde_json::from_str(policy).map_err(|_| "findings_policy_invalid")?;
+        let policy = policy.as_object().ok_or("findings_policy_invalid")?;
+        match policy.get("closure") {
+            None | Some(JsonValue::String(_)) => {}
+            _ => return Err("findings_policy_invalid".into()),
+        }
     }
+    Ok(false)
 }
 
 fn proof_finding_is_visible(record_json: &str) -> bool {

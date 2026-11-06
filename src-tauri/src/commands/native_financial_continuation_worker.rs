@@ -139,14 +139,6 @@ fn native_financial_continuation_context_in(
         target_url: target.clone(),
         target_dir: target_dir.clone(),
         db_path: db_path.into(),
-        #[cfg(test)]
-        route: FrontendRoute {
-            url: target,
-            score: 0,
-            mode: plan.mode.clone(),
-            surface: plan.surface.clone(),
-            reasons: vec!["explicit financial continuation frozen-evidence assessment".into()],
-        },
         execution_plan: plan,
         evidence,
         capabilities: json!({"schemaVersion":1,"targetActionsGranted":0}),
@@ -161,6 +153,7 @@ fn native_financial_continuation_context_in(
             run_id: root.into(),
         }),
         run_budget: None,
+        continuation_holder: None,
         plan_rejection: None,
     };
     Ok((context, actor))
@@ -214,14 +207,6 @@ fn native_financial_continuation_work_once(
     };
     // Fault injection runs only in a separately launched test process. Exiting
     // here leaves the genuine paid publication durable, with no exit receipt.
-    #[cfg(test)]
-    if std::env::var("OVIRAPTOR_TEST_FINANCIAL_EXIT_AFTER_PUBLICATION")
-        .ok()
-        .as_deref()
-        == Some(new_root)
-    {
-        std::process::exit(86);
-    }
     drop(supervisor);
     native_financial_continuation_finish(&context, &actor, &receipt)?;
     Ok(result)

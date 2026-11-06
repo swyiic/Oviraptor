@@ -868,15 +868,6 @@ fn apply_ownership_group_decision_budgeted(
     ownership_drive_begin(connection, &operation_id, begin, budget, chunk)
 }
 
-/// 同步做完整个操作并返回最终结果（测试用；与 O2 合同一致）。
-#[cfg(test)]
-fn apply_ownership_group_decision_for_connection(
-    connection: &mut rusqlite::Connection,
-    input: OwnershipGroupDecisionApply,
-) -> Result<OwnershipGroupDecisionResult, String> {
-    apply_ownership_group_decision_budgeted(connection, input, None, OWNERSHIP_APPLY_CHUNK)
-        .map(|(result, _)| result)
-}
 
 #[tauri::command]
 pub fn apply_ownership_group_decision(

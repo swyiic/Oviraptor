@@ -3,15 +3,15 @@
 export function agentDialogLabels(tr: (zh: string, en: string) => string) {
   const roleLabel = (role: string) => ({
     operator: tr("你", "You"),
-    coordinator: "调查",
+    coordinator: tr("调查", "Coordinator"),
     homogeneous_worker: tr("同质 Worker", "Worker"),
-    spa_api_mapper: "采集",
+    spa_api_mapper: tr("采集", "Collector"),
     identity_session: tr("身份会话", "Identity & session"),
     web_executor: tr("Web 执行", "Web executor"),
     deep_investigator: tr("深度调查", "Deep investigator"),
     repo_mapper: tr("仓库梳理", "Repository mapper"),
     source_analyst: tr("源码分析", "Source analyst"),
-    evidence_reviewer: "检查",
+    evidence_reviewer: tr("检查", "Reviewer"),
   }[role] ?? role);
   const eventLabel = (eventType: string) => ({
     root_decision: tr("决策摘要", "Decision summary"),

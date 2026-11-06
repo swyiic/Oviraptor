@@ -160,6 +160,7 @@ fn native_coordinator_request_for_frame(
     };
     let db = db::open(&context.db_path)?;
     prepared.basis = native_coordinator_basis_for_frame_on(&db, context, actor, Some(frame))?;
+    native_refuse_unimplemented_offered_step(&prepared.basis)?;
     if frame.kind == "authorization-output" {
         // Retain the born local contract/history for original proof checking,
         // but this dedicated assessment has no local-tool continuation.

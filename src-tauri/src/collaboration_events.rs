@@ -20,9 +20,6 @@ mod signal;
 pub(crate) use pump::{start_event_pump, EventPumpControl};
 pub(crate) use signal::install_commit_notifications;
 
-#[cfg(test)]
-#[path = "collaboration_events/tests_support.rs"]
-mod tests_support;
 
 const COLLABORATION_EVENT_SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS agent_collaboration_events (

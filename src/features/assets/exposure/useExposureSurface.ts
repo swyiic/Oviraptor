@@ -29,6 +29,7 @@ import {
   type ExposureScopeSummary,
   exportLine,
 } from "./contracts";
+import { useI18n } from "../uiPorts";
 
 export interface ExposureSurfaceApi {
   exposureScopeSummary: (projectId: number) => Promise<unknown>;
@@ -70,6 +71,7 @@ function isRecordLike(value: unknown): value is object {
 }
 
 export function useExposureSurface(deps: ExposureSurfaceDeps) {
+  const { tr } = useI18n();
   const summary = ref<ExposureScopeSummary | null>(null);
   const findings = ref<ExposureFinding[]>([]);
   const runs = ref<ExposureRun[]>([]);
@@ -131,11 +133,14 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
   const beyondPlanNotice = computed(() => {
     const current = summary.value;
     if (!current) return "";
-    if (current.limitsError) return `采集上限不可用：${current.limitsError}`;
+    if (current.limitsError) return tr(`采集上限不可用：${current.limitsError}`, `Collection limits unavailable: ${current.limitsError}`);
     if (current.assetsBeyondPlan > 0) {
-      return `准入资产 ${current.eligibleAssetsTotal} 个，本轮计划只取 ${current.eligibleAssetsPlanned} 个，另有 ${current.assetsBeyondPlan} 个未采集`;
+      return tr(
+        `准入资产 ${current.eligibleAssetsTotal} 个，本轮计划只取 ${current.eligibleAssetsPlanned} 个，另有 ${current.assetsBeyondPlan} 个未采集`,
+        `${current.eligibleAssetsTotal} eligible assets; this round plans only ${current.eligibleAssetsPlanned}, and ${current.assetsBeyondPlan} more are not collected`,
+      );
     }
-    if (!current.projectActive) return "工作空间已归档，本轮没有采集范围";
+    if (!current.projectActive) return tr("工作空间已归档，本轮没有采集范围", "The workspace is archived; this round has no collection scope");
     return "";
   });
 
@@ -194,7 +199,7 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
       if (discarded(claimed, projectId)||ticket!==sourceTicket) return false;
       const rows = scoped;
       if (!Array.isArray(rows) || !rows.every(isSourceRow)) {
-        throw new Error("数据源响应结构无效");
+        throw new Error(tr("数据源响应结构无效", "The source results response has an invalid structure"));
       }
       sources.value = rows as ExposureSourceResult[];
       return true;
@@ -226,13 +231,13 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
         .then(
           (value) =>
             [
-              readExposurePage(value, isFindingRow, "暴露线索"),
+              readExposurePage(value, isFindingRow, tr("暴露线索", "Exposure leads")),
               readDispositionMap((value as { dispositions?: unknown } | null)?.dispositions),
             ] as const,
         ),
       deps.api
         .pageExposureRuns(projectId, FINDING_PAGE_SIZE, "")
-        .then((value) => readExposurePage(value, isRunRow, "采集任务")),
+        .then((value) => readExposurePage(value, isRunRow, tr("采集任务", "Collection jobs"))),
     ]);
     return { summary: summaryValue, findings: findingsValue, runs: runsValue, dispositions: dispositionValue };
   }
@@ -247,11 +252,11 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
     dispositions: Record<number, ExposureDispositionView> | null;
   }> {
     const [rawSummary, rawFindings, rawRuns] = await Promise.all([
-      deps.api.exposureSummary?.(projectId) ?? Promise.reject(new Error("legacy summary 不可用")),
+      deps.api.exposureSummary?.(projectId) ?? Promise.reject(new Error(tr("legacy summary 不可用", "Legacy summary unavailable"))),
       deps.api.listExposureFindings?.(projectId, statusFilter.value, searchFilter.value) ?? Promise.resolve([]),
       deps.api.listExposureRuns?.(projectId) ?? Promise.resolve([]),
     ]);
-    if (!isRecordLike(rawSummary)) throw new Error("旧范围汇总结构无效");
+    if (!isRecordLike(rawSummary)) throw new Error(tr("旧范围汇总结构无效", "The legacy scope summary has an invalid structure"));
     const number = (key: string) => Number((rawSummary as Record<string, unknown>)[key]) || 0;
     const eligible = number("eligibleAssets");
     const rows = Array.isArray(rawFindings) ? rawFindings.filter(isFindingRow) : [];
@@ -272,7 +277,7 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
         highRiskOpen: number("highRisk"),
         knownLimits: [],
         limitsBasis: "legacy_unverified",
-        limitsError: "旧汇总接口不报告项目的工作项上限，计划数未核实",
+        limitsError: tr("旧汇总接口不报告项目的工作项上限，计划数未核实", "The legacy summary endpoint does not report the project's work item limit; the planned count is unverified"),
         unitProjection: null,
         unitProjectionError: "",
         findingsExcluded: null,
@@ -282,9 +287,9 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
         liveRun: null,
         liveRunError: "",
         coverage: null,
-        coverageError: "旧汇总接口不报告覆盖矩阵",
+        coverageError: tr("旧汇总接口不报告覆盖矩阵", "The legacy summary endpoint does not report the coverage matrix"),
         unitStatistics: null,
-        unitStatisticsError: "旧汇总接口不报告单位统计",
+        unitStatisticsError: tr("旧汇总接口不报告单位统计", "The legacy summary endpoint does not report unit statistics"),
       },
       dispositions: null,
       findings: { items: rows, nextCursor: "", hasMore: false, total: rows.length, pageSize: rows.length },
@@ -348,7 +353,7 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
       stale.value = true;
       readError.value = exposureErrorText(error);
       // The notification is deliberately generic; the panel shows the stripped reason.
-      deps.notify("error", "暴露面读取失败，仍显示上次可信快照");
+      deps.notify("error", tr("暴露面读取失败，仍显示上次可信快照", "Failed to read the exposure surface; still showing the last trusted snapshot"));
     } finally {
       if (!discarded(claimed, projectId)) loading.value = false;
       if(claimed===generation)inFlight = false;
@@ -360,14 +365,14 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
     if (!projectId || loading.value || loadingRunsMore.value || !hasMoreRuns.value || !runsCursor.value) return;
     loadingRunsMore.value = true;
     try {
-      const next = readExposurePage(await deps.api.pageExposureRuns(projectId, FINDING_PAGE_SIZE, runsCursor.value), isRunRow, "采集任务");
+      const next = readExposurePage(await deps.api.pageExposureRuns(projectId, FINDING_PAGE_SIZE, runsCursor.value), isRunRow, tr("采集任务", "Collection jobs"));
       if (discarded(claimed, projectId)) return;
       const seen = new Set(runs.value.map(row => row.id));
       runs.value = [...runs.value, ...next.items.filter(row => !seen.has(row.id))];
       runsTotal.value = next.total; hasMoreRuns.value = next.hasMore; runsCursor.value = next.nextCursor;
     } catch (error) {
       if (discarded(claimed, projectId)) return;
-      deps.notify("error", `历史任务下一页读取失败：${exposureErrorText(error)}`);
+      deps.notify("error", tr(`历史任务下一页读取失败：${exposureErrorText(error)}`, `Failed to load the next page of past jobs: ${exposureErrorText(error)}`));
     } finally {
       if (claimed === generation) loadingRunsMore.value = false;
     }
@@ -391,7 +396,7 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
         })
         .then((value) => {
           const more = readDispositionMap((value as { dispositions?: unknown } | null)?.dispositions);
-          return { ...readExposurePage(value, isFindingRow, "暴露线索"), more };
+          return { ...readExposurePage(value, isFindingRow, tr("暴露线索", "Exposure leads")), more };
         });
       if (discarded(claimed, projectId)) return;
       dispositions.value = page.more === null || dispositions.value === null ? null : { ...dispositions.value, ...page.more };
@@ -402,7 +407,7 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
       nextCursor.value = page.hasMore ? page.nextCursor : "";
     } catch (error) {
       if (discarded(claimed, projectId)) return;
-      deps.notify("error", `下一页读取失败，已有结果保持不变：${exposureErrorText(error)}`);
+      deps.notify("error", tr(`下一页读取失败，已有结果保持不变：${exposureErrorText(error)}`, `Failed to load the next page; existing results are unchanged: ${exposureErrorText(error)}`));
     } finally {
       if (claimed === generation) loadingMore.value = false;
     }
@@ -447,7 +452,7 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
       boundAssetsTruncated.value = collected.length < total;
     } catch (error) {
       if (series !== assetSeries || !mounted || deps.projectId() !== projectId) return;
-      deps.notify("error", `准入资产分页读取失败：${exposureErrorText(error)}`);
+      deps.notify("error", tr(`准入资产分页读取失败：${exposureErrorText(error)}`, `Failed to page through eligible assets: ${exposureErrorText(error)}`));
     }
   }
 
@@ -459,11 +464,11 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
     try {
       const runId = await deps.api.startExposureScan(projectId);
       if(!mounted||scope!==projectGeneration||deps.projectId()!==projectId)return;
-      deps.notify("success", `被动采集任务 #${runId} 已启动；本轮范围受已知上限约束`);
+      deps.notify("success", tr(`被动采集任务 #${runId} 已启动；本轮范围受已知上限约束`, `Passive collection job #${runId} started; this round's scope is bounded by the known limits`));
       await load();
     } catch (error) {
       if(!mounted||scope!==projectGeneration||deps.projectId()!==projectId)return;
-      deps.notify("error", `无法启动被动采集：${exposureErrorText(error)}`);
+      deps.notify("error", tr(`无法启动被动采集：${exposureErrorText(error)}`, `Could not start passive collection: ${exposureErrorText(error)}`));
     } finally {
       if(scope===projectGeneration){starting.value = false;loading.value=false;inFlight=false;}
     }
@@ -478,11 +483,11 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
       // FIX2-4：带上当前项目，后端核对任务归属，不属于本项目的取消会被拒绝。
       await deps.api.cancelExposureScan(projectId, current.id);
       if(!mounted||scope!==projectGeneration||deps.projectId()!==projectId)return;
-      deps.notify("info", "已请求暂停，当前请求结束后保存断点，已采集结果保留");
+      deps.notify("info", tr("已请求暂停，当前请求结束后保存断点，已采集结果保留", "Pause requested; a checkpoint is saved when the current request finishes, and collected results are kept"));
       await load();
     } catch (error) {
       if(!mounted||scope!==projectGeneration||deps.projectId()!==projectId)return;
-      deps.notify("error", `暂停失败：${exposureErrorText(error)}`);
+      deps.notify("error", tr(`暂停失败：${exposureErrorText(error)}`, `Pause failed: ${exposureErrorText(error)}`));
     } finally {
       if(scope===projectGeneration){cancelling.value=false;loading.value=false;inFlight=false;}
     }
@@ -501,7 +506,7 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
       return true;
     } catch (error) {
       if(!mounted||scope!==projectGeneration||deps.projectId()!==projectId)return false;
-      deps.notify("error", `保存失败：${exposureErrorText(error)}`);
+      deps.notify("error", tr(`保存失败：${exposureErrorText(error)}`, `Save failed: ${exposureErrorText(error)}`));
       return false;
     }
   }
@@ -527,7 +532,7 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
       deps.notify("success", lastExport.value);
     } catch (error) {
       if (!mounted || deps.projectId() !== projectId || scope !== projectGeneration) return;
-      deps.notify("error", `导出失败：${exposureErrorText(error)}`);
+      deps.notify("error", tr(`导出失败：${exposureErrorText(error)}`, `Export failed: ${exposureErrorText(error)}`));
     } finally {
       if (scope === projectGeneration) exporting.value = null;
     }
@@ -542,7 +547,7 @@ export function useExposureSurface(deps: ExposureSurfaceDeps) {
     try {
       const [nextSummary, nextRuns] = await Promise.all([
         deps.api.exposureScopeSummary(projectId).then(readScopeSummary),
-        deps.api.pageExposureRuns(projectId, FINDING_PAGE_SIZE, "").then(value => readExposurePage(value, isRunRow, "采集任务")),
+        deps.api.pageExposureRuns(projectId, FINDING_PAGE_SIZE, "").then(value => readExposurePage(value, isRunRow, tr("采集任务", "Collection jobs"))),
       ]);
       if (discarded(claimed, projectId)) return;
       if (nextSummary.findingsTotal !== summary.value?.findingsTotal ||

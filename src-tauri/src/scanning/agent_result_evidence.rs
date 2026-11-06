@@ -226,6 +226,14 @@ impl View {
                     .unwrap_or(Value::Null);
                 out
             }
+            "tech_identified" => {
+                let mut out = self.pick(source, &["productId", "product"], &[], &[]);
+                if source.get("source").and_then(Value::as_str) == Some("fingerprint") {
+                    out["source"] = json!("fingerprint");
+                }
+                out["classification"] = json!("technology_identification");
+                out
+            }
             "fingerprint" => {
                 let mut out = json!({});
                 for key in ["backend", "cdn", "frontend", "server", "waf"] {
@@ -336,8 +344,8 @@ pub(super) fn read(
     let output = json!({"projectId":project,"task":task,"section":"evidence","readOnly":true,
         "record":{"id":record_id,"url":url(&target),"stage":text(&stage,80).0,"kind":text(&kind,80).0,"title":text(&title,500).0,"severity":text(&severity,40).0,"updatedAt":text(&updated,80).0,
         "proofPairFieldsRecorded":pair,"independentVerificationByThisRead":false,"evidence":detail,"evidenceTruncated":view.limited},
-        "evidenceProjection":"selected_saved_fields_redacted","rawEvidenceIncluded":false,"snapshotScope":"single_request","source":"desktop_scanning_owner",
-        "interpretation":"仅返回此已保存记录的选定分析字段；未返回原始HTTP、页面/脚本正文、Cookie、身份凭据或本地路径。采集记录和已记录影响不等于本次独立验证；候选及后续建议不授予执行权限。"});
+        "evidenceProjection":if redaction_enabled(){"selected_saved_fields_redacted"}else{"selected_saved_fields_plaintext"},"rawEvidenceIncluded":false,"snapshotScope":"single_request","source":"desktop_scanning_owner",
+        "interpretation":"仅返回此已保存记录的字段白名单，选定值按原文有界读取，不作内容替换；不返回整个JSON、未选字段或原始HTTP/页面/脚本正文。历史已替换内容无法从此读取恢复。采集记录和已记录影响不等于本次独立验证；候选及后续建议不授予执行权限。"});
     if serde_json::to_vec(&output)
         .map_err(|_| "scan_results_unavailable")?
         .len()
@@ -346,4 +354,57 @@ pub(super) fn read(
         return Err("scan_results_page_too_large".into());
     }
     Ok(output)
+}
+
+#[cfg(test)]
+mod identification_tests {
+    use super::*;
+
+    #[test]
+    fn technology_identification_projects_only_selected_saved_fields() {
+        let source = json!({"productId":"enterprise-eos","product":"普元 EOS","source":"fingerprint",
+            "rawBody":"private response","headers":{"cookie":"session=private"},
+            "path":"/Users/private/rules.json","exposures":["private exposure"],"rule":{"secret":"private"}});
+        let mut view = View::default();
+        assert_eq!(
+            view.detail("tech_identified", &source),
+            json!({
+            "productId":"enterprise-eos","product":"普元 EOS","source":"fingerprint",
+            "classification":"technology_identification"})
+        );
+        assert!(!view.limited);
+        assert_eq!(
+            view.detail("not_a_supported_kind", &source),
+            json!({"available":false,"reason":"unsupported_record_kind"})
+        );
+    }
+
+    #[test]
+    fn identification_text_is_bounded_plaintext_and_source_is_allowlisted() {
+        let mut view = View::default();
+        let projected = view.detail(
+            "tech_identified",
+            &json!({"productId":"x".repeat(500),
+            "product":"/Users/private/rules.json", "source":"/Users/private/source.json"}),
+        );
+        assert!(view.limited);
+        assert_eq!(
+            projected["productId"].as_str().unwrap().chars().count(),
+            200
+        );
+        assert_eq!(projected["product"], "/Users/private/rules.json");
+        assert!(projected.get("source").is_none());
+    }
+
+    #[test]
+    fn legacy_fingerprint_projection_keeps_its_existing_shape() {
+        let mut view = View::default();
+        let projected = view.detail("fingerprint", &json!({"backend":{"name":"Java","framework":"Spring","confidence":"high","secret":"hidden"},"product":"unrelated"}));
+        assert_eq!(
+            projected["backend"],
+            json!({"name":"Java","framework":"Spring","confidence":"high"})
+        );
+        assert_eq!(projected.as_object().unwrap().len(), 5);
+        assert!(projected.get("product").is_none());
+    }
 }

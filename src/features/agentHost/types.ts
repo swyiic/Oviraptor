@@ -64,7 +64,7 @@ export type AgentNetworkSettings = {
 export type AgentNetworkUpdate = { mode: AgentNetworkMode; proxyUrl?: string; noProxy?: string; clearProxy?: boolean };
 
 export type AgentTaskStep = { id: string; revision: number; title: string; status: string; dependsOn: string[]; evidenceRefs: string[]; verified: boolean; outcomeUnknown?: boolean };
-export type AgentTaskEvidence = { id: string; runId: string; toolName: string; status: string; summary: string; provenance: string; outcomeUnknown?: boolean; startedAt: string; finishedAt?: string };
+export type AgentTaskEvidence = { id: string; runId: string; toolName: string; status: string; summary: string; /** First 200 chars of `summary`, whitespace-collapsed; empty while running. */ previewText?: string; provenance: string; outcomeUnknown?: boolean; startedAt: string; finishedAt?: string };
 export type AgentTaskChild = {
   id: string; runId: string; parentRunId: string; kind: "research" | "review"; goal: string;
   status: "running" | "reported" | "interrupted" | "cancelled";
@@ -137,5 +137,5 @@ export function isAgentRuntimeId(value: unknown): value is AgentRuntimeId {
   return typeof value === "string" && (AGENT_RUNTIME_IDS as readonly string[]).includes(value);
 }
 
-export type AgentAccessMode = 'ask' | 'full';
+export type AgentAccessMode = 'ask' | 'auto' | 'full';
 export type AgentAccessPolicy = { projectId:number;mode:AgentAccessMode;savedMode:AgentAccessMode;revision:number;runtimeIdentity:string;needsReview:boolean;apps:Record<string,string[]>;workspacePermissions:string[] };

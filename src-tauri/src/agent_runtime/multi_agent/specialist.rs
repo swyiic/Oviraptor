@@ -23,10 +23,6 @@ mod original_received;
 pub(crate) use original_received::received_original_for_output_on;
 mod closed_audit;
 pub(crate) use closed_audit::verify_received_original;
-#[cfg(test)]
-pub use dispatch::start;
-#[cfg(test)]
-pub use dispatch::start_authorized;
 pub(crate) use dispatch::start_for_transport;
 mod receipt;
 mod phase_writer;
@@ -34,8 +30,6 @@ mod owned_proposal;
 mod owned_unsent;
 pub(crate) use owned_unsent::{not_sent_for_owned_proposal, UnsentCall};
 pub(crate) use owned_proposal::received_for_owned_proposal;
-#[cfg(test)]
-pub use receipt::record_received;
 pub use receipt::record_received_with_provenance;
 use receipt::verify_received;
 

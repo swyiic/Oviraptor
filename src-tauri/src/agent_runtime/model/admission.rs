@@ -67,14 +67,6 @@ impl AdmissionGate {
         }
     }
 
-    #[cfg(test)]
-    pub fn queued(&self) -> usize {
-        self.state
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .waiting
-            .len()
-    }
 }
 
 impl Drop for AdmissionPermit<'_> {
@@ -121,7 +113,7 @@ pub(crate) struct AdmissionDomain {
 /// exact queue assertions observe foreign waiters. Under `cfg(test)` the domain
 /// is therefore also scoped by provider origin; inside one domain capacity,
 /// FIFO order and cancellation are the unchanged production gate.
-const PER_PROVIDER_ORIGIN: bool = cfg!(test);
+const PER_PROVIDER_ORIGIN: bool = false;
 
 pub(crate) fn admission_domain(
     local: bool,

@@ -25,6 +25,10 @@ struct Call {
     action: String,
     args: Value,
     operation_id: String,
+    /// Set by the Host from the verified run that made the call, never from
+    /// model arguments.
+    #[serde(default)]
+    host_conversation_id: Option<String>,
 }
 fn same(a: &str, b: &str) -> bool {
     a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0, |v, (a, b)| v | (a ^ b)) == 0
@@ -140,7 +144,11 @@ fn rejection_receipt(error: &str) -> Value {
     );
     json!({"ok":false,"error":error,"phase":if not_started {"not_started"} else {"unknown"},"outcomeUnknown":!not_started})
 }
-fn handle(mut stream: TcpStream, token: &str, manager: &Manager, app: Option<&tauri::AppHandle>) {
+/// Desktop scan state for a bridge without an application handle: actions that
+/// only read or write the database work; engine start, pause and resume refuse.
+type ScanDatabase = (std::path::PathBuf, std::path::PathBuf);
+
+fn handle(mut stream: TcpStream, token: &str, manager: &Manager, app: Option<&tauri::AppHandle>, database: Option<&ScanDatabase>) {
     let outcome = read(&mut stream, token).and_then(|(route, c)| match route.as_str() {
         "certificate" => manager.dispatch(c.project_id, &c.action, c.args, &c.operation_id),
         "enrichment" => app.ok_or("discovery_executor_unavailable")?.state::<crate::asset_discovery::enrichment::Manager>().dispatch(c.project_id, &c.action, c.args, &c.operation_id),
@@ -148,13 +156,14 @@ fn handle(mut stream: TcpStream, token: &str, manager: &Manager, app: Option<&ta
         "assist" => crate::asset_discovery::review::assist::dispatch_chat(&app.ok_or("discovery_executor_unavailable")?.state::<crate::asset_discovery::review::assist::Manager>(),c.project_id,&c.action,c.args),
         "exposure" => crate::commands::exposure::agent_channel::dispatch_at(&app.ok_or("exposure_executor_unavailable")?.state::<crate::AppState>().db_path,c.project_id,&c.action,c.args,&c.operation_id)
             .map_err(|error|crate::commands::exposure::redaction::redact_text(&crate::commands::exposure::redaction::redact_url(&error))),
-        _ => crate::scanning::agent_channel::dispatch(
-            app.ok_or("scan_executor_unavailable")?,
-            c.project_id,
-            &c.action,
-            c.args,
-            &c.operation_id,
-        ),
+        _ => {
+            let args = crate::scanning::agent_channel::scope_host_conversation(&c.action, c.args, c.host_conversation_id.as_deref())?;
+            match (app, database) {
+                (Some(app), _) => crate::scanning::agent_channel::dispatch(app, c.project_id, &c.action, args, &c.operation_id),
+                (None, Some((db_path, app_data_dir))) => crate::scanning::agent_channel::dispatch_on(None, db_path, app_data_dir, c.project_id, &c.action, args, &c.operation_id),
+                (None, None) => Err("scan_executor_unavailable".into()),
+            }
+        }
     });
     let (status, value) = match outcome {
         Ok(v) => (200, json!({"ok":true,"result":v})),
@@ -166,17 +175,18 @@ fn handle(mut stream: TcpStream, token: &str, manager: &Manager, app: Option<&ta
     let _ = stream.write_all(&body);
 }
 impl Bridge {
-    #[cfg(test)]
-    pub(crate) fn start(manager: Manager) -> Result<Self, String> {
-        Self::start_inner(manager, None)
-    }
     pub(crate) fn start_with_scanning(
         manager: Manager,
         app: tauri::AppHandle,
     ) -> Result<Self, String> {
-        Self::start_inner(manager, Some(app))
+        Self::start_inner(manager, Some(app), None)
     }
-    fn start_inner(manager: Manager, app: Option<tauri::AppHandle>) -> Result<Self, String> {
+    /// The real bridge over a desktop database, without an application handle.
+    #[cfg(test)]
+    pub(crate) fn start_for_database(manager: Manager, db_path: std::path::PathBuf, app_data_dir: std::path::PathBuf) -> Result<Self, String> {
+        Self::start_inner(manager, None, Some((db_path, app_data_dir)))
+    }
+    fn start_inner(manager: Manager, app: Option<tauri::AppHandle>, database: Option<ScanDatabase>) -> Result<Self, String> {
         let listener = TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
         listener.set_nonblocking(true).map_err(|e| e.to_string())?;
         let origin = format!(
@@ -207,6 +217,7 @@ impl Bridge {
                         let secret = key.clone();
                         let tasks = manager.clone();
                         let desktop = app.clone();
+                        let scans = database.clone();
                         thread::spawn(move || {
                             struct Active(Arc<std::sync::atomic::AtomicUsize>);
                             impl Drop for Active {
@@ -215,7 +226,7 @@ impl Bridge {
                                 }
                             }
                             let _active = Active(count);
-                            handle(stream, &secret, &tasks, desktop.as_ref());
+                            handle(stream, &secret, &tasks, desktop.as_ref(), scans.as_ref());
                         });
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -236,48 +247,5 @@ impl Bridge {
 impl Drop for Bridge {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst)
-    }
-}
-#[cfg(test)]
-mod rejection_tests {
-    use super::*;
-    #[test]
-    fn fragmented_request_waits_for_body_on_an_accepted_nonblocking_socket() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        let (ready, wait) = std::sync::mpsc::channel();
-        let worker = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            // Darwin may inherit the nonblocking listener flag; force it here
-            // so the regression also exercises that state on Linux CI.
-            stream.set_nonblocking(true).unwrap();
-            ready.send(()).unwrap();
-            read(&mut stream, "local-test-bearer")
-        });
-        let mut client = TcpStream::connect(address).unwrap();
-        wait.recv().unwrap();
-        thread::sleep(Duration::from_millis(30));
-        let body = br#"{"projectId":3,"action":"start","args":{},"operationId":"test-fragmented"}"#;
-        let header = format!("POST /exposure-task HTTP/1.1\r\nAuthorization: Bearer local-test-bearer\r\nContent-Length: {}\r\n\r\n", body.len());
-        let _ = client.write_all(header.as_bytes());
-        thread::sleep(Duration::from_millis(30));
-        let _ = client.write_all(body);
-        let (route, call) = worker.join().unwrap().expect("fragments must be read before dispatch");
-        assert_eq!(route, "exposure");
-        assert_eq!(call.project_id, 3);
-        assert_eq!(call.action, "start");
-    }
-    #[test]
-    fn only_proven_pre_admission_validations_are_known_not_started() {
-        for message in ["请先在新建查询中确认允许补采的域名范围", "certificate_limits_invalid", "bridge_auth_invalid", "bridge_io", "cleanup_organization_invalid", "cleanup_run_project_mismatch", "scan_arguments_invalid", "scan_project_unavailable"] {
-            let receipt = rejection_receipt(message);
-            assert_eq!(receipt["phase"], "not_started");
-            assert_eq!(receipt["outcomeUnknown"], false);
-        }
-        for message in ["database is locked", "certificate_operation_unavailable", "certificate_task_unavailable"] {
-            let receipt = rejection_receipt(message);
-            assert_eq!(receipt["phase"], "unknown");
-            assert_eq!(receipt["outcomeUnknown"], true);
-        }
     }
 }

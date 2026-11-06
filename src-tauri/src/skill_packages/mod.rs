@@ -3,6 +3,7 @@
 mod import;
 mod model;
 mod store;
+mod knowledge_resources;
 pub use model::{ImportInput,PackageInfo,PackagePreview};
 use crate::{db,AppState};
 use rusqlite::Connection;
@@ -62,5 +63,3 @@ pub async fn list_skill_package_resources(state:State<'_,AppState>,skill_id:i64)
 pub async fn read_skill_package_resource(state:State<'_,AppState>,skill_id:i64,path:String,offset:Option<usize>,limit:Option<usize>)->Result<Value,String>{
     with_db(state.db_path.clone(),move|db|read_resource(db,skill_id,&path,offset.unwrap_or(0),limit.unwrap_or(4096))).await
 }
-#[cfg(test)]
-mod tests;

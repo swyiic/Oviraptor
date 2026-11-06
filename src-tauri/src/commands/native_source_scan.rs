@@ -227,33 +227,6 @@ fn merge_native_source_assessments(report: &mut JsonValue, assessments: JsonValu
     report["sourceMultiAgent"] = assessments;
 }
 
-#[cfg(test)]
-fn finish_native_source_attempt(
-    db_path: &Path,
-    scan_id: &str,
-    attempt_number: i64,
-    status: &str,
-    checkpoint: &str,
-) -> Result<bool, String> {
-    if !matches!(status, "completed" | "completed_with_gaps" | "failed") {
-        return Err("invalid_source_terminal_status".into());
-    }
-    let mut connection = db::open(db_path)?;
-    let transaction = connection
-        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-        .map_err(|error| error.to_string())?;
-    let changed = transaction.execute(
-        "UPDATE sentinel_scans SET status=?1,current_checkpoint=?2,updated_at=datetime('now','localtime')
-         WHERE id=?3 AND attempt_count=?4 AND status='scanning'
-         AND NOT EXISTS(SELECT 1 FROM sentinel_deleted_scans WHERE scan_id=?3)",
-        params![status, checkpoint, scan_id, attempt_number],
-    ).map_err(|error| error.to_string())?;
-    if changed == 1 {
-        sync_sentinel_attempt(&transaction, scan_id);
-    }
-    transaction.commit().map_err(|error| error.to_string())?;
-    Ok(changed == 1)
-}
 
 #[allow(clippy::too_many_arguments)]
 fn launch_native_source_pipeline(

@@ -1,13 +1,15 @@
 import { onBeforeUnmount, ref, watch } from "vue";
-import type { AgentAttemptMailboxPage, AgentAttemptToolPage, HistoricalImportPreview, NativeScanStatus, SentinelRunnerLogView, SentinelScan, SentinelScanAttempt } from "../types";
+import type { AgentAttemptMailboxPage, AgentAttemptToolPage, AgentAttemptToolCounts, HistoricalImportPreview, NativeScanStatus, SentinelRunnerLogView, SentinelScan, SentinelScanAttempt } from "../types";
 import type { AgentKnowledgeEntry, AgentLearningCandidate } from "../../skills/catalogTypes";
 import { sentinelApi } from "../api";
 import { knowledgeCatalogApi } from "../../skills/catalogApi";
 import { validateHistoricalPreviews } from "../results/historicalPreviewContract";
 import { useLiveRunnerLog } from "./useLiveRunnerLog";
+import { useI18n } from "../../../i18n";
 
 // Task-center read-only detail state; no task execution or mailbox acknowledgement.
 export function useTaskExecutionDetails(props: { readonly preview?: SentinelScan }) {
+  const { tr } = useI18n();
   const detailTab = ref<"overview" | "execution" | "evidence" | "learning">("overview");
   const detailLoading = ref(false);
   const detailErrors = ref<string[]>([]);
@@ -23,6 +25,7 @@ export function useTaskExecutionDetails(props: { readonly preview?: SentinelScan
   const toolPage = ref<AgentAttemptToolPage>();
   const toolLoading = ref(false);
   const toolError = ref("");
+  const toolCounts = ref<AgentAttemptToolCounts>();
   const nativeStatus = ref<NativeScanStatus>();
   const historicalPreviews = ref<HistoricalImportPreview[]>([]);
   const learningCandidates = ref<AgentLearningCandidate[]>([]);
@@ -41,12 +44,15 @@ export function useTaskExecutionDetails(props: { readonly preview?: SentinelScan
   });
   const isSelected = (scanId: string, attemptNumber: number) => !disposed
     && props.preview?.id === scanId && selectedAttempt.value === attemptNumber;
-  async function loadTools(scanId: string, attemptNumber: number, older = false) {
+  async function loadTools(scanId: string, attemptNumber: number, older = false, retainSnapshot = false) {
     if (!isSelected(scanId, attemptNumber)) return;
     const prior = older ? toolPage.value : undefined;
     if (older && (!prior?.hasOlder || !prior.olderCursor || toolLoading.value)) return;
     const serial = ++toolRequestSerial;
-    if (!older) toolPage.value = undefined;
+    if (!older && !retainSnapshot) {
+      toolPage.value = undefined;
+      toolCounts.value = undefined;
+    }
     toolError.value = "";
     toolLoading.value = true;
     try {
@@ -56,9 +62,21 @@ export function useTaskExecutionDetails(props: { readonly preview?: SentinelScan
         throw new Error("execution_history_scope_mismatch");
       }
       toolPage.value = older && prior ? { ...page, invocations: [...page.invocations, ...prior.invocations] } : page;
+      // Whole-attempt per-tool counts for the summary chips (the paged list only
+      // holds one window, so counts come from a server-side GROUP BY). Best-effort:
+      // a failure leaves the list working without chips.
+      if (!older) {
+        try {
+          const counts = await sentinelApi.getNativeAttemptToolCounts(scanId, attemptNumber);
+          if (serial === toolRequestSerial && props.preview?.id === scanId && selectedAttempt.value === attemptNumber
+            && counts.scanId === scanId && counts.attemptNumber === attemptNumber) {
+            toolCounts.value = counts;
+          }
+        } catch { /* chips are optional; the list still renders */ }
+      }
     } catch {
       if (serial === toolRequestSerial && props.preview?.id === scanId
-        && selectedAttempt.value === attemptNumber) toolError.value = "此轮工具调用暂时不可读取";
+        && selectedAttempt.value === attemptNumber) toolError.value = tr("此轮工具调用暂时不可读取", "Tool calls for this attempt are temporarily unavailable");
     } finally {
       if (serial === toolRequestSerial) toolLoading.value = false;
     }
@@ -83,7 +101,7 @@ export function useTaskExecutionDetails(props: { readonly preview?: SentinelScan
       } : page;
     } catch {
       if (serial === mailboxRequestSerial && props.preview?.id === scanId
-        && selectedAttempt.value === attemptNumber) mailboxError.value = "此轮协作消息暂时不可读取";
+        && selectedAttempt.value === attemptNumber) mailboxError.value = tr("此轮协作消息暂时不可读取", "Agent messages for this attempt are temporarily unavailable");
     } finally {
       if (serial === mailboxRequestSerial) mailboxLoading.value = false;
     }
@@ -103,7 +121,7 @@ export function useTaskExecutionDetails(props: { readonly preview?: SentinelScan
         && selectedAttempt.value === attemptNumber) runnerLog.value = result;
     } catch {
       if (serial === runnerLogRequestSerial && props.preview?.id === scanId
-        && selectedAttempt.value === attemptNumber) runnerLogError.value = "此轮日志暂时不可读取";
+        && selectedAttempt.value === attemptNumber) runnerLogError.value = tr("此轮日志暂时不可读取", "Logs for this attempt are temporarily unavailable");
     } finally {
       if (serial === runnerLogRequestSerial) runnerLogLoading.value = false;
     }
@@ -113,7 +131,19 @@ export function useTaskExecutionDetails(props: { readonly preview?: SentinelScan
       ? { scanId: props.preview.id, attempt: selectedAttempt.value } : undefined,
     () => runnerLogLoading.value,
     ({ scanId, attempt }) => loadAttemptLog(scanId, attempt, true),
-    (unavailable) => { runnerLogConnectionError.value = unavailable ? "实时日志连接不可用，暂以定时校对恢复" : ""; },
+    (unavailable) => { runnerLogConnectionError.value = unavailable ? tr("实时日志连接不可用，暂以定时校对恢复", "Live log connection unavailable; falling back to periodic refresh") : ""; },
+  );
+  // The runner-log event fires throughout the agent loop; reuse it to pull the
+  // semantic tool timeline live too, so tool steps surface as the agent runs
+  // (随产随显) instead of only on attempt-select / tab-switch. Refresh in place
+  // (retainSnapshot) so the list never blanks mid-run; the runner-log
+  // subscription above already owns the connection banner.
+  useLiveRunnerLog(
+    () => detailTab.value === "execution" && props.preview && selectedAttempt.value !== undefined
+      ? { scanId: props.preview.id, attempt: selectedAttempt.value } : undefined,
+    () => toolLoading.value,
+    ({ scanId, attempt }) => loadTools(scanId, attempt, false, true),
+    () => { /* connection state is surfaced by the runner-log subscription */ },
   );
   function chooseAttempt(attemptNumber: number) {
     if (disposed || !props.preview || !attempts.value.some((attempt) => attempt.attemptNumber === attemptNumber)) return;
@@ -139,6 +169,7 @@ export function useTaskExecutionDetails(props: { readonly preview?: SentinelScan
     mailboxError.value = "";
     ++toolRequestSerial;
     toolPage.value = undefined;
+    toolCounts.value = undefined;
     toolLoading.value = false;
     toolError.value = "";
     attempts.value = [];
@@ -172,15 +203,15 @@ export function useTaskExecutionDetails(props: { readonly preview?: SentinelScan
           void loadMailbox(scanId, selectedAttempt.value);
           void loadTools(scanId, selectedAttempt.value);
         }
-      }, "执行历史暂时不可读取"),
+      }, tr("执行历史暂时不可读取", "Run history is temporarily unavailable")),
       // Draft or non-Web tasks may not have a Native run; absence is not a history error.
       readDetail(() => sentinelApi.getNativeScanStatus(scanId), (value) => { nativeStatus.value = value; }),
       readDetail(() => knowledgeCatalogApi.listAgentLearningCandidates(undefined, scanId),
-        (value) => { learningCandidates.value = value; }, "学习候选暂时不可读取"),
+        (value) => { learningCandidates.value = value; }, tr("学习候选暂时不可读取", "Learning candidates are temporarily unavailable")),
       readDetail(() => knowledgeCatalogApi.listAgentKnowledge(scanId),
-        (value) => { knowledge.value = value; }, "知识记录暂时不可读取"),
+        (value) => { knowledge.value = value; }, tr("知识记录暂时不可读取", "Knowledge records are temporarily unavailable")),
       readDetail(() => sentinelApi.listHistoricalImportPreviews(scanId),
-        (value) => { historicalPreviews.value = validateHistoricalPreviews(value, scanId); }, "历史导入预览暂时不可读取"),
+        (value) => { historicalPreviews.value = validateHistoricalPreviews(value, scanId); }, tr("历史导入预览暂时不可读取", "Historical import previews are temporarily unavailable")),
     ]);
     if (isCurrent()) detailLoading.value = false;
   }, { immediate: true });
@@ -201,7 +232,7 @@ export function useTaskExecutionDetails(props: { readonly preview?: SentinelScan
   return {
     detailTab, detailLoading, detailErrors, attempts, selectedAttempt,
     runnerLog, runnerLogLoading, runnerLogError, runnerLogConnectionError, mailboxPage, mailboxLoading, mailboxError,
-    toolPage, toolLoading, toolError, nativeStatus, historicalPreviews, learningCandidates, knowledge,
+    toolPage, toolLoading, toolError, toolCounts, nativeStatus, historicalPreviews, learningCandidates, knowledge,
     loadTools, loadMailbox, loadAttemptLog, chooseAttempt,
   };
 }

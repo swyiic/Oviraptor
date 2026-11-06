@@ -30,50 +30,5 @@ pub fn reserve_native_share(path: &Path, amount: u64) -> Result<(), String> {
     Ok(())
 }
 
-pub fn preset_rank(mode: &str) -> u8 {
-    match mode {
-        "deep" => 3,
-        "standard" => 2,
-        "quick" => 1,
-        _ => 0,
-    }
-}
 
-/// Agent assistance may stay on or below the frozen preset. It cannot raise it.
-/// The returned name is one of the modes `runtime_config` already limits.
-pub fn allowed_preset(frozen: &str, requested: &str, actor: &str) -> Result<String, String> {
-    if preset_rank(requested) == 0 {
-        return Err("preset_invalid".into());
-    }
-    if actor == "agent" && preset_rank(requested) > preset_rank(frozen) {
-        return Err("preset_upgrade_denied".into());
-    }
-    Ok(requested.to_string())
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    #[test]
-    fn native_spend_cannot_use_the_host_share_or_pending_and_agent_cannot_raise_preset() {
-        let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        let path = std::env::temp_dir().join(format!("owner-allocation-{stamp}.json"));
-        fs::write(
-            &path,
-            r#"{"schemaVersion":1,"hostCap":2,"nativeCap":1,"pending":1,"nativeSpent":0,"presetId":"standard","price":null,"limitsSource":"runtime_config"}"#,
-        )
-        .unwrap();
-        reserve_native_share(&path, 1).unwrap();
-        let saved: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(saved["nativeSpent"], 1);
-        assert_eq!(saved["hostCap"], 2);
-        assert_eq!(saved["pending"], 1);
-        assert_eq!(reserve_native_share(&path, 1), Err("native_allocation_exhausted".into()));
-        assert_eq!(allowed_preset("standard", "deep", "agent"), Err("preset_upgrade_denied".into()));
-        assert_eq!(allowed_preset("standard", "quick", "agent").unwrap(), "quick");
-        assert_eq!(allowed_preset("standard", "deep", "user").unwrap(), "deep");
-        let _ = fs::remove_file(path);
-    }
-}

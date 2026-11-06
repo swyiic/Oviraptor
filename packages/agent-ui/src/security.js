@@ -23,4 +23,17 @@ export function bridgeMessage(event,{source,appId,nonce,protocol=BRIDGE_PROTOCOL
   }
   return null; // No arbitrary API, command, fetch or permission proxy.
 }
-export function sessionToken(document,window){return window.__OVIRAPTOR_HOST__?.token||document.querySelector('meta[name="oviraptor-session-token"]')?.content||'';}
+const SESSION_STORAGE_KEY='oviraptor-session-token';
+// The CLI prints `<origin>/#session=<token>`. A fragment is never sent to the
+// server, so the token is taken from it once, kept for reloads in this tab and
+// removed from the address bar.
+export function sessionToken(document,window){
+  const fromHash=new URLSearchParams(String(window.location?.hash||'').slice(1)).get('session');
+  if(fromHash&&/^[0-9a-f]{32,128}$/i.test(fromHash)){
+    try{window.sessionStorage?.setItem(SESSION_STORAGE_KEY,fromHash);}catch{}
+    try{window.history?.replaceState(null,'',window.location.pathname+window.location.search);}catch{}
+    return fromHash;
+  }
+  let stored='';try{stored=window.sessionStorage?.getItem(SESSION_STORAGE_KEY)||'';}catch{}
+  return window.__OVIRAPTOR_HOST__?.token||stored||document.querySelector('meta[name="oviraptor-session-token"]')?.content||'';
+}

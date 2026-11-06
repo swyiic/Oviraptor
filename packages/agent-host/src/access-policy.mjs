@@ -15,23 +15,52 @@ export class ProjectAccessPolicy {
     this.builtinDiscoveryProofs = new Map();
     store.db.exec(`CREATE TABLE IF NOT EXISTS project_access_policies(
       project_id INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
-      mode TEXT NOT NULL CHECK(mode IN ('ask','full')), runtime_identity TEXT NOT NULL,
+      mode TEXT NOT NULL CHECK(mode IN ('ask','auto','full')), runtime_identity TEXT NOT NULL,
       revision INTEGER NOT NULL, apps_json TEXT NOT NULL)`);
+    // Migrate an older table whose CHECK predates the 'auto' tier (same column
+    // set, so a straight copy is exact). Without this, saving 'auto' on an
+    // existing install would violate the old constraint.
+    if (!this.store.db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='project_access_policies'").get().sql.includes("'auto'")) {
+      this.store.db.exec(`BEGIN IMMEDIATE;
+        ALTER TABLE project_access_policies RENAME TO project_access_policies_before_auto;
+        CREATE TABLE project_access_policies(
+          project_id INTEGER PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+          mode TEXT NOT NULL CHECK(mode IN ('ask','auto','full')), runtime_identity TEXT NOT NULL,
+          revision INTEGER NOT NULL, apps_json TEXT NOT NULL);
+        INSERT INTO project_access_policies SELECT * FROM project_access_policies_before_auto;
+        DROP TABLE project_access_policies_before_auto; COMMIT;`);
+    }
   }
   view(projectId) {
     const id = positiveId(projectId); this.store.project(id);
     const row = this.store.db.prepare('SELECT * FROM project_access_policies WHERE project_id=?').get(id);
-    const current = this.identity(), active = row?.mode === 'full' && row.runtime_identity === current;
-    return { projectId:id, mode:active?'full':'ask', savedMode:row?.mode??'ask', revision:row?.revision??0,
-      runtimeIdentity:current, needsReview:row?.mode==='full'&&!active,
-      apps:row?JSON.parse(row.apps_json):{}, workspacePermissions:active?['workspace.read','workspace.write','workspace.run']:[] };
+    const current = this.identity();
+    // Both elevated tiers require the saved runtime identity to still match; on a
+    // mismatch they degrade to 'ask' and need re-confirmation. 'auto' grants only
+    // the non-destructive workspace permissions (read + isolated run) and never
+    // auto-grants any app; 'full' grants read/write/run plus the stored app set.
+    const saved = row?.mode ?? 'ask';
+    const elevated = saved === 'full' || saved === 'auto';
+    const active = elevated && row.runtime_identity === current;
+    const mode = active ? saved : 'ask';
+    const workspacePermissions = !active ? []
+      : mode === 'full' ? ['workspace.read','workspace.write','workspace.run']
+      : ['workspace.read','workspace.run'];
+    return { projectId:id, mode, savedMode:saved, revision:row?.revision??0,
+      runtimeIdentity:current, needsReview:elevated&&!active,
+      apps:row?JSON.parse(row.apps_json):{}, workspacePermissions };
   }
   set(input = {}) {
-    if (!['ask','full'].includes(input.mode)) throw hostError('host_access_policy_invalid');
+    if (!['ask','auto','full'].includes(input.mode)) throw hostError('host_access_policy_invalid');
     const before = this.view(input.projectId);
     if (input.expectedRuntimeIdentity !== before.runtimeIdentity) throw hostError('host_runtime_identity_changed',409);
     if (input.expectedRevision !== before.revision) throw hostError('host_access_policy_conflict',409);
-    if (input.mode === 'full' && input.operatorConfirmed !== true) throw hostError('host_access_policy_confirmation_required',403);
+    // Either elevation is a deliberate widening of default-deny and needs the
+    // operator's explicit confirmation, even though 'auto' only opens
+    // non-destructive workspace ops.
+    if ((input.mode === 'full' || input.mode === 'auto') && input.operatorConfirmed !== true) throw hostError('host_access_policy_confirmation_required',403);
+    // Only 'full' auto-grants enabled apps' permissions; 'auto' and 'ask' grant
+    // no apps, so an app action under 'auto' still prompts.
     const apps = input.mode==='full'?Object.fromEntries(this.store.applications().filter(app=>app.enabled).map(app=>[
       app.id,[...new Set(app.manifest.permissions.map(p=>p.id))].sort(),
     ])):{};

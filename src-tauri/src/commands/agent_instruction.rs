@@ -61,12 +61,3 @@ fn neutral_scan_work_root(app_data_dir: &Path) -> PathBuf {
 fn scan_work_dir_for(app_data_dir: &Path, scan_id: &str) -> PathBuf {
     neutral_scan_work_root(app_data_dir).join(scan_id)
 }
-
-/// Creates (idempotently) the working directory of one scan and returns its path.
-// Legacy layout fixture only; live admission uses exclusive attempt ownership.
-#[cfg(test)]
-fn prepare_scan_work_dir(app_data_dir: &Path, scan_id: &str) -> Result<PathBuf, String> {
-    let work = neutral_scan_work_root(app_data_dir).join(scan_id);
-    fs::create_dir_all(&work).map_err(|error| format!("无法创建任务工作目录：{error}"))?;
-    Ok(work)
-}

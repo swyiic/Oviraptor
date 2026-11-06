@@ -78,7 +78,6 @@ const taskStatus = computed(() => [
     <section class="panel sentinel-chart-card">
       <div class="panel-heading">
         <div>
-          <span class="eyebrow">RESULT DISTRIBUTION</span>
           <h3>{{ tr("结构化结果分布", "Structured results") }}</h3>
           <p>{{ tr("长度代表记录数量，颜色代表数据类型，不代表风险。", "Bar length is record count; color identifies the data type, not risk.") }}</p>
         </div>
@@ -95,7 +94,6 @@ const taskStatus = computed(() => [
     <section class="panel sentinel-chart-card">
       <div class="panel-heading">
         <div>
-          <span class="eyebrow">TASK STATUS</span>
           <h3>{{ tr("已加载任务状态", "Loaded-task status") }}</h3>
           <p>{{ tr("仅统计已加载任务，不代表项目全部任务。", "Counts loaded tasks only, not all tasks in the project.") }}</p>
         </div>

@@ -172,19 +172,6 @@ fn workbench_admission_siblings(connection: &rusqlite::Connection,scan_id: &str,
     Ok(rows)
 }
 
-#[allow(clippy::too_many_arguments)]
-fn publish_workbench_start(
-    connection: &rusqlite::Connection,
-    record: &WorkbenchStartRecord,
-    reuse: bool,
-    draft_scope: &str,
-    work_dir: &Path,
-    plan: &ScanBackendPlan,
-    worker: PathBuf,
-    model: &ModelRuntimeEnv,
-) -> Result<(SentinelScan, AgentWebPipelineRuntime), String> {
-    publish_workbench_start_publishing_in(connection, record, reuse, draft_scope, work_dir, plan, worker, model, |_| Ok(()), |_, _| Ok(()))
-}
 
 #[allow(clippy::too_many_arguments)]
 fn publish_workbench_start_publishing_in(

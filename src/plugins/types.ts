@@ -12,7 +12,7 @@ export interface PluginPageContribution {
   view: ViewKey;
   label: BilingualText;
   /** Only navigation metadata; components are literal imports owned by the host. */
-  section?: "dialog" | "results" | "queue" | "workbench";
+  section?: "overview" | "dialog" | "results" | "fuse" | "queue" | "workbench" | "knowledge";
 }
 export interface PluginCapabilityDeclaration {
   id: string;

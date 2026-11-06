@@ -8,19 +8,6 @@ use rusqlite::{
 };
 use std::time::Duration;
 
-#[cfg(test)]
-pub(super) fn approve(
-    original: &Connection,
-    preparation: &EnvironmentPreparationLease,
-    configuration: &ToolAdministratorConfiguration,
-    decision: &[u8],
-    manifest: &[u8],
-    package: &[u8],
-) -> Result<VerifiedToolApproval, String> {
-    run(original, preparation, |tx| {
-        approval::approve_on(tx, preparation, configuration, decision, manifest, package)
-    })
-}
 
 /// Publish inert bytes before committing the original approval. A cache fact
 /// alone grants nothing; failure rolls back the decision and retains the fence.

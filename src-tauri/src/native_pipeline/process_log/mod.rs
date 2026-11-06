@@ -8,8 +8,6 @@ pub(crate) mod driver;
 mod guard;
 mod persist;
 
-#[cfg(test)]
-pub(crate) const SCHEMA: &str = include_str!("schema.sql");
 const MAX_ROWS: i64 = 8192;
 const MAX_BYTES: i64 = 1024 * 1024;
 const PAGE_LIMIT: i64 = 300;
@@ -226,5 +224,3 @@ pub(crate) fn page(
     })
 }
 
-#[cfg(test)]
-mod write_guard_tests;

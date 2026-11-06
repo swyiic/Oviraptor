@@ -1,3 +1,4 @@
+import { forwardOAuthModelRequest } from './model-bridge.mjs';
 import { discoveryConversationAction } from './discovery-assist.mjs';
 import http from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
@@ -99,7 +100,14 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
         return json(await host.mcp(request.headers['x-oviraptor-mcp'], parts[1], input.method, input.params, { runId: input.runId }));
       }
       if (parts[0] === 'api') {
-        if (!sameToken(request.headers['x-oviraptor-session'], token)) throw hostError('host_session_required', 403);
+        const modelBridge = path === '/api/model/oauth/chat/completions' || path === '/api/model/oauth/models';
+        const bridgeSession = modelBridge && String(request.headers.authorization || '').startsWith('Bearer ') ? request.headers.authorization.slice(7) : undefined;
+        if (!sameToken(request.headers['x-oviraptor-session'], token) && !sameToken(bridgeSession, token)) throw hostError('host_session_required', 403);
+        if (modelBridge) {
+          if (path.endsWith('/models') && method === 'GET') return await forwardOAuthModelRequest(host, request, response, null);
+          if (path.endsWith('/chat/completions') && method === 'POST') return await forwardOAuthModelRequest(host, request, response, await body(request, 6_000_000));
+          throw hostError('host_route_unavailable', 404);
+        }
         if (path === '/api/events' && method === 'GET') {
           response.writeHead(200, { 'Content-Type': 'text/event-stream', Connection: 'keep-alive' });
           response.write(`data: ${JSON.stringify({ type: 'host.snapshot', ...host.status() })}\n\n`);
@@ -117,9 +125,11 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
           return json(await host.startProviderOAuth(input ?? {}));
         }
         if (path === '/api/settings/provider/oauth/poll' && method === 'POST') return json(await host.pollProviderOAuth());
-        if (path === '/api/settings/provider/oauth/select' && method === 'POST') return json(await host.selectProviderOAuth());
+        if (path === '/api/settings/provider/oauth/select' && method === 'POST') return json(await host.selectProviderOAuth(await body(request)));
         if (path === '/api/settings/provider/oauth/status' && method === 'GET') return json(await host.pollProviderOAuth());
         if (path === '/api/settings/provider/oauth/logout' && method === 'POST') return json(await host.logoutProviderOAuth());
+        if (path === '/api/mcp/jev' && method === 'GET') return json(host.jev.status());
+        if (path === '/api/mcp/jev' && method === 'POST') return json(await host.jev.configure(await body(request)));
         if (path === '/api/settings' && method === 'POST') {
           const input = await body(request);
           let result = null;
@@ -142,6 +152,7 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
           throw hostError('host_route_unavailable', 404);
         }
         if (path === '/api/projects' && method === 'GET') return json({ items: host.store.projects() });
+        if (path === '/api/projects/personal' && method === 'GET') return json(host.store.ensurePersonalProject());
         if (path === '/api/projects' && method === 'POST') {
           const input = await body(request);
           if (input?.ensureByExternalId != null && input.ensureByExternalId !== '') {
@@ -166,10 +177,51 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
           const input = await body(request);
           return json(host.commitInsight(parts[2], input));
         }
+        // Agent cross-session memory: user review / revoke boundary.
+        if (parts[1] === 'projects' && parts.length === 4 && parts[3] === 'memory' && method === 'GET') {
+          return json({ items: host.store.projectMemory(parts[2]) });
+        }
+        if (parts[1] === 'projects' && parts.length === 4 && parts[3] === 'memory' && method === 'DELETE') {
+          return json({ ok: true, removed: host.store.clearProjectMemory(parts[2]) });
+        }
+        if (parts[1] === 'projects' && parts.length === 5 && parts[3] === 'memory' && method === 'DELETE') {
+          return json({ ok: true, removed: host.store.deleteProjectMemory(parts[2], decodeURIComponent(parts[4])) });
+        }
+        // Global cross-workspace memory (P1): operator review / revoke.
+        if (path === '/api/memory/global' && method === 'GET') {
+          return json({ items: host.store.globalMemory() });
+        }
+        if (parts[1] === 'memory' && parts[2] === 'global' && parts.length === 4 && method === 'DELETE') {
+          return json({ ok: true, removed: host.store.deleteGlobalMemoryEntry(decodeURIComponent(parts[3])) });
+        }
+        // Agent-recorded findings (authorized pentest evidence): operator review surface.
+        if (path === '/api/findings' && method === 'GET') return json({ items: host.store.findings(url.searchParams.get('conversationId'), url.searchParams.get('status')) });
+        if (parts[1] === 'findings' && parts.length === 4 && parts[3] === 'decide' && method === 'POST') {
+          return json(host.store.decideFinding(decodeURIComponent(parts[2]), (await body(request)).confirm === true));
+        }
+        if (parts[1] === 'findings' && parts.length === 3 && method === 'DELETE') {
+          return json({ ok: true, removed: host.store.deleteFinding(decodeURIComponent(parts[2])) });
+        }
+        // Opens the conversation a scan task reports to, creating and binding one when none exists.
+        if (parts[1] === 'projects' && parts[3] === 'scan-tasks' && parts[5] === 'conversation' && parts.length === 6 && method === 'POST') {
+          return json(await host.openScanTaskConversation(parts[2], parts[4]));
+        }
         if (path === '/api/conversations' && method === 'GET') return json({ items: host.store.conversations(url.searchParams.get('projectId')) });
         if (path === '/api/conversations' && method === 'POST') {
           const input = await body(request);
           return json(host.createConversationFromRequest(input));
+        }
+        // Agent workspace file LISTING (增量2/3). Distinct path from the len-4
+        // /workspace below (chatFiles.workspace, the Finder-reveal) so the two
+        // don't collide — both used to match conversations/len4/workspace/GET.
+        if (parts[1] === 'conversations' && parts.length === 5 && parts[3] === 'workspace' && parts[4] === 'files' && method === 'GET') {
+          return json({ files: await host.workspaceFiles(decodeURIComponent(parts[2])) });
+        }
+        if (parts[1] === 'conversations' && parts.length === 5 && parts[3] === 'workspace' && parts[4] === 'file' && method === 'GET') {
+          return json(await host.workspaceFileContent(decodeURIComponent(parts[2]), url.searchParams.get('path') || ''));
+        }
+        if (parts[1] === 'conversations' && parts.length === 4 && parts[3] === 'attach' && method === 'POST') {
+          return json(host.attachConversationToWorkspace(decodeURIComponent(parts[2]), (await body(request)).projectId));
         }
         if (parts[1] === 'conversations' && parts.length === 3 && method === 'DELETE') {
           host.deleteConversation(decodeURIComponent(parts[2]), url.searchParams.get('projectId'));
@@ -231,6 +283,9 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
         if (path === '/api/runtime/authorization' && method === 'POST') {
           const input = await body(request);
           return json({ accepted: host.resolveAuthorization(input.conversationId, input.accepted === true, { requestId: input.requestId, runId: input.runId, remember: input.remember === true }) });
+        }
+        if (parts[1] === 'conversations' && parts[3] === 'chain' && parts.length === 4 && method === 'GET') {
+          return json({ hops: host.chain(decodeURIComponent(parts[2]), url.searchParams.get('projectId')) });
         }
         if (path === '/api/runtime/access-policy' && method === 'GET') return json(host.accessPolicyView(url.searchParams.get('projectId')));
         if (path === '/api/runtime/access-policy' && method === 'POST') return json(host.setAccessPolicy(await body(request)));
@@ -317,8 +372,9 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
       if (method !== 'GET' || !uiDir) throw hostError('host_route_unavailable', 404);
       const relative = path === '/' ? 'index.html' : path.slice(1);
       if (!relative || relative.split('/').some(part => part === '..' || part.startsWith('.')) || relative.includes('\\')) throw hostError('host_route_unavailable', 404);
-      let bytes = await readFile(join(uiDir, relative));
-      if (relative === 'index.html') bytes = Buffer.from(bytes.toString().replace('</head>', `<script>window.__OVIRAPTOR_HOST__=${JSON.stringify({ token })}</script></head>`));
+      // The page is public on loopback; the session token reaches the UI only
+      // through the URL fragment printed by the CLI, never in this response.
+      const bytes = await readFile(join(uiDir, relative));
       response.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
       response.setHeader('Content-Type', mime(relative)); response.end(bytes);
     } catch (error) {

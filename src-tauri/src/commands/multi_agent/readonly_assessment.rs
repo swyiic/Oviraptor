@@ -219,7 +219,6 @@ fn complete_assessment_at_checked(
         )
         .map_err(|e| e.to_string())?;
     let received = legacy_received || mapper_loop;
-    #[cfg(not(test))]
     if !received {
         return Err("readonly_assessment_receipt_required".into());
     }

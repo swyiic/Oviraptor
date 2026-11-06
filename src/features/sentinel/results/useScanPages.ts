@@ -1,6 +1,7 @@
 import { onUnmounted, ref, shallowRef, watch } from "vue";
 import type { SentinelScan } from "../types";
 import { validTaskPage } from "./taskPageContract";
+import { useI18n } from "../../../i18n";
 
 type ScanCursor = Pick<SentinelScan, "updatedAt" | "id">;
 interface ScanPagesOptions {
@@ -12,6 +13,7 @@ interface ScanPagesOptions {
 
 // Own the task list's read-only paging state, separately from task execution.
 export function useScanPages(options: ScanPagesOptions) {
+  const { tr } = useI18n();
   const scans = shallowRef<SentinelScan[]>([]);
   const scanPageSize = 300;
   const scanOlderCursor = shallowRef<ScanCursor>();
@@ -29,7 +31,7 @@ export function useScanPages(options: ScanPagesOptions) {
 
   function assertPage(page: SentinelScan[]) {
     if (!validTaskPage(page, scanPageSize, options.scope()))
-      throw new Error("任务列表数据无效，请重试");
+      throw new Error(tr("任务列表数据无效，请重试", "Task list data is invalid; try again"));
   }
 
   function replaceScanHead(page: SentinelScan[]) {
@@ -73,7 +75,7 @@ export function useScanPages(options: ScanPagesOptions) {
       if (page.length) scanOlderCursor.value = cursorFor(page[page.length - 1]);
       scanHasMore.value = page.length === scanPageSize;
     } catch {
-      if (current()) options.onError("历史任务读取失败，请重试");
+      if (current()) options.onError(tr("历史任务读取失败，请重试", "Failed to load older tasks; try again"));
     } finally {
       if (current()) scanLoadingMore.value = false;
     }

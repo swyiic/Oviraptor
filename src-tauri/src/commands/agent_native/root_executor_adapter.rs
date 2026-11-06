@@ -191,7 +191,7 @@ impl RootControlledAdapter for NativeRootControlledAdapter<'_> {
             )
             .map_err(|e| e.to_string())?
             .len();
-            if bytes > 96 * 1024 {
+            if bytes > root_local_context_byte_ceiling(prepared.client.profile()) {
                 return Err("root_local_context_limit".into());
             }
             let output = prepared
@@ -457,11 +457,16 @@ impl RootControlledAdapter for NativeRootControlledAdapter<'_> {
             .ok_or_else(|| self.stop("root_local_original_calls_missing".into()))?
             .count();
         self.calls_used += count;
-        if self.calls_used > 4 {
+        // Strix-era micro-limits (4 local calls / 3 react rounds) lifted to
+        // catastrophe backstops only. The real floor is the hard token/request
+        // ceiling (e.g. 900k/22), which is unchanged and agent-unreachable, so the
+        // root may now orchestrate a full multi-child pipeline and conclude within
+        // that fixed envelope instead of being cut off mid-orchestration.
+        if self.calls_used > 12 {
             return Err(self.stop("root_local_call_limit".into()));
         }
         self.history.push(receipt);
-        if self.history.len() == 3 {
+        if self.history.len() >= 12 {
             return Err(self.stop("root_local_react_round_limit".into()));
         }
         Ok(RootControlledTextPolicy::Continue(Vec::new()))
@@ -478,7 +483,12 @@ fn native_run_root_controlled_adapter(
     mut adapter: NativeRootControlledAdapter<'_>,
 ) -> Result<NativeCoordinatorTickReceipt, String> {
     let limits = crate::agent_runtime::controlled_executor::Limits {
-        rounds: 3,
+        // Per-tick coordinator deliberation budget. 3 was tuned for a strong model;
+        // a weaker local model (e.g. 27B/35B) needs more rounds to plan/coordinate,
+        // and running out here degraded bootstrap before the task could proceed.
+        // Raised to give the local model room; cost is bounded by the budget ledger
+        // (now effectively unlimited) and the wall-time / no-progress backstops.
+        rounds: 24,
         tools: None,
         calls_per_round: None,
         argument_bytes: None,

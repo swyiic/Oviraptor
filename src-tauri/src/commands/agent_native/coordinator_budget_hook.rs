@@ -119,7 +119,22 @@ fn native_coordinator_budget_before_executor(context: &AgentRunContext) -> Resul
         return Err("root_budget_step_not_bounded".into());
     }
     if suggestions.is_empty() {
-        return Err("root_budget_allocation_deferred".into());
+        // The allocation is bounded to exactly one step (frame.step(), enforced
+        // by the step-not-bounded check above): the model can only validly
+        // confirm that one step. The tick itself already passed require_executable
+        // + require_determinate + published above, so the allocation IS valid and
+        // actionable — only the model's suggestion *echo* came back empty, which
+        // is structured-output non-compliance (e.g. DeepSeek returning no
+        // suggestions), NOT a deliberate decline. Treating it as a fatal deferral
+        // strands the executor's already-reserved budget and leaves the scan with
+        // zero investigation (only passive recon). Proceed with the single bounded
+        // allocation instead — same spirit as the public-surface degrade. A
+        // genuinely different model choice would have been rejected above as
+        // root_budget_step_not_bounded, so this can only ever admit the one step.
+        append_runner_log(
+            &context.log_path,
+            "原预算分配决策返回空建议；按唯一受限步骤放行、不再推迟(执行器将使用已预留预算调查)",
+        );
     }
     // Publication permits only this original allocation, no reserve/lease/scope mutation.
     tx.commit().map_err(|e| e.to_string())

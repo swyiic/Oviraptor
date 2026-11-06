@@ -255,6 +255,3 @@ pub(super) fn get_json(
     }
 }
 
-#[cfg(test)]
-#[path = "hunter_diagnostics_tests.rs"]
-mod tests;

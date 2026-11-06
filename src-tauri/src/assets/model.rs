@@ -120,6 +120,11 @@ pub struct StartJobInput {
     pub pipeline: String,
     #[serde(default)]
     pub reprobe_scope: Option<ReprobeScope>,
+    // Per-collection override for the incremental toggle. Some(true) only runs
+    // queries not already completed for the project; Some(false) forces a full
+    // re-collection; None leaves the configured setting untouched.
+    #[serde(default)]
+    pub incremental: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

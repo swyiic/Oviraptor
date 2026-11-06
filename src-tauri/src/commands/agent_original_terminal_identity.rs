@@ -18,17 +18,6 @@ impl OriginalAgentTerminalIdentity {
             root_run_id: None,
         }
     }
-    #[cfg(test)]
-    fn capture(context: &AgentRunContext) -> Self {
-        let mut original = Self::pending(
-            &context.db_path,
-            &context.scan_id,
-            context.attempt_number,
-            &context.target_url,
-        );
-        original.bind_root(context).unwrap();
-        original
-    }
     fn bind_root(&mut self, context: &AgentRunContext) -> Result<(), String> {
         if self.db_path != context.db_path
             || self.scan_id != context.scan_id
@@ -158,75 +147,5 @@ fn runtime_report_for_attempt(
 
 // Historical production-entry test callers choose a scope explicitly here only.
 // The live pipeline cannot call these current-attempt lookup wrappers.
-#[cfg(test)]
-fn current_terminal_identity_for_test(
-    path: &Path,
-    scan: &str,
-    route: &FrontendRoute,
-) -> OriginalAgentTerminalIdentity {
-    let report = runtime_report(path, scan, route);
-    let root=db::open(path).ok().and_then(|db| {
-        let mut q=db.prepare("SELECT id FROM agent_runs WHERE scan_id=?1 AND attempt_number=?2 AND target_url=?3 AND role='coordinator'").ok()?;
-        let rows=q.query_map(params![scan,report.attempt_number,route.url],|r|r.get::<_,String>(0)).ok()?.collect::<rusqlite::Result<Vec<_>>>().ok()?;
-        match rows.as_slice() {[id]=>Some(id.clone()),_=>None}
-    });
-    let mut original =
-        OriginalAgentTerminalIdentity::pending(path, scan, report.attempt_number, &route.url);
-    original.root_run_id = root;
-    original
-}
-#[cfg(test)]
-fn runtime_open_run(path: &Path, scan: &str, route: &FrontendRoute) -> Option<AgentRunLedger> {
-    runtime_open_run_for_attempt(
-        path,
-        scan,
-        route,
-        runtime_report(path, scan, route).attempt_number,
-    )
-}
-#[cfg(test)]
-fn record_runtime_terminal_facts_checked(
-    path: &Path,
-    scan: &str,
-    route: &FrontendRoute,
-    outcome: &AgentTargetOutcome,
-) -> Result<Option<crate::agent_runtime::reducer::Reduction>, String> {
-    record_runtime_terminal_facts_original(
-        path,
-        scan,
-        route,
-        &current_terminal_identity_for_test(path, scan, route),
-        outcome,
-    )
-}
-#[cfg(test)]
-fn record_agent_target_outcome(
-    path: &Path,
-    scan: &str,
-    route: &FrontendRoute,
-    outcome: AgentTargetOutcome,
-    tally: &mut AgentPipelineTally,
-) -> bool {
-    record_agent_target_outcome_original(
-        path,
-        scan,
-        route,
-        &current_terminal_identity_for_test(path, scan, route),
-        outcome,
-        tally,
-    )
-    .unwrap_or(false)
-}
 
 // Test barrier at the actual production post-publication boundary; no behavior shim.
-#[cfg(test)]
-thread_local! {
-    static ORIGINAL_TERMINAL_LEGACY_PAUSE: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = std::cell::RefCell::new(None);
-}
-#[cfg(test)]
-fn original_terminal_legacy_test_pause() {
-    let pause = ORIGINAL_TERMINAL_LEGACY_PAUSE.with(|slot| slot.borrow_mut().take());
-    if let Some(pause) = pause {
-        pause();
-    }
-}

@@ -6,8 +6,6 @@
 use super::contract::{
     AgentBackendKind, AgentEventKind, AgentRole, AgentRunStatus, TerminalSignals,
 };
-#[cfg(test)]
-use super::reducer;
 use super::store;
 use rusqlite::Connection;
 
@@ -233,61 +231,6 @@ pub fn open_run(connection: &Connection, report: &BackendReport) -> Result<Strin
     Ok(id)
 }
 
-/// Append what happened, then let the reducer decide the terminal state. `None`
-/// means the attempt is still open and the run row keeps waiting for a resume.
-#[cfg(test)]
-pub fn close_run(
-    connection: &Connection,
-    run_id: &str,
-    report: &BackendReport,
-) -> Result<Option<reducer::Reduction>, String> {
-    if report.usage.total_tokens > 0 || report.usage.model_requests > 0 {
-        store::settle_usage(connection, run_id, &report.usage)?;
-    }
-    if !report.covered_families.is_empty() {
-        store::append_event(
-            connection,
-            run_id,
-            AgentEventKind::CoverageUpdated,
-            &serde_json::json!({"families": report.covered_families}),
-            &[],
-        )?;
-    }
-    if let Some(signal) = &report.protection_signal {
-        store::append_event(
-            connection,
-            run_id,
-            AgentEventKind::ProtectionDetected,
-            &serde_json::json!({"signal": signal}),
-            &[],
-        )?;
-    }
-    let mut state = snapshot(run_id, report);
-    if report.resumable
-        && report.request_reconciliation_required.is_none()
-        && report.execution_authorization_denied.is_none()
-    {
-        // Persist the boundary without a terminal state: recovery replays from
-        // here on the next attempt of the same run.
-        super::checkpoint::write_checkpoint(connection, &state)?;
-        store::set_run_status(
-            connection,
-            run_id,
-            if report.cancelled {
-                super::contract::AgentRunStatus::Paused
-            } else {
-                super::contract::AgentRunStatus::Running
-            },
-        )?;
-        return Ok(None);
-    }
-    let reduction = reducer::commit(connection, run_id, &report.signals())?;
-    state.terminal = Some(reduction.state);
-    state.terminal_code = reduction.code.clone();
-    // Persist a snapshot boundary so recovery replays only newer events (§11).
-    super::checkpoint::write_checkpoint(connection, &state)?;
-    Ok(Some(reduction))
-}
 
 /// The deterministic snapshot of what the backend reported so far.
 pub(super) fn snapshot(run_id: &str, report: &BackendReport) -> super::checkpoint::RunState {

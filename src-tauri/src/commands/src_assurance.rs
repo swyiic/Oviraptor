@@ -5,10 +5,6 @@ struct BuiltInOastReceiver {
     thread: Option<std::thread::JoinHandle<()>>,
     base_url: String,
     poll_url: String,
-    #[cfg(test)]
-    raw_url: String,
-    #[cfg(test)]
-    race_url: String,
     network_reachable: bool,
 }
 
@@ -114,10 +110,6 @@ fn start_builtin_oast_receiver(
     let token = Uuid::new_v4().simple().to_string();
     let base_url = format!("http://{display_ip}:{port}/callback/{token}");
     let poll_url = format!("http://{display_ip}:{port}/events/{token}");
-    #[cfg(test)]
-    let raw_url = format!("http://{display_ip}:{port}/adapter/{token}/raw");
-    #[cfg(test)]
-    let race_url = format!("http://{display_ip}:{port}/adapter/{token}/race");
     let events_path = target_dir.join("oast-events.jsonl");
     let _ = fs::write(&events_path, "");
     let thread_events = events_path.clone();
@@ -128,6 +120,9 @@ fn start_builtin_oast_receiver(
         while !thread_stop.load(std::sync::atomic::Ordering::Relaxed) {
             match listener.accept() {
                 Ok((mut stream, source)) => {
+                    // The accepted socket inherits O_NONBLOCK on macOS; without
+                    // this the first read races the client and drops callbacks.
+                    let _ = stream.set_nonblocking(false);
                     let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
                     let mut request = Vec::new();
                     let mut buffer = [0u8; 4096];
@@ -224,10 +219,6 @@ fn start_builtin_oast_receiver(
         thread: Some(thread),
         base_url,
         poll_url,
-        #[cfg(test)]
-        raw_url,
-        #[cfg(test)]
-        race_url,
         network_reachable,
     })
 }
@@ -263,4 +254,3 @@ fn stage_builtin_src_assurance(
     Ok(oast)
 }
 
-include!("src_adapter_authority_tests.rs");

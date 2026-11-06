@@ -12,8 +12,6 @@ use super::secrets::redact_json;
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde_json::Value as JsonValue;
 use sha2::{Digest, Sha256};
-#[cfg(test)]
-use std::collections::BTreeSet;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -295,7 +293,7 @@ pub(crate) fn record_attempt_plan_with_declarations_and_tool_configuration(
 }
 
 #[derive(Clone,Copy)]
-enum ModeFinancialCreation<'a> {New(Option<&'a crate::tool_supply::ToolAdministratorConfiguration>), #[cfg(test)] HistoricalFixture}
+enum ModeFinancialCreation<'a> {New(Option<&'a crate::tool_supply::ToolAdministratorConfiguration>), }
 
 #[allow(clippy::too_many_arguments)]
 fn record_attempt_plan_with_declarations_on(
@@ -349,7 +347,6 @@ fn record_attempt_plan_with_declarations_on(
     }
     let mut mode_writer=mode_declaration.map(|mode|match financial_creation {
         ModeFinancialCreation::New(_)=>super::web_mode::writer::ModeRootWriter::install(&transaction,mode,declaration),
-        #[cfg(test)] ModeFinancialCreation::HistoricalFixture=>super::web_mode::writer::ModeRootWriter::install_historical_for_test(&transaction,mode,declaration),
     }).transpose()?;
     // authorizer is one setter: choose exactly one writer, never nest them.
     let new_root_writer = declaration.filter(|_|mode_declaration.is_none())
@@ -406,10 +403,6 @@ fn record_attempt_plan_with_declarations_on(
         if let ModeFinancialCreation::New(Some(configuration)) = financial_creation {
             mode_writer.as_mut().ok_or("tool_supply_private_mode_required")?
                 .publish_tool_supply(&fresh, configuration)?;
-        }
-        #[cfg(test)]
-        if let Some(writer)=mode_writer.as_mut().filter(|_| matches!(financial_creation,ModeFinancialCreation::New(None))) {
-            crate::tool_supply::frozen_plan::tests::capture_original_fresh_root_for_test(&fresh,writer)?;
         }
     } else {
         for (id, stored_json, _, _, _) in &existing {
@@ -642,27 +635,6 @@ pub fn find_run(
         })
 }
 
-/// Additive only: budgets and usage are never overwritten by a backend.
-/// Write the cumulative spend of a run. The close-out can be replayed after a
-/// resume, so the row converges on the reported total instead of adding the same
-/// spend a second time.
-#[cfg(test)]
-pub fn settle_usage(
-    connection: &Connection,
-    run_id: &str,
-    usage: &UsageDelta,
-) -> Result<(), String> {
-    let changed = connection.execute(
-        "UPDATE agent_runs SET used_tokens=?1,used_cached_tokens=?2,used_requests=?3,updated_at=datetime('now','localtime') WHERE id=?4 AND backend='native' AND status<>'legacy_backend_removed'",
-        params![usage.total_tokens, usage.cached_input_tokens, usage.model_requests, run_id],
-    )
-    .map_err(|error| error.to_string())?;
-    if changed == 1 {
-        Ok(())
-    } else {
-        Err("agent_run_not_active_native".into())
-    }
-}
 
 #[allow(dead_code)]
 pub fn renew_lease(connection: &Connection, run_id: &str, minutes: i64) -> Result<(), String> {
@@ -933,6 +905,50 @@ pub fn begin_tool_invocation(
     Ok(connection.last_insert_rowid())
 }
 
+/// Canonical input hash for a tool call — identical to what `begin_tool_invocation`
+/// records, so a loop check compares like with like.
+pub fn tool_input_hash(input: &JsonValue) -> String {
+    stable_hash(&redact_json(input).to_string())
+}
+
+/// Doom-loop detector: true when the last `threshold` recorded invocations for
+/// this run are ALL the same (tool_name, input_hash) — the signature of an agent
+/// re-issuing the identical call with nothing new to show for it. The current
+/// call is already recorded as the newest row when this runs, so `threshold`
+/// identical in a row means the current call is the `threshold`-th repeat. Only
+/// Web tool_invocations are considered (source receipts live elsewhere), which is
+/// exactly where the runaway replay loops happen.
+pub fn tool_loop_repeat_tripped(
+    connection: &Connection,
+    run_id: &str,
+    tool_name: &str,
+    input_hash: &str,
+    threshold: usize,
+) -> Result<bool, String> {
+    if threshold < 2 {
+        return Ok(false);
+    }
+    let mut statement = connection
+        .prepare(
+            "SELECT tool_name, input_hash FROM tool_invocations WHERE run_id=?1 ORDER BY id DESC LIMIT ?2",
+        )
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map(params![run_id, threshold as i64], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|error| error.to_string())?;
+    let mut count = 0usize;
+    for row in rows {
+        let (name, hash) = row.map_err(|error| error.to_string())?;
+        if name != tool_name || hash != input_hash {
+            return Ok(false);
+        }
+        count += 1;
+    }
+    Ok(count >= threshold)
+}
+
 /// Phase 2 §4.2 step 5: the deterministic end state of one call, with the response
 /// artifact it produced. Only after this may the result travel back to the model.
 pub fn finish_tool_invocation(
@@ -971,48 +987,7 @@ pub fn mark_interrupted_tool_invocations(
         .map_err(|error| error.to_string())
 }
 
-#[cfg(test)]
-pub fn contract_without_result(
-    connection: &Connection,
-    run_id: &str,
-) -> Result<BTreeSet<String>, String> {
-    let mut statement = connection
-        .prepare(
-            "SELECT DISTINCT contract_key FROM tool_invocations WHERE run_id=?1 AND contract_key<>'' AND status NOT IN ('confirmed','rejected','exhausted','insufficient_evidence')",
-        )
-        .map_err(|error| error.to_string())?;
-    let rows = statement
-        .query_map([run_id], |row| row.get::<_, String>(0))
-        .map_err(|error| error.to_string())?;
-    Ok(rows.flatten().collect())
-}
 
-#[cfg(test)]
-pub fn mark_run_terminal(
-    connection: &Connection,
-    run_id: &str,
-    state: TerminalState,
-    code: &str,
-    reason: &str,
-) -> Result<bool, String> {
-    let changed = connection
-        .execute(
-            "UPDATE agent_runs SET status='terminal',terminal_reason=?2,terminal_code=?3,terminal_state=?4,finished_at=datetime('now','localtime'),updated_at=datetime('now','localtime') WHERE id=?1 AND status<>'terminal'",
-            params![run_id, reason, code, state.as_str()],
-        )
-        .map_err(|error| error.to_string())?;
-    if changed == 0 {
-        return Ok(false);
-    }
-    let _ = append_event(
-        connection,
-        run_id,
-        AgentEventKind::TerminalReduced,
-        &serde_json::json!({"terminal": state.as_str(), "code": code, "reason": reason}),
-        &[],
-    );
-    Ok(true)
-}
 
 /// Content-addressed artifact store (§12). Only the id is ever persisted in a
 /// message or event; the bytes stay on disk. The Phase 2 broker writes the first
@@ -1050,15 +1025,66 @@ pub fn read_artifact(root: &Path, id: &str) -> Option<Vec<u8>> {
 }
 
 // Genuine pre-finance creator semantics, only for historical fixture contracts.
-#[cfg(test)]
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn record_historical_mode_plan_for_test(
-    db:&Connection,scan:&str,attempt:i64,target:&str,
-    backend:AgentBackendKind,hash:&str,plan:&JsonValue,
-    mode:&super::web_mode::root::NewRootModeDeclaration,
-)->Result<(),String> {
-    record_attempt_plan_with_declarations_on(db,scan,attempt,target,backend,hash,plan,None,Some(mode),ModeFinancialCreation::HistoricalFixture)
-}
 
 mod source_root;
 pub(crate) use source_root::{SourceRootInsertion,NewlyInsertedSourceRoot};
+
+#[cfg(test)]
+mod doom_loop_tests {
+    use super::tool_loop_repeat_tripped;
+    use rusqlite::Connection;
+
+    fn db() -> Connection {
+        let c = Connection::open_in_memory().unwrap();
+        c.execute_batch(
+            "CREATE TABLE tool_invocations(id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT, tool_name TEXT, input_hash TEXT);",
+        )
+        .unwrap();
+        c
+    }
+    fn insert(c: &Connection, run: &str, tool: &str, hash: &str) {
+        c.execute(
+            "INSERT INTO tool_invocations(run_id,tool_name,input_hash) VALUES(?1,?2,?3)",
+            rusqlite::params![run, tool, hash],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn trips_on_third_identical_in_a_row() {
+        let c = db();
+        insert(&c, "r", "replay_http", "h1");
+        assert!(!tool_loop_repeat_tripped(&c, "r", "replay_http", "h1", 3).unwrap());
+        insert(&c, "r", "replay_http", "h1");
+        assert!(!tool_loop_repeat_tripped(&c, "r", "replay_http", "h1", 3).unwrap());
+        insert(&c, "r", "replay_http", "h1");
+        assert!(tool_loop_repeat_tripped(&c, "r", "replay_http", "h1", 3).unwrap());
+    }
+
+    #[test]
+    fn different_input_breaks_the_streak() {
+        let c = db();
+        insert(&c, "r", "replay_http", "h1");
+        insert(&c, "r", "replay_http", "h1");
+        insert(&c, "r", "replay_http", "h2"); // newest differs
+        assert!(!tool_loop_repeat_tripped(&c, "r", "replay_http", "h2", 3).unwrap());
+    }
+
+    #[test]
+    fn different_tool_breaks_the_streak() {
+        let c = db();
+        insert(&c, "r", "replay_http", "h1");
+        insert(&c, "r", "inspect_evidence", "h1");
+        insert(&c, "r", "replay_http", "h1"); // newest, but middle row differs
+        assert!(!tool_loop_repeat_tripped(&c, "r", "replay_http", "h1", 3).unwrap());
+    }
+
+    #[test]
+    fn other_runs_do_not_count() {
+        let c = db();
+        insert(&c, "other", "replay_http", "h1");
+        insert(&c, "other", "replay_http", "h1");
+        insert(&c, "r", "replay_http", "h1");
+        assert!(!tool_loop_repeat_tripped(&c, "r", "replay_http", "h1", 3).unwrap());
+    }
+}

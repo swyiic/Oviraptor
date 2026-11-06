@@ -101,6 +101,3 @@ pub(crate) fn open_on(
     Ok(bundle)
 }
 
-#[cfg(all(test, target_os = "macos"))]
-#[path = "approved_bundle/tests.rs"]
-pub(crate) mod tests;

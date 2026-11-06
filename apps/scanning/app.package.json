@@ -2,7 +2,7 @@
   "manifest": {
     "schemaVersion": 1,
     "id": "org.oviraptor.scanning",
-    "version": "1.4.1",
+    "version": "1.4.3",
     "hostApi": "^1.0.0",
     "entry": "worker.mjs",
     "dataSchemaVersion": 1,
@@ -201,10 +201,92 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 128
-            }
+            },
+            "attemptNumber": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+            "bindingVersion": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
           },
           "required": [
             "taskId"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "scan_fingerprint_search",
+        "permission": "investigation.read",
+        "description": "只读搜索当前项目已有扫描任务关联的公共内置指纹参考。必须使用真实taskId；scope=bundled-defaults，不含用户覆盖、暴露检查或文件路径。query按名称、ID和条件文本匹配，默认10条最多20条；继续nextOffset时保留query并提交catalogRevision。结果只是识别规则，不是目标命中或漏洞，不发目标请求。",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "taskId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "query": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 5000
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 20
+            },
+            "catalogRevision": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            }
+          },
+          "required": [
+            "taskId",
+            "query"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "scan_fingerprint_read",
+        "permission": "investigation.read",
+        "description": "只读读取已知fingerprintId的完整公共内置规则，保留AND/OR条件树。必须带当前项目真实taskId；不含用户覆盖、主动暴露规则或配置路径。content是UTF-8 JSON字节页，默认/最多4096字节，按nextOffset与catalogRevision继续；sha256对应完整content字节，未读完不能声称完整读取。无目标请求，不授予执行或新增范围。",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "taskId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "fingerprintId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "offset": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 5242880
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4096
+            },
+            "catalogRevision": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64
+            }
+          },
+          "required": [
+            "taskId",
+            "fingerprintId"
           ],
           "additionalProperties": false
         }
@@ -220,7 +302,9 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 128
-            }
+            },
+            "attemptNumber": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+            "bindingVersion": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
           },
           "required": [
             "taskId"
@@ -239,11 +323,137 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 128
-            }
+            },
+            "attemptNumber": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+            "bindingVersion": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
           },
           "required": [
             "taskId"
           ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "scan_continue_targets",
+        "permission": "investigation.execute",
+        "description": "在原尝试上继续排队中的 URL。只使用原 Root 剩余额度；缺工作目录、原额度或未决请求时不改任务状态，不新开额度，不重发 received_at 为空的请求。这不是 scan_resume。",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "taskId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "attemptNumber": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+            "bindingVersion": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
+          },
+          "required": [
+            "taskId"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "scan_bind",
+        "permission": "investigation.execute",
+        "description": "把当前会话绑定到已有 Nest 任务，作为结果回传目的地。会话由 Host 按本次运行自动确定，不需要也不能指定。不新建扫描，不授予执行权。",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "taskId": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "attemptNumber": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+            "bindingVersion": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
+          },
+          "required": ["taskId"],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "scan_reassociate_binding",
+        "permission": "investigation.execute",
+        "description": "原会话已删除或不属于本项目时，把该任务已有绑定改到当前会话。目的地由 Host 按本次运行自动确定，不另选会话。原会话仍属于本项目，或只是归档，则不改绑定。只移动尚未投出的回传，已投出的留在原会话。不发送消息，不投递，不新建扫描，不改状态、attempt、额度或执行权。",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "taskId": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "attemptNumber": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+            "bindingVersion": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
+          },
+          "required": ["taskId"],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "scan_command",
+        "permission": "investigation.execute",
+        "description": "把补充、暂停、取消或重新分析记到已绑定任务的当前 attempt。kind=supplement 记录当时的计划边界，不改写已完成目标，也不套用到后来的 attempt。kind=reanalyze 只保存分析范围，不新建扫描，不表示新的执行，也不能当成独立复核。同一幂等键重复提交返回原指令；载荷变化则拒绝。状态停在已接受，不表示已经执行。",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "taskId": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "idempotencyKey": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "kind": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "payload": { "type": "string", "minLength": 1, "maxLength": 4000 },
+            "attemptNumber": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+            "bindingVersion": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
+          },
+          "required": ["taskId", "idempotencyKey", "kind", "payload"],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "scan_command_ack",
+        "permission": "investigation.execute",
+        "description": "查询执行方是否已经领取指令。已送达只由执行方写入：补充进入 Coordinator 队列、暂停或取消经执行控制生效后才会出现；尚未领取时返回 command_not_claimed_by_executor，本调用不会改变状态。",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "commandId": { "type": "string", "minLength": 1, "maxLength": 128 }
+          },
+          "required": ["commandId"],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "scan_review",
+        "permission": "investigation.execute",
+        "description": "记下独立复核结论。reviewerId 必须是本任务中已完成复核请求的 evidence_reviewer 运行 ID，outcome 必须与该次复核结论一致（passed 对应 confirmed）；自填的名字会被拒绝。outcome=passed 只记录通过意见，不标成已验证。outcome=failed 记为验证失败。不新建扫描。",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "commandId": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "reviewerId": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "note": { "type": "string", "minLength": 1, "maxLength": 4000 },
+            "outcome": { "type": "string", "enum": ["passed", "failed"] }
+          },
+          "required": ["commandId", "reviewerId", "note", "outcome"],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "scan_verify",
+        "permission": "investigation.execute",
+        "description": "仅当已有独立复核记录时，把已执行指令标成已验证。没有复核记录则拒绝。不新建扫描。",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "commandId": { "type": "string", "minLength": 1, "maxLength": 128 }
+          },
+          "required": ["commandId"],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "scan_retry_delivery",
+        "permission": "investigation.execute",
+        "description": "把待投递结果重新送到原来绑定的会话。会话仍不可用时保持待投递。重复调用不新增消息，也不会发到别的会话。不新建扫描。",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "commandId": { "type": "string", "minLength": 1, "maxLength": 128 }
+          },
+          "required": ["commandId"],
           "additionalProperties": false
         }
       },
@@ -258,7 +468,9 @@
               "type": "string",
               "minLength": 1,
               "maxLength": 128
-            }
+            },
+            "attemptNumber": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+            "bindingVersion": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
           },
           "required": [
             "taskId"
@@ -288,7 +500,7 @@
       {
         "name": "scan_preflight",
         "permission": "investigation.read",
-        "description": "只读解析原生扫描 owner 当前保存的模型、任务预算和任务状态。不发送模型/目标请求，不授权执行，不验证网络或替代引擎准入检查。用于启动前检查，不可把 modelConfigured 当作任务已获准或已完成。",
+        "description": "只读读取同一 Nest 任务的启动前就绪清单 readiness。model/targets 为 blocked 时 startBlocked=true，不要再调用 scan_start。tools、broker、network 为 unchecked 表示未检查。browser、sandbox、uploadRole、concurrencyRole 为 unavailable 表示能力不存在，HTTP 回放不是浏览器验证。不发送模型或目标请求，不授权执行，engineAdmissionValidated=false 不是已准入。",
         "inputSchema": {
           "type": "object",
           "properties": {

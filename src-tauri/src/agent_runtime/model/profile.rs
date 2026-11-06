@@ -34,10 +34,17 @@ pub struct GatewayProfile {
 
 /// Derive the exact options for both live requests and frozen request readers.
 /// This requires no provider, credential or mutable runtime state.
-pub(crate) fn bounded_wire_options(model: &str, max_output_tokens: Option<u64>) -> JsonValue {
-    if matches!(model, "deepseek-v4-flash" | "deepseek-v4-pro" | "deepseek-flash")
-        && max_output_tokens.is_some_and(|cap| cap > 0 && cap <= 2_048)
-    {
+pub(crate) fn bounded_wire_options(model: &str, _max_output_tokens: Option<u64>) -> JsonValue {
+    // The native agent path never stores or echoes the model's reasoning_content
+    // (see budget/root/model/tick/decision.rs). DeepSeek models default to
+    // thinking mode, which then rejects every multi-round request whose assistant
+    // history omits reasoning_content with HTTP 400 "reasoning_content ... must be
+    // passed back". That stalled the web executor after a single call on cloud
+    // DeepSeek (where max_output_tokens is None, so the old bounded-only guard did
+    // not fire). Disable thinking for any DeepSeek model on this path so the
+    // native executor can run its full multi-round investigation. Small bounded
+    // calls also needed this so the answer fits the completion reservation.
+    if model.to_ascii_lowercase().contains("deepseek") {
         serde_json::json!({"thinking":{"type":"disabled"}})
     } else {
         serde_json::json!({})

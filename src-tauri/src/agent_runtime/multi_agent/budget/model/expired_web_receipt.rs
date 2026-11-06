@@ -24,19 +24,11 @@ pub(crate) struct ExpiredWebFinancialProof {
     _idle: Vec<NativeInvocationOwner>,
 }
 impl ExpiredWebFinancialProof {
-    #[cfg(test)]
-    pub(crate) fn usage(&self) -> &UsageDelta {
-        &self.usage
-    }
     pub(crate) fn worker_attempt_id(&self) -> &str {
         &self.worker
     }
     pub(crate) fn expiry_receipt_id(&self) -> &str {
         &self.expiry_receipt
-    }
-    #[cfg(test)]
-    pub(crate) fn http_receipt_ids(&self) -> &[String] {
-        &self.http_receipts
     }
     pub(crate) fn fact(&self) -> JsonValue {
         json!({"schemaVersion":1,"purpose":"original_expired_web_financial_closure",

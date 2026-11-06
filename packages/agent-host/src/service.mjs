@@ -2,20 +2,27 @@ const settledWorkspaceExecutions = new WeakSet();
 import { proxyFetch } from './net-proxy.mjs';
 import { HostNetworkSettings } from './network-settings.mjs';
 import { createHash, randomUUID, randomBytes } from 'node:crypto';
-import { join } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readdir, stat, readFile } from 'node:fs/promises';
 import { existsSync, writeFileSync } from 'node:fs';
 import { HostStore, hostError, boundedText, RETRYABLE_HOST_CODES, deriveConversationTitle, isPlaceholderConversationTitle } from './store.mjs';
 import { desktopAssetDbPath, isDesktopAssetRead, DesktopAssetSynchronizer } from './desktop-assets.mjs';
 import { WORKSPACE_TOOL_SPECS, runWorkspaceTool, workspacePermission } from './workspace-tools.mjs';
+import { citedPathTokens, importCitedFiles } from './cited-files.mjs';
+import { citedHosts, importCitedPages, savePastedRequest } from './cited-pages.mjs';
+import { addHop, fileHops, formatChain, hopsFromTool, listHops } from './chain.mjs';
 import { AppManager } from './apps.mjs';
 import { ensureBundledApps, bundledAppsStatus } from './bundled-apps.mjs';
 import { shellCatalog as buildShellCatalog } from './shell-apps.mjs';
 import { buildDiscoverySummary, formatDiscoveryPromptBlock } from './discovery.mjs';
-import { formatMemoryPromptBlock, readConversationMemory, recordTurn, summarizeToolEvent, pinFact } from './memory.mjs';
+import { formatMemoryPromptBlock, readConversationMemory, recordTurn, summarizeToolEvent, pinFact, MEMORY_TOOL_SPECS, readProjectMemory, writeProjectMemoryEntry, forgetProjectMemory, formatProjectMemoryPromptBlock, readGlobalMemory, formatGlobalMemoryPromptBlock } from './memory.mjs';
+import { readApprovedResearchCards, formatResearchCardsPromptBlock } from './research-cards.mjs';
+import { allAgentTools, matchAgentTools, formatAgentToolsPromptBlock, recallAgentToolCode, AGENT_TOOL_RECALL_SPEC } from './agent-tools.mjs';
+import { JevConnector } from './jev-connector.mjs';
+import { FINDING_TOOL_SPECS, recordFindingFromTool } from './findings.mjs';
 import { ProviderStore, OpenAiCompatibleRuntime, truncateMcpResult } from './provider.mjs';
-import { buildTurnPrompt, exposureTaskIntent, discoveryAssistIntent, discoveryEnrichmentIntent, looksLikeDataQuestion, isProjectReadQuestion, isReadOnlyDataRequest, certificateTaskIntent, scanningTaskIntent, scanningHandoffIntent, humanizeToolTitle, normalizeAnswerMode, answerModeOptions, prefersResponsesApi, scrubSecrets } from './quality-prompt.mjs';
+import { buildTurnPrompt, exposureTaskIntent, discoveryAssistIntent, discoveryEnrichmentIntent, looksLikeDataQuestion, isProjectReadQuestion, isReadOnlyDataRequest, certificateTaskIntent, scanningTaskIntent, scanningHandoffIntent, humanizeToolTitle, normalizeAnswerMode, answerModeOptions, prefersResponsesApi, scrubSecrets, scrubbedModelText } from './quality-prompt.mjs';
 import {
   requestDeviceCode, pollDeviceCodeOnce, pollDeviceCodeUntilDone, normalizeOAuthTokens,
   publicDevicePending, refreshAccessToken, accessTokenIsExpiring, XAI_OAUTH,
@@ -24,6 +31,9 @@ import { buildPairedSkillsPreview, importPairedSkills as importPairedSkillsActio
 import { InsightLedger, openInsightInventoryDb, INSIGHT_INVENTORY_FILENAME, formatInsightDiffSummary } from './insight.mjs';
 import { ASSETS_APP_ID } from './legacy-bridge.mjs';
 import { ReadOnlySubagents, SUBAGENT_TOOL_SPECS } from './subagents.mjs';
+import { scanTaskConversation, scanTaskMapping, rememberScanTaskConversation, scanDeliveryProjects } from './scanning-tasks.mjs';
+import { reactionCandidate, decideReaction } from './scan-autoreact.mjs';
+import { SCANNING_APP_ID } from './legacy-bridge.mjs';
 import { VERIFIER_TOOL_SPECS, setTaskCriteria, verifyTask, assertAcceptance, acceptanceValid } from './task-verifier.mjs';
 import { TASK_TOOL_SPECS, argumentDigest, bindReconciliation, formatTaskPrompt, startTaskRun, finishTaskRun, startTaskEvidence, finishTaskEvidence, updateTask, readOnlyAnswerPresentation, readOnlyContinuationQuestion } from './tasks.mjs';
 import { buildTurnStopReport } from './turn-stop-report.mjs';
@@ -33,6 +43,8 @@ import { requestedBusinessTools } from './task-intent-permissions.mjs';
 import { previewIntent, intentReply, renderTaskReport, renderTaskReportHtml, createBudgetAllocation, bindExecutionPreset } from './workflow-guard.mjs';
 
 const RUNTIME_IDS = Object.freeze(['none', 'grok-acp', 'xai-api']);
+const SCAN_DELIVERY_INTERVAL_MS = 15000;
+const AUTO_REACT_TURN_TIMEOUT_MS = 90000; // an auto-triggered turn must not wedge its conversation
 
 function scrubbedToolBody(result) {
   const raw = JSON.stringify(result ?? null);
@@ -61,6 +73,8 @@ export class AgentHost {
     this.dataDir = dataDir; this.store = store ?? new HostStore(join(dataDir, 'host.sqlite'));
     this.desktopAssetSynchronizer = new DesktopAssetSynchronizer();
     this.apps = apps ?? new AppManager(this.store, join(dataDir, 'applications'));
+    // External MCP decision connector (jev-studio). Disabled by default; graceful.
+    this.jev = new JevConnector(this.store); this.jev.start().catch(() => {});
     this.runtimeFactory = runtimeFactory; this.providerStore = new ProviderStore(dataDir);
     this.networkStore = new HostNetworkSettings(dataDir, { ...(networkEnvironment ? { env: networkEnvironment } : {}) });
     this.networkTransportInjected = Boolean(providerFetch);
@@ -79,6 +93,7 @@ export class AgentHost {
     }
     this.runtime?.bindHost?.(this);
     this.onEvent = onEvent; this.runs = new Map(); this.permissions = new Map(); this.mcpScopes = new Map(); this.loadedSessions = new Map(); this.inflightEffects = new Map(); this.activeMcpCalls = new Set();
+    this.autoReacting = new Set(); // conversations with an auto-reaction turn in flight
     this.heartbeatMs = Number.isFinite(heartbeatMs) && heartbeatMs > 0 ? heartbeatMs : RUNTIME_HEARTBEAT_MS;
     this.apps.onActivity = event => this.emit({ type: 'application.activity', appId: event.appId, ...(typeof event.busy === 'boolean' ? { busy: event.busy } : {}) });
     this.runtimeRevision = Number(this.store.db.prepare("SELECT value FROM host_settings WHERE key='runtime_revision'").get()?.value ?? 1);
@@ -87,6 +102,136 @@ export class AgentHost {
     this.subagents = new ReadOnlySubagents(this);
     this.runtimeState = this.runtime ? 'configured' : 'unconfigured';
     this.runtimeEvidence = this.runtime?.evidence ?? (this.runtime?.command === 'grok' ? 'official-cli-unverified' : this.runtime ? 'synthetic-or-custom' : 'none');
+    if (this.apps.scanningTasks) {
+      // A stored delivery is a new message, not the end of a run.
+      this.apps.scanningTasks.onDelivered = meta => {
+        this.emit({ type: 'conversation.message', conversationId: meta.conversationId, message: { id: meta.messageId, role: 'assistant', content: meta.content, createdAt: meta.createdAt, status: 'completed', stopReason: 'scan_delivery' } });
+        // B2: a new Nest event may auto-trigger one bounded corrective turn —
+        // off unless OVIRAPTOR_AGENT_AUTOREACT is set. Fire-and-forget; #autoReact
+        // guards the switch, the active-run race and the B1 budget/circuit.
+        void this.#autoReact(meta);
+      };
+      this.scanDeliveryBackoff = new Map();
+      this.#startScanDeliveries();
+    }
+  }
+  // Results wait in the desktop outbox until stored here, so this loop also
+  // delivers what was produced while either process was down.
+  #startScanDeliveries() {
+    const run = () => { this.scanDeliveryRun = this.syncScanDeliveries().catch(() => {}); };
+    this.scanDeliveryTimer = setInterval(run, SCAN_DELIVERY_INTERVAL_MS);
+    this.scanDeliveryTimer.unref?.();
+    setTimeout(run, 1000).unref?.();
+  }
+  /**
+   * One pass over the projects that have a task bound to a Host conversation,
+   * while the scanning app is enabled. A failing project backs off up to five
+   * minutes; overlapping passes are skipped.
+   */
+  async syncScanDeliveries() {
+    if (this.scanDeliverySyncing || this.closing || !this.apps.scanningTasks?.available) return;
+    let enabled = false;
+    try { enabled = Boolean(this.store.application(SCANNING_APP_ID)?.enabled); } catch { enabled = false; }
+    if (!enabled) return;
+    this.scanDeliverySyncing = true;
+    try {
+      const now = Date.now();
+      for (const projectId of scanDeliveryProjects(this.store)) {
+        if (this.closing) break;
+        const backoff = this.scanDeliveryBackoff.get(projectId);
+        if (backoff && backoff.nextAt > now) continue;
+        try {
+          await this.apps.scanningTasks.sync(this.store, projectId);
+          this.scanDeliveryBackoff.delete(projectId);
+        } catch {
+          const failures = (backoff?.failures ?? 0) + 1;
+          this.scanDeliveryBackoff.set(projectId, { failures, nextAt: now + Math.min(300000, SCAN_DELIVERY_INTERVAL_MS * 2 ** failures) });
+        }
+      }
+    } finally { this.scanDeliverySyncing = false; }
+  }
+
+  /**
+   * One bounded, gated auto-reaction to a fresh Nest event. OFF unless the
+   * switch is on. Only reacts to Nest-origin events (worker state / task
+   * result), never to the agent's own command outcomes, so it cannot chase its
+   * own tail. Per conversation it is serialized and never overlaps an active
+   * run; every reaction is first cleared by the B1 budget/circuit. A corrective
+   * turn is a normal `send`, so cancellation, budget and permissions all apply.
+   */
+  async #autoReact(meta) {
+    if (this.closing || !reactionCandidate(meta).eligible) return;
+    const { conversationId, taskId, eventId } = meta;
+    const attemptNumber = Number(meta.attemptNumber);
+    if (this.runs.has(conversationId) || this.autoReacting.has(conversationId)) return;
+    this.autoReacting.add(conversationId);
+    try {
+      const decision = decideReaction(this.store.db, { taskId, attemptNumber, eventId });
+      if (!decision.react) return;
+      const unit = meta.correlation?.assignmentId || '-';
+      // Strictly read-only: an auto-triggered reaction analyzes and flags; any
+      // actual corrective write (scan_command / pause) is left for a human to
+      // approve. This keeps the loop safe and avoids a headless authorization wait.
+      const text = `【自动触发·只读】Nest 刚产生一条执行事件（${meta.kind}，执行单元 ${unit}）。只用 scan_status / scan_results 按 taskId=${taskId} 核对这条事件的最新状态，判断当前方向是否需要纠正。不要发起任何写操作或指令（不调用 scan_command / scan_pause 等）。若判断需要纠正，用一句话说明该对哪个执行单元（threadKey=${unit}）做什么，交由人确认；若无需干预，简要说明即可。`;
+      const result = await this.send(conversationId, { projectId: meta.projectId, text, nonInteractive: true });
+      // Bound the turn: never let an auto-triggered run hang the conversation.
+      // run.completion never rejects (send wraps it in .catch), so it resolves
+      // on success or handled error; only a true stall reaches the timeout, and
+      // then we cancel best-effort and free the slot (the finally's delete is
+      // identity-guarded, so a late finalize cannot clobber a newer run).
+      const run = result?.run?.id ? this.runs.get(conversationId) : null;
+      if (run && run.id === result.run.id && run.completion) {
+        let timer;
+        const timeout = new Promise(resolve => { timer = setTimeout(() => resolve('timeout'), AUTO_REACT_TURN_TIMEOUT_MS); timer.unref?.(); });
+        try {
+          if (await Promise.race([run.completion.then(() => 'done'), timeout]) === 'timeout') {
+            try { await this.cancel(conversationId); } catch { /* already gone */ }
+            if (this.runs.get(conversationId)?.id === run.id) this.runs.delete(conversationId);
+          }
+        } finally { clearTimeout(timer); }
+      }
+    } catch {
+      // A racing run or a transient send error: the reaction budget was spent,
+      // so this event is not retried — fail closed rather than loop.
+    } finally {
+      this.autoReacting.delete(conversationId);
+    }
+  }
+  /**
+   * The conversation a scan task reports to. An existing one is reopened;
+   * otherwise one is created and bound on the desktop, so later results of
+   * that task return to it.
+   */
+  async openScanTaskConversation(projectId, taskId) {
+    if (typeof taskId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(taskId)) throw hostError('host_tool_input_invalid', 400);
+    const project = this.store.project(projectId);
+    // Two quick clicks must not create two conversations for one task.
+    const key = `${project.id}:${taskId}`;
+    this.scanConversationOpening ??= new Map();
+    const pending = this.scanConversationOpening.get(key);
+    if (pending) return pending;
+    const opening = this.#openScanTaskConversation(project.id, taskId).finally(() => this.scanConversationOpening.delete(key));
+    this.scanConversationOpening.set(key, opening);
+    return opening;
+  }
+  async #openScanTaskConversation(projectId, taskId) {
+    const bind = async conversationId => {
+      try { await this.apps.scanningTasks.bindConversation(this.store, projectId, taskId, conversationId); return true; }
+      catch { return false; }
+    };
+    const mapping = scanTaskMapping(this.store, projectId, taskId);
+    const existing = scanTaskConversation(this.store, projectId, taskId);
+    if (existing) {
+      // An earlier bind that failed or timed out is retried on the same conversation.
+      const bound = mapping.bound || await bind(existing);
+      return { conversation: this.store.conversation(existing, projectId), created: false, bound };
+    }
+    const conversation = this.store.createConversation(projectId);
+    // Recorded before binding, so a bind that timed out but landed still has
+    // its conversation, and the next open reuses it instead of binding another.
+    rememberScanTaskConversation(this.store, projectId, taskId, conversation.id, false);
+    const bound = await bind(conversation.id);
+    return { conversation, created: true, bound };
   }
   runtimeIdentity() { return `${this.runtime ? this.runtimeId : 'none'}:${this.runtimeRevision}`; }
   #providerRuntime() {
@@ -230,9 +375,9 @@ export class AgentHost {
     if (this.runtimeId === 'xai-api') await this.setRuntime('xai-api', { force: true, preserveAuthorization: beforeRecipient===this.#permissionRecipient() });
     return { ...this.settings(), apiProvider: view };
   }
-  async selectProviderOAuth() {
+  async selectProviderOAuth(input = {}) {
     if (this.runs.size || this.runtimeChanging || this.oauthPending?.status === 'pending') throw hostError('host_runtime_busy', 409);
-    this.providerStore.selectOAuth();
+    this.providerStore.selectOAuth(input);
     if (this.runtimeId === 'xai-api') await this.setRuntime('xai-api', { force: true });
     return this.settings();
   }
@@ -263,7 +408,7 @@ export class AgentHost {
     this.oauthPoll = null;
   }
   /** Start RFC 8628 device-code login; host background-polls and stores tokens on success. */
-  async startProviderOAuth({ referrer = XAI_OAUTH.REFERRER, background = true } = {}) {
+  async startProviderOAuth({ referrer = XAI_OAUTH.REFERRER, background = true, activate = true } = {}) {
     if (this.runs.size || this.runtimeChanging) throw hostError('host_runtime_busy', 409);
     this.#cancelOAuthPoll(); this.oauthPending = null;
     const generation = this.oauthGeneration;
@@ -277,6 +422,7 @@ export class AgentHost {
     this.oauthPending = {
       ...device,
       status: 'pending',
+      activate: activate !== false,
       expires_at: expiresAt,
       started_at: Date.now(),
       interval_ms: Math.max((Number(device.interval) || 5) * 1000, XAI_OAUTH.MIN_INTERVAL_MS),
@@ -315,10 +461,11 @@ export class AgentHost {
     if (signal.aborted) return;
     const normalized = normalizeOAuthTokens(tokens);
     // Never log or emit raw tokens.
-    this.providerStore.saveOAuth(normalized);
+    const activate = this.oauthPending?.activate !== false;
+    this.providerStore.saveOAuth(normalized, { select: activate });
     this.oauthPending = { ...this.oauthPending, status: 'authorized', user_code: this.oauthPending?.user_code, verification_uri: this.oauthPending?.verification_uri, verification_uri_complete: this.oauthPending?.verification_uri_complete, expires_at: this.oauthPending?.expires_at };
     this.emit({ type: 'provider.oauth', status: 'authorized' });
-    await this.setRuntime('xai-api', { force: true });
+    if (activate || this.providerStore.read()?.authentication === 'oauth') await this.setRuntime('xai-api', { force: true });
     // Clear pending after success (keep short window for UI poll).
     this.oauthPending = { status: 'authorized', user_code: device.user_code, verification_uri: device.verification_uri, verification_uri_complete: device.verification_uri_complete, expires_at: Date.now() + 30_000 };
   }
@@ -327,7 +474,7 @@ export class AgentHost {
     const pending = this.oauthPending;
     if (!pending) {
       const view = this.providerStore.publicView();
-      return { status: view.oauthConfigured ? 'authorized' : 'idle', ...this.settings() };
+      return { status: view.oauthSaved ? 'authorized' : 'idle', ...this.settings() };
     }
     if (pending.status === 'authorized') return { status: 'authorized', ...this.settings() };
     if (pending.status !== 'pending') return { status: pending.status, error: pending.error, ...this.settings() };
@@ -344,10 +491,11 @@ export class AgentHost {
     if (generation !== this.oauthGeneration || this.oauthPending !== pending) throw hostError('host_oauth_cancelled', 409);
     if (result.status === 'authorized') {
       const normalized = normalizeOAuthTokens(result.tokens);
-      this.providerStore.saveOAuth(normalized);
+      const activate = pending.activate !== false;
+      this.providerStore.saveOAuth(normalized, { select: activate });
       this.oauthPending = { status: 'authorized', user_code: pending.user_code, verification_uri: pending.verification_uri, verification_uri_complete: pending.verification_uri_complete, expires_at: Date.now() + 30_000 };
       this.emit({ type: 'provider.oauth', status: 'authorized' });
-      await this.setRuntime('xai-api', { force: true });
+      if (activate || this.providerStore.read()?.authentication === 'oauth') await this.setRuntime('xai-api', { force: true });
       return { status: 'authorized', ...this.settings() };
     }
     if (result.status === 'pending') {
@@ -367,22 +515,33 @@ export class AgentHost {
     this.emit({ type: 'provider.oauth', status: 'logged_out' });
     return this.settings();
   }
-  /** Refresh OAuth access token when near expiry (or force=true after 401). Syncs runtime bearer. */
-  async ensureOAuthAccess({ force = false } = {}) {
-    const value = this.providerStore.read();
-    if (!value || value.authentication !== 'oauth' || !value.refreshToken) return value;
+  /** Shared login refresh: native tasks may use saved OAuth while chat uses API. */
+  async ensureSavedOAuthAccess({ force = false } = {}) {
+    const value = this.providerStore.readOAuth();
+    if (!value) throw hostError('host_oauth_not_configured', 401);
     const expiring = (value.expiresAt && value.expiresAt - Date.now() <= XAI_OAUTH.ACCESS_REFRESH_SKEW_MS)
       || accessTokenIsExpiring(value.accessToken);
     if (!force && !expiring) return value;
-    const fetchImpl = this.oauthFetch ?? proxyFetch;
-    const tokens = await refreshAccessToken(value.refreshToken, { fetch: fetchImpl });
-    this.providerStore.saveOAuth(normalizeOAuthTokens(tokens));
-    const next = this.providerStore.read();
-    const bearer = this.providerStore.bearer();
-    if (bearer && this.runtimeId === 'xai-api' && this.runtime?.config) {
-      this.runtime.config.apiKey = bearer;
+    if (!value.refreshToken) {
+      if (value.expiresAt && value.expiresAt <= Date.now()) throw hostError('host_oauth_expired', 401);
+      return value;
     }
-    return next;
+    if (!this.oauthRefresh) {
+      this.oauthRefresh = (async () => {
+        const tokens = await refreshAccessToken(value.refreshToken, { fetch: this.oauthFetch ?? proxyFetch });
+        const next = this.providerStore.refreshOAuth(normalizeOAuthTokens(tokens), value.accessToken);
+        if (this.providerStore.read()?.authentication === 'oauth' && this.runtimeId === 'xai-api' && this.runtime?.config) this.runtime.config.apiKey = next.accessToken;
+        return next;
+      })();
+    }
+    try { return await this.oauthRefresh; }
+    finally { this.oauthRefresh = null; }
+  }
+  /** Existing chat path keeps its selected authentication. */
+  async ensureOAuthAccess({ force = false } = {}) {
+    const value = this.providerStore.read();
+    if (!value || value.authentication !== 'oauth') return value;
+    return this.ensureSavedOAuthAccess({ force });
   }
   async ensureSkills() {
     if (this.skillAccess) return this.skillAccess;
@@ -538,6 +697,10 @@ export class AgentHost {
     if (remaining.length) this.#publishAuthorization(id);
   }
   accessPolicyView(projectId) { return this.accessPolicy.view(projectId); }
+  chain(conversationId, projectId) {
+    this.store.conversation(conversationId, projectId);
+    return listHops(this.store.db, conversationId);
+  }
   setAccessPolicy(input) {
     const policy=this.accessPolicy.set(input);
     for(const [conversationId,run] of this.runs){
@@ -556,7 +719,11 @@ export class AgentHost {
   }
   #policyCovers(conversationId,details) {
     const conversation=this.store.conversation(conversationId),policy=this.accessPolicy.view(conversation.projectId);
-    if(policy.mode!=='full'||details?.identity!==policy.runtimeIdentity||details.projectId!==conversation.projectId)return false;
+    // Both 'full' and 'auto' reach the per-permission check below; coverage is
+    // then decided entirely by this mode's workspacePermissions/apps, so 'auto'
+    // auto-covers only workspace read/run and no app (writes/apps still prompt),
+    // while 'full' covers its full set. 'ask' never covers anything.
+    if((policy.mode!=='full'&&policy.mode!=='auto')||details?.identity!==policy.runtimeIdentity||details.projectId!==conversation.projectId)return false;
     return Array.isArray(details.offers)&&details.offers.length>0&&details.offers.every(offer=>offer.permissions.length>0&&offer.permissions.every(item=>
       offer.appId==='workspace'?policy.workspacePermissions.includes(item.permission):policy.apps[offer.appId]?.includes(item.permission)&&this.store.application(offer.appId).enabled));
   }
@@ -615,12 +782,16 @@ export class AgentHost {
   }
   steer(conversationId, text) {
     const run = this.runs.get(String(conversationId));
-    if (!run || run.cancelled || !['starting','running'].includes(run.state)) throw hostError('host_reply_unavailable', 404);
-    const line = boundedText(text);
+    if (!run || run.cancelled || !['starting','running'].includes(run.state)) return { queued: false, reason: 'no_active_run' };
+    const raw = boundedText(text);
+    // One scrub of this interruption for the saved message. An empty scrub is not stored.
+    // The queue keeps the original so the model placement can scrub that same text once.
+    const line = scrubbedModelText(raw);
+    if (!line) return { queued: false };
     const message = this.store.acceptSteer(String(conversationId), run.id, line);
     if (!run.steer) run.steer = [];
     if (!run.steerMessageIds) run.steerMessageIds = [];
-    run.steer.push(line);
+    run.steer.push(raw);
     run.steerMessageIds.push(message.id);
     this.emit({ type: 'message.steer', conversationId: String(conversationId), runId: run.id, messageId: message.id, state: 'queued' });
     return { queued: true, message };
@@ -631,8 +802,13 @@ export class AgentHost {
     if (run) {
       this.store.deliverSteers(run.steerMessageIds ?? []);
       run.steer = []; run.steerMessageIds = [];
+      const kept = [];
+      for (const line of lines) {
+        const scrubbed = scrubbedModelText(line);
+        if (scrubbed) kept.push(scrubbed);
+      }
+      if (kept.length) run.userText = [run.userText, ...kept].filter(Boolean).join('\n');
       if (lines.length) {
-        run.userText = [run.userText, ...lines].filter(Boolean).join('\n');
         this.emit({ type: 'message.steer', conversationId: String(conversationId), runId: run.id, state: 'delivered' });
       }
     }
@@ -688,6 +864,41 @@ export class AgentHost {
     if (active && (!run || run.taskId !== parent.id || run.id !== input.parentRunId)) throw hostError('host_child_scope_unavailable', 409);
     if (active) { await this.subagents.stop(active, 'host_child_cancelled'); await active.completion; }
     return { task: this.task(conversationId, { taskId: parent.id, projectId: input.projectId }), childTask: this.task(conversationId, { taskId: child.id, projectId: input.projectId }) };
+  }
+  // Operator surface for the agent's workspace scripts/artifacts (restructure §F).
+  #agentWorkspaceRoot(conversationId) { const conversation = this.store.conversation(conversationId); return join(this.dataDir, 'workspaces', String(conversation.projectId), 'agent'); }
+  async workspaceFiles(conversationId) {
+    const root = this.#agentWorkspaceRoot(conversationId);
+    const out = [];
+    const walk = async (dir, rel) => {
+      if (out.length >= 500) return;
+      let entries; try { entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
+      for (const e of entries) {
+        if (e.name.startsWith('.')) continue;
+        const abs = join(dir, e.name), r = rel ? `${rel}/${e.name}` : e.name;
+        if (e.isDirectory()) { await walk(abs, r); }
+        else if (e.isFile()) { try { const st = await stat(abs); out.push({ path: r, bytes: st.size, modifiedAt: st.mtime.toISOString() }); } catch { /* skip */ } }
+        if (out.length >= 500) break;
+      }
+    };
+    await walk(root, '');
+    return out.sort((a, b) => a.path.localeCompare(b.path));
+  }
+  async workspaceFileContent(conversationId, relPath) {
+    const root = this.#agentWorkspaceRoot(conversationId);
+    const abs = resolve(root, String(relPath || ''));
+    if (abs !== root && !abs.startsWith(root + sep)) throw hostError('host_workspace_path_denied', 403);
+    const st = await stat(abs).catch(() => null);
+    if (!st || !st.isFile()) throw hostError('host_workspace_path_denied', 404);
+    const MAX = 2 * 1024 * 1024;
+    const text = (await readFile(abs, 'utf8'));
+    return { path: relPath, bytes: st.size, truncated: text.length > MAX, content: text.slice(0, MAX) };
+  }
+  attachConversationToWorkspace(conversationId, projectId) {
+    if (this.runs.has(conversationId) || [...this.inflightEffects.values()].some(effect => effect.conversationId === conversationId)) throw hostError('host_reply_already_running', 409);
+    const updated = this.store.attachConversation(conversationId, projectId);
+    this.emit({ type: 'conversation.attached', conversationId, projectId: Number(projectId) });
+    return updated;
   }
   deleteConversation(conversationId, projectId) {
     if (this.runs.has(conversationId) || [...this.inflightEffects.values()].some(effect => effect.conversationId === conversationId)) throw hostError('host_reply_already_running', 409);
@@ -772,11 +983,25 @@ export class AgentHost {
   }
   recordSummary(projectId, conversationId, { sourceIds = [], body = '' } = {}) {
     const project = projectId ?? this.store.conversation(conversationId).projectId;
-    return this.store.saveSummaryVersion({ id: randomUUID(), projectId: project, conversationId, sourceIds, body: String(body).slice(0, 4000) });
+    // Summary rows are memory and are returned by recall. Scrub before the
+    // length cut so a truncated prefix cannot keep a credential. An empty
+    // scrub is dropped; the raw body is not stored.
+    const scrubbed = scrubbedModelText(String(body ?? '')).slice(0, 4000);
+    if (!scrubbed) return null;
+    const safeIds = (Array.isArray(sourceIds) ? sourceIds : []).flatMap(id => {
+      const text = scrubbedModelText(String(id ?? '')).slice(0, 240);
+      return text ? [text] : [];
+    }).slice(0, 32);
+    return this.store.saveSummaryVersion({ id: randomUUID(), projectId: project, conversationId, sourceIds: safeIds, body: scrubbed });
   }
   addHumanReview(conversationId, { projectId, taskId, reportVersion, note }) {
     const task = this.task(conversationId, { projectId, taskId });
-    return this.store.addHumanReview({ id: randomUUID(), projectId: task.projectId, taskId: task.id, reportVersion, note });
+    // Review notes are stored and returned. Scrub before the length cut so a
+    // truncated prefix cannot keep a credential. An empty scrub is rejected;
+    // the raw note is not stored or returned. Empty notes stay rejected.
+    const scrubbed = scrubbedModelText(String(note ?? '')).slice(0, 500);
+    if (!scrubbed) throw hostError('host_text_invalid');
+    return this.store.addHumanReview({ id: randomUUID(), projectId: task.projectId, taskId: task.id, reportVersion, note: scrubbed });
   }
   taskReport(conversationId, { projectId, taskId, format = 'markdown' } = {}) {
     const task = this.task(conversationId, { projectId, taskId });
@@ -799,9 +1024,10 @@ export class AgentHost {
     if (this.runs.has(conversationId)) throw hostError('host_reply_already_running', 409);
     if ([...this.inflightEffects.values()].some(effect => effect.conversationId === conversationId)) throw hostError('host_task_effect_pending', 409);
     const text = boundedText(input.text);
+    const loggedText = scrubbedModelText(text);
     const intent = previewIntent(text);
     if (intent) {
-      const userMessage = this.store.addMessage(conversationId, 'user', text);
+      const userMessage = this.store.addMessage(conversationId, 'user', loggedText);
       const note = intentReply(intent, input.confirmedIntent);
       const assistant = this.store.addMessage(conversationId, 'assistant', note, 'completed');
       this.store.finishMessage(assistant.id, note, 'completed', { stopReason: 'intent_preview', outcomeUnknown: false });
@@ -812,14 +1038,15 @@ export class AgentHost {
     if (task?.parentTaskId) throw hostError('host_child_scope_unavailable', 403);
     if (!task || (task.status === 'completed' && input.taskId === undefined)) task = this.store.createTask(conversationId, text);
     if (!conversation.titleManuallySet && isPlaceholderConversationTitle(conversation.title)) {
-      const titled = this.store.updateConversationTitle(conversation.id, deriveConversationTitle(text));
+      const titled = this.store.updateConversationTitle(conversation.id, deriveConversationTitle(loggedText));
       conversation.title = titled.title;
       this.emit({ type: 'conversation.updated', conversationId: conversation.id, projectId: conversation.projectId, title: titled.title, metadataRevision: titled.metadataRevision });
     }
-    const userMessage = this.store.addMessage(conversationId, 'user', text);
+    const userMessage = this.store.addMessage(conversationId, 'user', loggedText);
     const runUserMessageId = userMessage.id;
     if (!this.runtime) return { userMessage, task, runtime: { state: 'unconfigured' }, savedOnly: true };
     const run = { id: randomUUID(), conversationId, taskId: task.id, sessionId: null, userMessageId: runUserMessageId, state: 'starting', text: '', started: performance.now() };
+    run.nonInteractive = input.nonInteractive === true; // auto-triggered turns never block on a human authorization answer
     run.message = this.store.addMessage(conversationId, 'assistant', '', 'running', run.id);
     task = this.store.saveTask(startTaskRun(task, run));
     this.runs.set(conversationId, run);
@@ -831,6 +1058,12 @@ export class AgentHost {
   }
   async #run(conversation, text, run) {
     let status = 'failed';
+    // Silent unless OVIRAPTOR_RUN_TRACE is set: marks each pre-model stage so a
+    // stalled turn can be localized (which await never returns) without a debugger.
+    const trace = process.env.OVIRAPTOR_RUN_TRACE
+      ? stage => { try { process.stderr.write(`[run-trace] ${stage} conv=${conversation.id} run=${run.id}\n`); } catch { /* ignore */ } }
+      : () => {};
+    trace('enter');
     run.lastEventAt = new Date().toISOString();
     const heartbeat = setInterval(() => {
       if (!this.isCurrentRun(run)) return;
@@ -850,6 +1083,7 @@ export class AgentHost {
       if (run.cancelled) throw hostError('host_reply_cancelled');
       run.skillScope = skills.capture(conversation.id);
       await this.runtime.start(); this.runtimeState = 'ready';
+      trace('runtime_started');
       if (run.cancelled) throw hostError('host_reply_cancelled');
       skills.validate(conversation.id, run.skillScope);
       const cwd = join(this.dataDir, 'workspaces', String(conversation.projectId));
@@ -876,6 +1110,7 @@ export class AgentHost {
         if (!run.sessionId) throw hostError('host_runtime_session_invalid');
         this.store.session(conversation.id, run.sessionId);
       }
+      trace('session_ready');
       if (resumeCold && typeof this.runtime.seedTranscriptIfEmpty === 'function') {
         const prior = this.store.messages(conversation.id, conversation.projectId)
           .filter(row => row.id !== run.userMessageId && row.id !== run.message?.id && row.status !== 'running' && row.stopReason !== 'steer_interrupted')
@@ -888,7 +1123,7 @@ export class AgentHost {
             runId: run.id,
             phase: 'model',
             phaseLabel: '正在把前文交给新模型',
-            goal: text,
+            goal: scrubbedModelText(text),
             facts: [],
             hypotheses: [],
             compressed: false,
@@ -898,6 +1133,7 @@ export class AgentHost {
       }
       this.loadedSessions.set(run.sessionId, this.runtime.status.pid);
       if (run.cancelled) throw hostError('host_reply_cancelled');
+      trace('model_loop');
       run.state = 'running'; this.emit({ type: 'runtime.status', conversationId: conversation.id, runId: run.id, state: 'running' });
       const project = this.store.project(conversation.projectId);
       let authorizationContext;
@@ -908,7 +1144,12 @@ export class AgentHost {
           exposureAvailable:Boolean(this.apps.exposureTasks?.available), certificateAvailable:Boolean(this.apps.certificateTasks?.available), scanningAvailable:Boolean(this.apps.scanningTasks?.available) });
         const offer = requested.length?this.permissionOffer(conversation.id,requested):null;
         if (offer?.offers.length) {
-          const allowed = await this.requestAuthorization(conversation.id, { ...offer, question: text });
+          // An auto-triggered turn has no human to answer an authorization offer;
+          // it proceeds read-only (requested business writes stay unavailable)
+          // rather than hanging forever awaiting a response.
+          const allowed = run.nonInteractive
+            ? false
+            : await this.requestAuthorization(conversation.id, { ...offer, question: scrubbedModelText(text) });
           if (run.cancelled) throw hostError('host_reply_cancelled');
           const available=new Set(this.apps.capabilities(conversation.projectId,{runtimeIdentity:this.runtimeIdentity()}).map(tool=>tool.name));
           // A missing scope limits that operation, not every already granted
@@ -930,9 +1171,41 @@ export class AgentHost {
       run.discoveryFingerprint = discovery.fingerprint;
       const memory = readConversationMemory(this.store, conversation.id);
       const memoryBlock = formatMemoryPromptBlock(memory);
+      // Cross-session, project-scoped agent memory: advisory reference text only.
+      const projectMemoryBlock = formatProjectMemoryPromptBlock(readProjectMemory(this.store, conversation.projectId));
+      // Global cross-workspace memory (P1): advisory, same wall as project memory.
+      const globalMemoryBlock = formatGlobalMemoryPromptBlock(readGlobalMemory(this.store));
+      // Operator-approved technique cards (D4): advisory reasoning only, same wall as memory;
+      // read-only from the Tauri app DB, never feeds any auth/scope/settlement/capability gate.
+      const researchCardsBlock = formatResearchCardsPromptBlock(readApprovedResearchCards(process.env.OVIRAPTOR_APP_DB));
+      // Tool library (P2b): advisory recall of parameterized skeletons matched to this target.
+      const _agentTools = allAgentTools(process.env.OVIRAPTOR_APP_DB);
+      const agentToolsBlock = formatAgentToolsPromptBlock(matchAgentTools(_agentTools, text), { total: _agentTools.length });
       run.toolMemory = [];
       const pendingSteers = this.store.pendingSteers(conversation.id);
       if (pendingSteers.length) text += `\n此前已接收、尚未交付的补充要求：\n${pendingSteers.map(message => message.content).join('\n')}`;
+      const workspace = join(this.dataDir, 'workspaces', String(conversation.projectId), 'agent');
+      const materialRoot = join(this.dataDir, 'material', conversation.id);
+      run.permissionMode = this.accessPolicy.view(conversation.projectId).mode;
+      run.materialOpen = run.permissionMode === 'full' || run.permissionMode === 'auto'
+        ? true
+        : await this.#allowMaterial(conversation, run, text);
+      run.materialRoot = materialRoot;
+      run.materialRoots = [materialRoot];
+      if (!run.materialOpen && (citedHosts(text).length || citedPathTokens(text).length)) {
+        text += '\nHost: 用户没有放行这次网址或文件访问。不要抓取，也不要声称已经打开文件。';
+      } else if (run.materialOpen) {
+        const cited = await importCitedFiles(text, workspace);
+        if (cited.note) text += `\n${cited.note}`;
+        for (const hop of fileHops([...(cited.imported || []), ...(cited.external || [])])) this.#recordHop(conversation.id, hop);
+        for (const file of cited.external || []) run.materialRoots.push(dirname(file.source));
+        const pages = await importCitedPages(text, workspace, { fetchImpl: this.providerFetch });
+        if (pages.note) text += `\n${pages.note}`;
+        run.citedHosts = citedHosts(text);
+        const pasted = await savePastedRequest(text, workspace);
+        if (pasted) text += `\nHost: 用户给出的请求已落盘 ${pasted.path}。本对话已放行：用 workspace_fetch 自己抓后续网址，大文件直接写脚本用 workspace_run 从原路径所在目录读取并解析、一次跑完，不要用 workspace_read_path 一段段手读整份大文件。不要让用户把文件下载下来。`;
+        else text += '\nHost: 本对话已放行。用 workspace_fetch 自己抓后续需要的网址和脚本。大文件留在原路径——它所在目录是允许读取的根，直接写脚本用 workspace_run 读取并解析原文件、一次跑完，不要用 workspace_read_path 一段段手读整份大文件。不要让用户代你下载。';
+      }
       run.userText = text;
       const answerMode = this.answerMode();
       // Single blackboard: runtime session harness owns goal/facts. Do NOT inject an empty ephemeral goal here.
@@ -941,8 +1214,14 @@ export class AgentHost {
         project,
         discoveryBlock: formatDiscoveryPromptBlock(discovery),
         memoryBlock,
+        projectMemoryBlock,
+        globalMemoryBlock,
+        researchCardsBlock,
+        agentToolsBlock,
         userText: text,
         answerMode,
+        permissionMode: run.permissionMode,
+        chainBlock: formatChain(listHops(this.store.db, conversation.id)),
       });
       // OAuth lifetime: refresh before send so expired access does not bare-401.
       if (this.runtimeId === 'xai-api') {
@@ -994,13 +1273,15 @@ export class AgentHost {
       await this.subagents.cancelTree(run.id);
       const disposition = { outcomeUnknown: Boolean(run.outcomeUnknown), failureCode: run.failureCode ?? '', stopReason: run.stopReason ?? '', cancelRequested: Boolean(run.cancelled),
         ...(run.authenticationRequired ? { authenticationRequired: true } : {}) };
-      this.store.finishMessage(run.message.id, run.text, status, disposition);
+      // One scrub of the finished assistant text. An empty scrub is stored as empty, not the original.
+      const assistantText = scrubbedModelText(run.text);
+      this.store.finishMessage(run.message.id, assistantText, status, disposition);
       this.#changeTask(run, task => finishTaskRun(task, run, status, disposition));
       try {
         if (run.promptStarted) {
           recordTurn(this.store, conversation.id, {
             userText: run.userText ?? text,
-            assistantText: run.text,
+            assistantText,
             tools: run.toolMemory ?? [],
           });
         }
@@ -1008,9 +1289,10 @@ export class AgentHost {
       const hostTotalMs = performance.now() - run.started;
       this.store.metrics(run.id, conversation.id, { fixture: this.runtimeEvidence === 'synthetic-or-custom', runtimeEvidence: this.runtimeEvidence, totalMs: hostTotalMs, outcome: status, ...(run.metrics ?? {}), hostTotalMs, ...disposition, usage: this.store.providerUsage(run.id) });
       for (const [id, permission] of this.permissions) if (permission.runId === run.id) this.permissions.delete(id);
-      this.runs.delete(conversation.id);
+      trace('finalize:' + status);
+      if (this.runs.get(conversation.id) === run) this.runs.delete(conversation.id);
       this.skillAccess?.release?.(conversation.id, run.skillScope);
-      this.emit({ type: 'message.completed', conversationId: conversation.id, runId: run.id, status, content: run.text, messageId: run.message.id, ...disposition });
+      this.emit({ type: 'message.completed', conversationId: conversation.id, runId: run.id, status, content: assistantText, messageId: run.message.id, ...disposition });
     }
   }
   runtimeEvent(event) {
@@ -1029,8 +1311,11 @@ export class AgentHost {
     if (event.type === 'text_delta') {
       const text = event.text ?? event.delta ?? '';
       if (typeof text !== 'string' || Buffer.byteLength(run.text + text) > 262144) { void this.cancel(run.conversationId); return; }
-      run.text += text;
-      this.emit({ type: 'message.delta', ...base, delta: text });
+      const logged = scrubbedModelText(text);
+      const piece = logged || (!text.trim() ? text : '');
+      if (!piece) return;
+      run.text += piece;
+      this.emit({ type: 'message.delta', ...base, delta: piece });
     } else if (event.type === 'permission_requested') {
       const id = String(event.id ?? event.requestId);
       const options = (event.options ?? []).map(option => ({ id: option.id ?? option.optionId, label: option.label ?? option.name ?? option.kind }));
@@ -1075,6 +1360,29 @@ export class AgentHost {
     }
     this.emit({ type: 'runtime.step', ...base, id: step.id, title: step.title, status: step.status, index: step.index });
   }
+  #recordHop(conversationId, hop) {
+    const row = addHop(this.store.db, conversationId, hop);
+    this.emit({ type: 'chain.updated', conversationId, hop: row });
+    return row;
+  }
+  async #allowMaterial(conversation, run, text) {
+    const targets = [...citedHosts(text), ...citedPathTokens(text)].slice(0, 8);
+    if (!targets.length) return false;
+    const identity = this.runtimeIdentity();
+    const granted = this.store.db.prepare('SELECT 1 FROM conversation_material_grants WHERE conversation_id=? AND runtime_identity=?').get(conversation.id, identity);
+    if (granted) return true;
+    if (run.nonInteractive) return false;
+    const accepted = await this.requestAuthorization(conversation.id, {
+      projectId: conversation.projectId,
+      identity,
+      question: `首次访问需要确认。确认后，本对话可以抓取网址、用浏览器打开页面、按原样发送请求、在本机运行命令，并直接读取你给出的文件。大文件不会整份复制进工作区。\n${targets.join('\n')}`,
+      offers: [{ appId: 'material', revision: 0, permissions: [{ permission: 'material.open', tools: ['workspace_fetch', 'workspace_read_path'] }] }],
+    });
+    if (run.cancelled) throw hostError('host_reply_cancelled');
+    if (accepted !== true) return false;
+    this.store.db.prepare("INSERT OR IGNORE INTO conversation_material_grants(conversation_id,runtime_identity,created_at) VALUES(?,?,datetime('now'))").run(conversation.id, identity);
+    return true;
+  }
   async #authorizeWorkspace(conversation, run, toolName) {
     const kind = workspacePermission(toolName);
     if (!run.workspaceAllow) run.workspaceAllow = new Set();
@@ -1086,7 +1394,7 @@ export class AgentHost {
       const pending = this.requestAuthorization(conversation.id, {
           projectId: conversation.projectId,
           identity: this.runtimeIdentity(),
-          question: run.userText || '',
+          question: scrubbedModelText(run.userText || ''),
           offers: [{ appId: 'workspace', revision: 0, permissions: [{ permission: kind, tools: [toolName] }] }],
       });
       run.workspaceAuthorizations.set(kind, pending);
@@ -1124,7 +1432,7 @@ export class AgentHost {
     if (result.reason === 'desktop_inventory_upgrade_required') throw hostError('host_desktop_inventory_upgrade_required', 409, { retryable: false });
   }
   async cancel(conversationId) {
-    const run = this.runs.get(conversationId); if (!run) throw hostError('host_reply_unavailable', 404);
+    const run = this.runs.get(conversationId); if (!run) return { cancelling: false, reason: 'no_active_run' };
     run.cancelled = true; run.state = 'cancelling';
     this.#revokeRunScope(run);
     this.#cancelAuthorizations(conversationId, run.id);
@@ -1171,7 +1479,8 @@ export class AgentHost {
     }
     const conversation = this.store.conversation(conversationId);
     const capability = this.apps.capabilities(conversation.projectId, { runtimeIdentity: this.runtimeIdentity() }).find(tool => tool.name.replace('::', '__') === params.name);
-    const readOnly = ['workspace_read', 'workspace_list'].includes(params.name)
+    const readOnly = ['workspace_read', 'workspace_list', 'workspace_grep', 'workspace_glob', 'workspace_fetch', 'workspace_read_path', 'workspace_http', 'workspace_browser', 'workspace_ws', 'workspace_shell', 'workspace_probe_sql', 'workspace_probe_command', 'workspace_source_list', 'workspace_source_search', 'workspace_chain_read', 'workspace_chain_add'].includes(params.name)
+      || (typeof params.name === 'string' && (params.name.startsWith('jev_') || params.name === 'record_finding'))
       || Boolean(run.skillScope && this.skillAccess?.toolSpecs(conversationId, run.skillScope).some(tool => tool.name === params.name))
       || typeof capability?.permission === 'string' && (capability.permission === 'read' || capability.permission.endsWith('.read'));
     const operationId = randomUUID();
@@ -1195,7 +1504,9 @@ export class AgentHost {
     if (!readOnly) this.inflightEffects.set(effectId, { conversationId, runId: run.id, taskId: run.taskId });
     const { _hostToolCallId, ...toolParams } = params;
     try {
-      let result = await this.#mcpRequest(token, conversationId, method, toolParams, operationId, readOnly);
+      // Live running-tool output preview: a transient event (no task mutation/revision).
+      const onToolProgress = p => { try { this.emit({ type: 'runtime.toolProgress', conversationId, runId: run.id, evidenceId, toolName: params.name, outputLines: p?.outputLines ?? 0, previewText: String(p?.previewText ?? '').slice(-400) }); } catch { /* best effort */ } };
+      let result = await this.#mcpRequest(token, conversationId, method, toolParams, operationId, readOnly, onToolProgress);
       // The desktop's operation lookup is a read of its original durable start
       // receipt. Bind it to the Host's immutable argument witness, never to a
       // model-supplied digest or an unrelated latest-task status.
@@ -1257,13 +1568,35 @@ export class AgentHost {
       throw error;
     } finally { this.inflightEffects.delete(effectId); this.activeMcpCalls.delete(completion); settled(); }
   }
-  async #mcpRequest(token, conversationId, method, params = {}, operationId, readOnly = true) {
+  async #mcpRequest(token, conversationId, method, params = {}, operationId, readOnly = true, onProgress = null) {
     const { scope, run } = this.validateMcpScope(token, conversationId);
     const conversation = this.store.conversation(conversationId);
     if (method === 'initialize') return { protocolVersion: '2025-06-18', capabilities: { tools: { listChanged: true } }, serverInfo: { name: 'oviraptor-apps', version: '1.0.0' } };
     const skillTools = run.skillScope && this.skillAccess ? this.skillAccess.toolSpecs(conversationId, run.skillScope) : [];
-    if (method === 'tools/list') return { tools: [...this.apps.capabilities(conversation.projectId, { runtimeIdentity: this.runtimeIdentity() }).map(tool => ({ name: tool.name.replace('::', '__'), description: tool.description, inputSchema: tool.inputSchema })), ...WORKSPACE_TOOL_SPECS, ...TASK_TOOL_SPECS, ...(this.runtimeId === 'xai-api' ? SUBAGENT_TOOL_SPECS : []), ...VERIFIER_TOOL_SPECS, ...skillTools] };
+    if (method === 'tools/list') return { tools: [...this.apps.capabilities(conversation.projectId, { runtimeIdentity: this.runtimeIdentity() }).map(tool => ({ name: tool.name.replace('::', '__'), description: tool.description, inputSchema: tool.inputSchema })), ...WORKSPACE_TOOL_SPECS, ...MEMORY_TOOL_SPECS, ...TASK_TOOL_SPECS, ...(this.runtimeId === 'xai-api' ? SUBAGENT_TOOL_SPECS : []), ...VERIFIER_TOOL_SPECS, ...AGENT_TOOL_RECALL_SPEC, ...FINDING_TOOL_SPECS, ...this.jev.toolSpecs(), ...skillTools] };
     if (method === 'tools/call') {
+      if (params.name === 'recall_agent_tool') {
+        const code = recallAgentToolCode(process.env.OVIRAPTOR_APP_DB, (params.arguments ?? {}).id);
+        return { content: [{ type: 'text', text: JSON.stringify(code ? { ok: true, code } : { ok: false, error: '没有该已批准骨架(或 id 不对)' }) }], _meta: { hostEvidence: 'advisory' } };
+      }
+      if (params.name === 'record_finding') {
+        const r = recordFindingFromTool(this.store, conversation.id, conversation.projectId, params.arguments ?? {});
+        return { content: [{ type: 'text', text: JSON.stringify(r.ok ? { ok: true, id: r.id, status: r.status } : { error: 'record_finding_rejected', reason: r.reason }) }], _meta: { hostEvidence: 'advisory' } };
+      }
+      if (this.jev.owns(params.name)) {
+        const result = await this.jev.callTool(params.name, params.arguments ?? {});
+        const shaped = result && typeof result === 'object' && Array.isArray(result.content) ? result : { content: [{ type: 'text', text: JSON.stringify(result ?? null) }] };
+        return { ...shaped, _meta: { hostEvidence: 'advisory' } };
+      }
+      if (params.name === 'remember' || params.name === 'forget') {
+        if (params.name === 'remember') {
+          const written = writeProjectMemoryEntry(this.store, conversation.projectId, { ...(params.arguments ?? {}), sourceConversationId: conversation.id });
+          if (!written.ok) return { isError: true, content: [{ type: 'text', text: JSON.stringify({ error: 'remember_rejected', reason: written.reason }) }] };
+          return { content: [{ type: 'text', text: JSON.stringify({ ok: true, entryId: written.entryId, ...(written.deduped ? { deduped: true } : {}) }) }], _meta: { hostEvidence: 'advisory' } };
+        }
+        const removed = forgetProjectMemory(this.store, conversation.projectId, (params.arguments ?? {}).entryId);
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: true, removed }) }], _meta: { hostEvidence: 'advisory' } };
+      }
       if (String(params.name || '').startsWith('workspace_')) {
         try {
           if (!WORKSPACE_TOOL_SPECS.some(tool => tool.name === params.name)) {
@@ -1279,6 +1612,14 @@ export class AgentHost {
             historyRoot: join(this.dataDir,'file-versions',String(conversation.projectId)),
             executionRoot: join(this.dataDir,'executions',String(conversation.projectId)),
             context:{conversationId,runId:run.id},
+            allowedHosts: run.citedHosts || [],
+            fetchImpl: this.providerFetch,
+            materialOpen: run.materialOpen === true,
+            materialRoot: run.materialRoot || '',
+            readRoots: run.materialRoots || [],
+            onProgress,
+            readChain: () => listHops(this.store.db, conversation.id),
+            recordHop: hop => this.#recordHop(conversation.id, hop),
             assertAuthorized: () => {
               const admitted = this.validateMcpScope(token, conversationId);
               if (admitted.scope !== scope || admitted.run !== run) throw hostError('host_mcp_scope_unavailable', 403, { retryable: false });
@@ -1287,6 +1628,9 @@ export class AgentHost {
           });
           const completed = this.validateMcpScope(token, conversationId);
           if (completed.scope !== scope || completed.run !== run) throw hostError('host_mcp_scope_unavailable', 403, { retryable: false });
+          if (params.name !== 'workspace_chain_add' && params.name !== 'workspace_chain_read' && value?.success !== false) {
+            for (const hop of hopsFromTool(params.name, params.arguments ?? {}, value)) this.#recordHop(conversation.id, hop);
+          }
           const response={ ...(params.name==='workspace_run'&&!value.success?{isError:true}:{}),content: [{ type: 'text', text: JSON.stringify({ ...value, workspace: root }) }] };
           // Only this core execution backend can attest a fully settled result.
           // An exit-code failure in its isolated copy is known, not an unknown write.
@@ -1337,7 +1681,7 @@ export class AgentHost {
     for (let attempt = 0; attempt <= 2; attempt++) {
       try {
         const toolName = tool.name.split('::')[1];
-        const result = await this.apps.call(tool.appId, toolName, conversation.projectId, params.arguments ?? {}, revision, operationId, undefined, this.runtimeIdentity());
+        const result = await this.apps.call(tool.appId, toolName, conversation.projectId, params.arguments ?? {}, revision, operationId, undefined, this.runtimeIdentity(), { conversationId: conversation.id });
         if (this.mcpScopes.get(token) !== scope || !this.isCurrentRun(run) || run.cancelled || run.state === 'cancelling' || scope.runtimePid !== this.runtime?.status?.pid) throw hostError('host_mcp_scope_unavailable', 403, { retryable: false });
         if (toolName === 'insight_propose') {
           const structured = result?.structuredContent
@@ -1375,10 +1719,21 @@ export class AgentHost {
     return { scope, run };
   }
   async close() {
+    this.closing = true; clearInterval(this.scanDeliveryTimer);
+    await this.scanDeliveryRun;
+    try { await this.#closeAll(); }
+    catch (error) {
+      // A busy app makes close retryable; the Host keeps serving until then.
+      this.closing = false;
+      if (this.apps.scanningTasks) this.#startScanDeliveries();
+      throw error;
+    }
+  }
+  async #closeAll() {
     this.#cancelOAuthPoll();
     for (const run of this.runs.values()) await this.cancel(run.conversationId);
     await this.runtime?.close(); await Promise.allSettled([...this.runs.values()].map(run => run.completion));
-    await this.apps.close(); await Promise.allSettled([...this.activeMcpCalls]); await this.desktopAssetSynchronizer.close(); this.store.close();
+    await this.jev?.stop(); await this.apps.close(); await Promise.allSettled([...this.activeMcpCalls]); await this.desktopAssetSynchronizer.close(); this.store.close();
     this.library?.close();
   }
 }

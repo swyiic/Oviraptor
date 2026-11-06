@@ -1,0 +1,160 @@
+{
+  "checks": [
+    "all 12 app permissions remain visible",
+    "archived project excluded",
+    "save blocked before disclosure",
+    "save enabled after explicit disclosure",
+    "complete permission description available",
+    "grant retains exact permission project revision runtime",
+    "grant save reload retains selection and resets disclosure",
+    "workspace switch clears selection and disclosure",
+    "grant error displayed and stale save disabled",
+    "full mode retains runtime revision confirmation input",
+    "full mode shows notice instead of individual saves",
+    "ask mode restores original permission list",
+    "existing nodes and errors visible",
+    "local switch label remains operable",
+    "local save keeps port enabled and token",
+    "new worker submits exact input once and clears form",
+    "inspect retains node identity for all three requests",
+    "sync targets selected node only",
+    "remote task pause preserves node and scan identity",
+    "remote task resume preserves node and scan identity",
+    "remote task cancel preserves node and scan identity",
+    "remove submits only selected node id",
+    "complete connection and platform guides available",
+    "failed inspect retains error notification",
+    "permissions 1440 light fits",
+    "worker 1440 light fits",
+    "permissions 1440 dark fits",
+    "worker 1440 dark fits",
+    "permissions 1024 light fits",
+    "worker 1024 light fits",
+    "permissions 1024 dark fits",
+    "worker 1024 dark fits",
+    "permissions 800 light fits",
+    "worker 800 light fits",
+    "permissions 800 dark fits",
+    "worker 800 dark fits",
+    "permissions 480 light fits",
+    "worker 480 light fits",
+    "permissions 480 dark fits",
+    "worker 480 dark fits",
+    "expanded guides fit narrow dark layout",
+    "no browser runtime errors"
+  ],
+  "matrix": [
+    {
+      "view": "permissions",
+      "width": 1440,
+      "dark": false,
+      "overflow": false
+    },
+    {
+      "view": "worker",
+      "width": 1440,
+      "dark": false,
+      "overflow": false
+    },
+    {
+      "view": "permissions",
+      "width": 1440,
+      "dark": true,
+      "overflow": false
+    },
+    {
+      "view": "worker",
+      "width": 1440,
+      "dark": true,
+      "overflow": false
+    },
+    {
+      "view": "permissions",
+      "width": 1024,
+      "dark": false,
+      "overflow": false
+    },
+    {
+      "view": "worker",
+      "width": 1024,
+      "dark": false,
+      "overflow": false
+    },
+    {
+      "view": "permissions",
+      "width": 1024,
+      "dark": true,
+      "overflow": false
+    },
+    {
+      "view": "worker",
+      "width": 1024,
+      "dark": true,
+      "overflow": false
+    },
+    {
+      "view": "permissions",
+      "width": 800,
+      "dark": false,
+      "overflow": false
+    },
+    {
+      "view": "worker",
+      "width": 800,
+      "dark": false,
+      "overflow": false
+    },
+    {
+      "view": "permissions",
+      "width": 800,
+      "dark": true,
+      "overflow": false
+    },
+    {
+      "view": "worker",
+      "width": 800,
+      "dark": true,
+      "overflow": false
+    },
+    {
+      "view": "permissions",
+      "width": 480,
+      "dark": false,
+      "overflow": false
+    },
+    {
+      "view": "worker",
+      "width": 480,
+      "dark": false,
+      "overflow": false
+    },
+    {
+      "view": "permissions",
+      "width": 480,
+      "dark": true,
+      "overflow": false
+    },
+    {
+      "view": "worker",
+      "width": 480,
+      "dark": true,
+      "overflow": false
+    }
+  ],
+  "errors": [],
+  "bridge": "synthetic-only",
+  "realDatabase": false,
+  "realNetwork": false,
+  "sourceSHA256": {
+    "src/features/configuration/sections/ConfigDataPermissionsSection.vue": "71a49a8970b4e01fef26e78d725823380509463d8994e38a684df408802a0647",
+    "src/features/agentHost/components/AgentPermissionMode.vue": "c3ec47602a73dcd10f6201931edde9ed4cc50fb3a0cd84f549c4245dcc2c955b",
+    "src/features/runtime/components/WorkerSettingsPanel.vue": "6c6946ee2ede17fbbc34eb5bf69184b3cf941676f003e0bc81200e4368476f96"
+  },
+  "businessScriptsByteIdentical": [
+    "src/features/configuration/sections/ConfigDataPermissionsSection.vue",
+    "src/features/agentHost/components/AgentPermissionMode.vue",
+    "src/features/runtime/components/WorkerSettingsPanel.vue"
+  ],
+  "frontendTypecheckAndBuild": "passed",
+  "independentDiffReview": "passed"
+}

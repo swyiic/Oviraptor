@@ -448,6 +448,3 @@ pub(crate) fn read(
     )
 }
 
-#[cfg(test)]
-#[path = "export_artifacts_tests.rs"]
-mod tests;

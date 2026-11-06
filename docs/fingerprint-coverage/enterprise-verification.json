@@ -1,0 +1,44 @@
+{
+  "valid": true,
+  "baseRules": 798,
+  "newRules": 23,
+  "effectiveRules": 821,
+  "responseFixtures": 108,
+  "positiveFixtures": 27,
+  "negativeFixtures": 81,
+  "unexpectedMatches": 0,
+  "missingMatches": 0,
+  "nativeTests": 28,
+  "resourceVerifierTests": 14,
+  "uiRegressionTests": 21,
+  "basePackSha256": "e0b55405548d7414a26fd4de2ed28852547b8088ec187d885afb1ccd52615726",
+  "enterprisePackSha256": "81e293df57ae0bfdc66db87dc974da9f172fad824a03d01668cbf08a646c89b5",
+  "sourceSemantics": "legacy matching production code unchanged; new resource rules use existing condition-tree-v1",
+  "newTargetNetworkRequests": 0,
+  "realDatabaseAccess": false,
+  "installedAppLaunched": false,
+  "releasePackageVerification": "passed",
+  "appVersion": "1.1.120",
+  "packsInApp": [
+    {
+      "file": "Contents/Resources/resources/fingerprint-packs/default.fingerprints.json",
+      "count": 798,
+      "sha256": "e0b55405548d7414a26fd4de2ed28852547b8088ec187d885afb1ccd52615726"
+    },
+    {
+      "file": "Contents/Resources/resources/fingerprint-packs/enterprise.fingerprints.json",
+      "count": 23,
+      "sha256": "81e293df57ae0bfdc66db87dc974da9f172fad824a03d01668cbf08a646c89b5"
+    }
+  ],
+  "effectiveIds": 821,
+  "protectedFilesUnchanged": 5,
+  "bundledDatabaseFiles": 0,
+  "binarySha256": "57911c7fa50d8c76b1206f439664071b52365e1f32429f71d9c0b176f5acd66e",
+  "frontendEntry": "index-COsFZo31.js",
+  "zipPath": "/Users/swyiic/Desktop/Rust/Oviraptor/src-tauri/target/release/bundle/Oviraptor-1.1.120-macos-arm64.zip",
+  "zipBytes": 31117520,
+  "zipSha256": "c8982c0fb0487dcc7e82c2df673fba39d12c7669bfe7e9ff22cd23362949598b",
+  "signatureVerified": true,
+  "zipIntegrityVerified": true
+}

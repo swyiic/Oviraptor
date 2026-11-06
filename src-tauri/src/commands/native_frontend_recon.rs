@@ -12,10 +12,12 @@ fn native_runtime_probe(
     comparison_requests: &[JsonValue],
     comparison_only: bool,
     target_action: Option<&str>,
+    headed: bool,
     control: &NativeReconControl,
 ) -> Result<JsonValue, String> {
     let payload = serde_json::json!({
         "url": url,
+        "headed": headed,
         "authSession": auth_session.cloned().unwrap_or(JsonValue::Null),
         "timeoutMs": timeout_seconds.saturating_mul(1000),
         "explorationTimeoutMs": exploration_seconds.saturating_mul(1000),
@@ -143,7 +145,7 @@ fn static_frontend_intelligence(
             }));
             continue;
         }
-        if analyzed_scripts >= 8 {
+        if analyzed_scripts >= 24 {
             files.push(serde_json::json!({"url":script_url,"analysisStatus":"deferred","reason":"script_budget_reached"}));
             files.extend(script_queue.into_iter().map(|url|serde_json::json!({"url":url,"analysisStatus":"deferred","reason":"script_budget_reached"})));
             break;
@@ -161,7 +163,11 @@ fn static_frontend_intelligence(
             }
         };
         let status = response.status().as_u16();
-        let source = match read_native_http_body(response, 1_000_000) {
+        // SPA bundles (Angular/React main.js) routinely exceed 1 MB; the old
+        // 1,000,000-byte cap made read_native_http_body reject them outright, so the
+        // whole bundle went unanalysed and every endpoint/route inside it was missed.
+        // Raise it to 8 MiB so a normal large main.js is still parsed.
+        let source = match read_native_http_body(response, 8 * 1024 * 1024) {
             Ok(source) => source,
             Err(error) => {
                 files.push(serde_json::json!({"url":script_url,"external":external,"statusCode":status,"analysisStatus":"read_failed","error":error.to_string()}));
@@ -387,6 +393,29 @@ fn native_diagnostic_code_note(diagnostics: &[JsonValue]) -> String {
 /// A run is a complete capture only when the helper both answered and said so:
 /// a clean process exit carrying `available=false` or `captureStatus=failed` is
 /// still a failed capture and never inherits the success default.
+pub(crate) fn excluded_browser_runtime() -> JsonValue {
+    serde_json::json!({
+        "available": false,
+        "captureStatus": "not_executable",
+        "runtimeStopReason": "browser_network_broker_unavailable",
+        "stopReason": "browser_network_broker_unavailable",
+        "probeStage": "capability_snapshot",
+        "requests": []
+    })
+}
+
+pub(crate) fn browser_probe_excluded() -> bool {
+    // Read-only recon capture is NOT the agent's interactive browser tool, so it
+    // must not inherit that tool's lease/broker preflight
+    // (`preflight_snapshot_excludes_browser`), which is deferred-until-lease and
+    // currently excludes the browser everywhere. The recon probe is read-only,
+    // needs no broker, and self-reports availability — it degrades gracefully to
+    // `available:false` / `node_helper_failed` when Node 18+ or a browser is
+    // absent (see the call site). So recon always attempts it; without this the
+    // runtime capture never runs and every modern SPA scores 0 and is skipped.
+    false
+}
+
 fn native_identity_capture_complete(runtime: &JsonValue) -> bool {
     value_first(runtime, &["captureStatus"]) == "complete"
         && runtime
@@ -411,6 +440,24 @@ fn native_recon_redirect_policy() -> reqwest::redirect::Policy {
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Stages actually represented in the recon document. A browser stage is
+/// recorded only when that runtime reported itself available.
+pub(crate) fn frontend_recon_analysis_pipeline(browser_available: bool) -> Vec<&'static str> {
+    let mut pipeline = vec!["rust-native-http"];
+    if browser_available {
+        pipeline.push("cdp-browser-exploration");
+    }
+    pipeline.extend([
+        "runtime-request-capture",
+        "identity-isolation",
+        "cross-identity-read-replay",
+        "babel-ast-static-candidates",
+        "sensitive-rule-pass",
+        "deterministic-contract-construction",
+    ]);
+    pipeline
+}
+
 fn run_native_frontend_recon(
     company: &str,
     requested_url: &str,
@@ -428,6 +475,9 @@ fn run_native_frontend_recon(
     control.check()?;
     let started = Instant::now();
     let mut builder = reqwest::blocking::Client::builder()
+        // Never inherit an ambient system/env proxy; only an operator-configured
+        // proxy (added below) is used.
+        .no_proxy()
         .timeout(Duration::from_secs(timeout_seconds.max(5)))
         .danger_accept_invalid_certs(true)
         // The static HTML/JS fetcher has no target Broker. It must never follow
@@ -502,7 +552,9 @@ fn run_native_frontend_recon(
     let mut identity_runs = Vec::new();
     for (index, session) in sessions.iter().enumerate() {
         control.check()?;
-        let mut runtime = match native_runtime_probe(
+        let mut runtime = if browser_probe_excluded() {
+            excluded_browser_runtime()
+        } else { match native_runtime_probe(
             runtime_helper,
             &final_url,
             session.as_object().map(|_| session),
@@ -515,6 +567,7 @@ fn run_native_frontend_recon(
             &[],
             false,
             None,
+            false,
             control,
         ) {
             Ok(runtime) => runtime,
@@ -526,7 +579,7 @@ fn run_native_frontend_recon(
                 ));
                 serde_json::json!({"available":false,"captureStatus":"failed","captureError":error,"runtimeStopReason":"node_helper_failed","stopReason":"node_helper_failed","probeStage":"node_helper","requests":[]})
             }
-        };
+        } };
         let identity_key = native_identity_key(session);
         if let Some(requests) = runtime
             .get_mut("requests")
@@ -599,7 +652,7 @@ fn run_native_frontend_recon(
             }
             items
         });
-    if sessions.len() > 1 && !comparison_requests.is_empty() {
+    if !browser_probe_excluded() && sessions.len() > 1 && !comparison_requests.is_empty() {
         for (index, session) in sessions.iter().enumerate() {
             let replay = native_runtime_probe(
                 runtime_helper,
@@ -614,6 +667,7 @@ fn run_native_frontend_recon(
                 &comparison_requests,
                 true,
                 None,
+                false,
                 control,
             );
             control.check()?;
@@ -911,6 +965,7 @@ fn run_native_frontend_recon(
             .and_then(JsonValue::as_bool)
             == Some(true)
     });
+    let browser_available = base_runtime.get("available").and_then(JsonValue::as_bool).unwrap_or(false);
     let target = serde_json::json!({
         "url": requested_url, "company": company, "finalUrl": final_url, "statusCode": status, "errors": collection_errors,
         "fingerprint":{"frontend":{"name":framework,"framework":framework,"confidence":if framework=="Unknown"{"low"}else{"medium"}},"backend":{"name":if powered.is_empty(){"Unknown"}else{powered},"confidence":if powered.is_empty(){"low"}else{"medium"}},"server":{"name":if server.is_empty(){"Unknown"}else{server},"confidence":if server.is_empty(){"low"}else{"high"}},"waf":{"name":"Unknown","confidence":"low"},"cdn":{"name":"Unknown","confidence":"low"}},
@@ -921,10 +976,10 @@ fn run_native_frontend_recon(
         "collectionOutcome":{"runtimeCaptureComplete":all_complete,"partialEvidence":!all_complete,"evidenceFile":output_path.file_name().and_then(|name|name.to_str()).unwrap_or_default().to_string(),"failedIdentities":runtime_diagnostics.iter().filter(|item| value_first(item,&["captureStatus"])!="complete").count()},"identityComparisons":identity_comparisons,"identityMatrix":{"identities":identity_keys,"apis":identity_api_rows},"identityFeatureMatrix":{"identities":identity_keys,"features":[]},
         "authSessionValidation":{"applied":auth_applied,"valid":if auth_applied {JsonValue::Bool(auth_valid)}else{JsonValue::Null},"clearSessionInvalid":clear_invalid,"invalidIdentityKeys":invalid_identity_keys,"wafDetected":waf_detected,"reason":if !auth_applied{"anonymous_capture"}else if clear_invalid{"session_invalid"}else if all_complete{"complete"}else{"runtime_probe_incomplete"}},
         "sensitiveInfo":sensitive_info,"headerEvidence":header_evidence,"codeSlices":code_slices,"runtimeSignals":[],"cryptoSignals":[],"registrationEntrypoints":[],"realtimeEndpoints":[],"externalScripts":external_scripts,"metaTags":{},"links":base_runtime.get("links").cloned().unwrap_or_else(||serde_json::json!([])),"forms":base_runtime.get("forms").cloned().unwrap_or_else(||serde_json::json!([])),
-        "analysisSummary":{"reconCacheVersion":4,"engine":"rust-native+cdp-node+babel-ast","runtimeBrowserAvailable":base_runtime.get("available").and_then(JsonValue::as_bool).unwrap_or(false),"runtimeProbeAvailable":base_runtime.get("available").and_then(JsonValue::as_bool).unwrap_or(false),"runtimeCaptureStatus":value_first(&base_runtime,&["captureStatus"]),"runtimeRequests":requests.len(),"identityCount":sessions.len(),"verifiedApis":apis.len(),"apiCandidates":api_candidates.len()},
+        "analysisSummary":{"reconCacheVersion":4,"engine":if browser_available {"rust-native+cdp-node+babel-ast"} else {"rust-native+babel-ast"},"runtimeBrowserAvailable":browser_available,"runtimeProbeAvailable":base_runtime.get("available").and_then(JsonValue::as_bool).unwrap_or(false),"runtimeCaptureStatus":value_first(&base_runtime,&["captureStatus"]),"runtimeRequests":requests.len(),"identityCount":sessions.len(),"verifiedApis":apis.len(),"apiCandidates":api_candidates.len()},
         "durationMs":started.elapsed().as_millis()
     });
-    let document = serde_json::json!({"schemaVersion":4,"analysisPipeline":["rust-native-http","cdp-browser-exploration","runtime-request-capture","identity-isolation","cross-identity-read-replay","babel-ast-static-candidates","sensitive-rule-pass","deterministic-contract-construction"],"generatedAt":chrono::Utc::now().to_rfc3339(),"targets":[target]});
+    let document = serde_json::json!({"schemaVersion":4,"analysisPipeline":frontend_recon_analysis_pipeline(browser_available),"generatedAt":chrono::Utc::now().to_rfc3339(),"targets":[target]});
     control.check()?;
     fs::write(
         output_path,
@@ -932,10 +987,15 @@ fn run_native_frontend_recon(
     )
     .map_err(|error| error.to_string())?;
     if !all_complete {
-        let detail = native_diagnostic_code_note(&runtime_diagnostics);
-        return Err(format!(
-            "CDP 运行时探测未完整成功；本轮仅写出部分侦察证据，不代表采集成功。底层诊断：{detail}"
-        ));
+        let excluded = raw_identity_runs.iter().all(|run| {
+            value_first(run.get("runtimeExploration").unwrap_or(&JsonValue::Null), &["runtimeStopReason"]) == "browser_network_broker_unavailable"
+        });
+        if !excluded {
+            let detail = native_diagnostic_code_note(&runtime_diagnostics);
+            return Err(format!(
+                "CDP 运行时探测未完整成功；本轮仅写出部分侦察证据，不代表采集成功。底层诊断：{detail}"
+            ));
+        }
     }
     Ok(())
 }

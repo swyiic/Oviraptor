@@ -18,18 +18,6 @@ fn agent_execute_tool_at(
     agent_execute_tool_with_current_invocation(context, runtime, name, arguments)
 }
 
-/// A call that opens its own invocation, for direct (single-tool) drivers.
-#[cfg(test)]
-fn agent_execute_tool(
-    context: &AgentRunContext,
-    runtime: &mut AgentToolRuntime,
-    name: &str,
-    arguments: &JsonValue,
-) -> ToolExecutionResult {
-    let invocation_id = runtime.begin_invocation(context.attempt_number);
-    runtime.set_invocation(&invocation_id);
-    agent_execute_tool_with_current_invocation(context, runtime, name, arguments)
-}
 
 fn agent_execute_tool_with_current_invocation(
     context: &AgentRunContext,
@@ -102,6 +90,14 @@ fn agent_execute_tool_inner(
     if let Err(code) = agent_authorize_tool(context, name) {
         return agent_tool_error("当前 run 没有此工具的有效权限", code);
     }
+    if let Ok(connection) = db::open(&context.db_path) {
+        if matches!(
+            tool_permission_decision(&connection, name),
+            ToolPermissionDecision::Deny
+        ) {
+            return agent_tool_error("该工具被权限规则拒绝", "tool_permission_denied");
+        }
+    }
     if let Err(reason) = agent_single_require_fresh(context) {
         return agent_http_claim_error(reason);
     }
@@ -126,20 +122,54 @@ fn agent_execute_tool_inner(
     // Anything the model asked for that is not one of our tools is refused before
     // a payload could be echoed back.
 
+    // Doom-loop circuit breaker: if the model has re-issued the EXACT same tool
+    // call (same tool + same redacted-input hash) DOOM_LOOP_REPEATS times in a
+    // row, it is spinning with nothing new to show and will otherwise burn the
+    // whole budget on the loop. Break the path with a tool error so the model
+    // must change parameter, path, or finish — never a silent stall. This is a
+    // safety guardrail independent of the permission picker and of per-target
+    // authorization; the refusal is recorded (error_class="tool_doom_loop") so it
+    // shows in the process view rather than vanishing.
+    if let Some(run) = context.run.as_ref() {
+        if let Ok(connection) = db::open(&context.db_path) {
+            let input_hash = crate::agent_runtime::store::tool_input_hash(arguments);
+            if crate::agent_runtime::store::tool_loop_repeat_tripped(
+                &connection,
+                &run.run_id,
+                name,
+                &input_hash,
+                DOOM_LOOP_REPEATS,
+            )
+            .unwrap_or(false)
+            {
+                return agent_tool_error(
+                    &format!(
+                        "已连续 {DOOM_LOOP_REPEATS} 次发起完全相同的 {name} 调用且无新进展，触发回路断路。请更换参数、改走其它路径或收口，不要重复同一调用。"
+                    ),
+                    "tool_doom_loop",
+                );
+            }
+        }
+    }
     if runtime.target_requests >= agent_target_request_ceiling(context) {
         return agent_tool_error(
             "目标请求总数已达到本轮硬上限，请调用 finish_target 收口",
             "request_budget_exhausted",
         );
     }
-    if name != "finish_target" {
+    if name != "finish_target" && name != "ask_operator" && name != "call_mcp_tool" {
         if let Err(reason) = agent_target_budget_preflight(context, runtime, name) {
             return agent_http_claim_error(reason);
         }
-        if let Err(reason) = native_coordinator_budget_consumption_before_action(context) {
+        // Serialize + retry so a transient DB lock does not abort a tool action.
+        if let Err(reason) = crate::db::guarded_write(&context.db_path, || {
+            native_coordinator_budget_consumption_before_action(context)
+        }) {
             return agent_http_claim_error(reason);
         }
-        if let Err(reason) = native_coordinator_http_budget_consumption_before_action(context) {
+        if let Err(reason) = crate::db::guarded_write(&context.db_path, || {
+            native_coordinator_http_budget_consumption_before_action(context)
+        }) {
             return agent_http_claim_error(reason);
         }
     }
@@ -149,10 +179,17 @@ fn agent_execute_tool_inner(
         "compare_identities" => agent_tool_compare_identities(context, runtime, arguments),
         "targeted_discovery" => agent_tool_targeted_discovery(context, runtime, arguments),
         "browser_action" => agent_tool_browser_action(context, runtime, arguments),
+        "plan_ssrf_channel" => agent_tool_plan_ssrf_channel(context, runtime, arguments),
         "record_hypothesis_result" => {
             agent_tool_record_hypothesis_result(context, runtime, arguments)
         }
         "finish_target" => agent_tool_finish_target(context, runtime, arguments),
+        "probe_command_execution" => agent_tool_probe_command_execution(context, runtime, arguments),
+        "run_analysis_script" => agent_tool_run_analysis_script(context, runtime, arguments),
+        "probe_sql_injection" => agent_tool_probe_sql_injection(context, runtime, arguments),
+        "run_target_poc" => agent_tool_run_target_poc(context, runtime, arguments),
+        "ask_operator" => agent_tool_ask_operator(context, runtime, arguments),
+        "call_mcp_tool" => agent_tool_call_mcp_tool(context, runtime, arguments),
         other => agent_tool_error(&format!("未知工具 {other}"), "unknown_tool"),
     }
 }
@@ -212,18 +249,12 @@ fn agent_authorize_tool_on(
         return agent_native_source_tool_authority(connection, context, name).map(|_| ());
     }
     // Historical source-view unit fixtures are not production Web grants.
-    #[cfg(not(test))]
     if agent_is_source_tool(name) {
         return Err("source_tool_requires_native_source_assignment");
     }
     let Some(run) = &context.run else {
         // Directly constructed test contexts have no ledger. A production tool
         // call without one is unaccountable and must fail closed.
-        #[cfg(test)]
-        {
-            return Ok(());
-        }
-        #[cfg(not(test))]
         {
             return Err("tool_run_not_found");
         }
@@ -272,6 +303,9 @@ fn agent_authorize_tool_on(
     // broad 'any child' rule. The lane and capability are checked in storage.
     crate::agent_runtime::multi_agent::attempts::require_live_for_run(connection, &run.run_id)
         .map_err(|_| "tool_capability_or_fencing_denied")?;
+    if name == "ask_operator" || name == "call_mcp_tool" {
+        return agent_require_bound_identities(connection, context);
+    }
     let authorized: bool = connection
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM agent_runs r \
@@ -294,6 +328,20 @@ fn agent_authorize_tool_on(
                AND c.lease_expires_at>datetime('now','localtime'))",
             params![run.run_id, name],
             |row| row.get(0),
+        )
+        .map_err(|_| "tool_authorization_unavailable")?;
+    // Single-controller model (B3): a controller run that holds a valid
+    // controller-phase lease for this capability is authorized through a PARALLEL
+    // branch. It is additive — it never widens the child-executor query above —
+    // and is inert in production until the coordinator enters phases (no
+    // controller-phase lease is issued until then). Its own fencing chain
+    // (live coordinator + epoch + fencing + unrevoked + unexpired) is enforced in
+    // scheduler::controller_phase_authorized.
+    let authorized = authorized
+        || crate::agent_runtime::multi_agent::scheduler::controller_phase_authorized(
+            connection,
+            &run.run_id,
+            name,
         )
         .map_err(|_| "tool_authorization_unavailable")?;
     if !authorized {
@@ -351,9 +399,19 @@ fn agent_require_bound_identities(
 }
 
 /// Requests against the target are bounded by the plan, not by model turns.
+/// How many back-to-back identical tool calls trip the doom-loop breaker. Three:
+/// a single accidental repeat is fine, but the third identical call in a row is a
+/// loop, not progress.
+const DOOM_LOOP_REPEATS: usize = 3;
+
 fn agent_target_request_ceiling(context: &AgentRunContext) -> usize {
     let plan = &context.execution_plan;
-    let ceiling = plan.hard_model_requests.max(1).saturating_mul(4).min(400) as usize;
+    // No `.min(400)` cap: the ceiling is the declared target_requests budget
+    // (hard_model_requests * 4). The old 400 cap was SHARED with the recon phase,
+    // which on a rich target (many JS/API files) consumed almost all of it, leaving
+    // the executor only a handful of probes before request_budget_exhausted — so it
+    // never went deep enough to confirm a finding. Match the declaration instead.
+    let ceiling = plan.hard_model_requests.max(1).saturating_mul(4) as usize;
     // Dedicated public capture is not part of the generic tool runtime's
     // in-memory count. Claimed/unknown requests still consume its shared cap.
     let claimed = db::open(&context.db_path).and_then(|connection| {
@@ -384,6 +442,12 @@ fn agent_target_request_ceiling(context: &AgentRunContext) -> usize {
     });
     match claimed {
         Ok(count) => ceiling.saturating_sub(count),
-        Err(_) => 0,
+        // A transient read failure (e.g. "database is locked" when an asset
+        // collection holds the SQLite writer) must NOT collapse the ceiling to 0 —
+        // that falsely reported "target request budget exhausted" and killed the
+        // executor after a couple of calls. The actual per-request budget ledger
+        // still bounds real spending, so fall back to the full ceiling rather than
+        // starving the scan on a momentary lock.
+        Err(_) => ceiling,
     }
 }

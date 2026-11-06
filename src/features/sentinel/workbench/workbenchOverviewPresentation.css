@@ -4,42 +4,42 @@
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
   align-items: start;
   min-width: 0;
-  gap: 18px;
-  color: var(--app-ink, #25282d);
+  gap: 20px;
+  color: var(--app-ink, var(--ui-ink));
 }
 .workbench-side.overview-side > .panel { min-width: 0; }
-.workbench-side.overview-side .panel-heading { padding: 20px 18px 10px; }
-.workbench-side.overview-side .panel-heading h3 { font-size: 16px; line-height: 1.5; letter-spacing: -.2px; }
-.workbench-side.overview-side .eyebrow { color: var(--app-muted, #717780); font-size: 10px; letter-spacing: 1px; }
-.overview-caption { margin: 0 18px 15px; font-size: 11px; line-height: 1.6; color: var(--app-muted, #717780); }
+.workbench-side.overview-side .panel-heading { padding: 20px 20px 10px; }
+.workbench-side.overview-side .panel-heading h3 { font-size:var(--text-heading); line-height: 1.5; letter-spacing: -.2px; }
+.workbench-side.overview-side .eyebrow { color: var(--app-muted, var(--ui-muted)); font-size:var(--text-micro); letter-spacing: 1px; }
+.overview-caption { margin: 0 20px 16px; font-size:var(--text-meta); line-height: 1.6; color: var(--app-muted, var(--ui-muted)); }
 .workbench-side.overview-side .token-feature-row {
   margin: 0 14px 8px;
-  padding: 13px 14px;
-  border-color: var(--line, #e3e5e9);
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--app-ink, #25282d) 3%, var(--app-surface, #fff));
+  padding: 14px 14px;
+  border-color: var(--line, var(--ui-line));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--app-ink, #25282d) 3%, var(--app-surface, var(--ui-surface)));
 }
-.workbench-side.overview-side .token-feature-row header { padding-bottom: 9px; border-color: var(--line, #e3e5e9); font-size: 12px; color: var(--app-ink, #25282d); }
-.workbench-side.overview-side .token-feature-row header strong { font: 600 16px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--app-ink, #25282d); }
+.workbench-side.overview-side .token-feature-row header { padding-bottom: 10px; border-color: var(--line, var(--ui-line)); font-size:var(--text-body); color: var(--app-ink, var(--ui-ink)); }
+.workbench-side.overview-side .token-feature-row header strong { font: 600 var(--text-heading) var(--font-sans); font-variant-numeric: tabular-nums; color: var(--app-ink, var(--ui-ink)); }
 .workbench-side.overview-side .token-feature-row dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 10px; }
-.workbench-side.overview-side .token-feature-row dl div { gap: 5px; min-width: 0; }
+.workbench-side.overview-side .token-feature-row dl div { gap: 6px; min-width: 0; }
 .workbench-side.overview-side .token-feature-row dl div + div { margin-top: 0; }
-.workbench-side.overview-side .token-feature-row dt { color: var(--app-muted, #717780); font-size: 11px; }
-.workbench-side.overview-side .token-feature-row dd { font: 500 11px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--app-ink, #25282d); }
+.workbench-side.overview-side .token-feature-row dt { color: var(--app-muted, var(--ui-muted)); font-size:var(--text-meta); }
+.workbench-side.overview-side .token-feature-row dd { font: 500 var(--text-meta) var(--font-sans); font-variant-numeric: tabular-nums; color: var(--app-ink, var(--ui-ink)); }
 .workbench-side.overview-side .recent-workbench > button {
-  padding: 15px 18px;
+  padding: 16px 20px;
   gap: 6px;
-  border-color: var(--line, #e3e5e9);
-  background: var(--app-surface, #fff);
-  color: var(--app-ink, #25282d);
+  border-color: var(--line, var(--ui-line));
+  background: var(--app-surface, var(--ui-surface));
+  color: var(--app-ink, var(--ui-ink));
   cursor: pointer;
 }
-.workbench-side.overview-side .recent-workbench > button:hover { background: color-mix(in srgb, var(--app-ink, #25282d) 5%, var(--app-surface, #fff)); }
+.workbench-side.overview-side .recent-workbench > button:hover { background: color-mix(in srgb, var(--app-ink, #25282d) 5%, var(--app-surface, var(--ui-surface))); }
 .workbench-side.overview-side .recent-workbench > button:focus-visible { outline: 2px solid var(--blue, #2878ff); outline-offset: -3px; }
-.workbench-side.overview-side .overview-task-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 7px 10px; }
-.workbench-side.overview-side .overview-task-title { flex: 1 1 160px; min-width: 0; font-size: 13px; line-height: 1.6; font-weight: 550; overflow-wrap: anywhere; }
-.workbench-side.overview-side .overview-task-status { padding: 2px 7px; border: 1px solid var(--line, #e3e5e9); border-radius: 5px; font-size: 10px; line-height: 1.6; font-weight: 400; color: var(--app-muted, #717780); }
-.workbench-side.overview-side .overview-task-status[data-status="scanning"] { color: var(--blue, #2878ff); border-color: color-mix(in srgb, var(--blue, #2878ff) 35%, var(--line, #e3e5e9)); }
-.workbench-side.overview-side .overview-task-status[data-status="completed_with_gaps"], .workbench-side.overview-side .overview-task-status[data-status="partial"] { color: var(--app-ink, #25282d); border-style: dashed; }
-.workbench-side.overview-side .recent-workbench small { font-size: 11px; line-height: 1.6; color: var(--app-muted, #717780); overflow-wrap: anywhere; }
+.workbench-side.overview-side .overview-task-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 10px; }
+.workbench-side.overview-side .overview-task-title { flex: 1 1 160px; min-width: 0; font-size:var(--text-strong); line-height: 1.6; font-weight: 550; overflow-wrap: anywhere; }
+.workbench-side.overview-side .overview-task-status { padding: 2px 8px; border: 1px solid var(--line, var(--ui-line)); border-radius: var(--radius-sm); font-size:var(--text-micro); line-height: 1.6; font-weight: 400; color: var(--app-muted, var(--ui-muted)); }
+.workbench-side.overview-side .overview-task-status[data-status="scanning"] { color: var(--blue, #2878ff); border-color: color-mix(in srgb, var(--blue, #2878ff) 35%, var(--line, var(--ui-line))); }
+.workbench-side.overview-side .overview-task-status[data-status="completed_with_gaps"], .workbench-side.overview-side .overview-task-status[data-status="partial"] { color: var(--app-ink, var(--ui-ink)); border-style: dashed; }
+.workbench-side.overview-side .recent-workbench small { font-size:var(--text-meta); line-height: 1.6; color: var(--app-muted, var(--ui-muted)); overflow-wrap: anywhere; }
 .workbench-side.overview-side .overview-task-usage { font-variant-numeric: tabular-nums; }

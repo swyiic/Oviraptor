@@ -181,6 +181,13 @@ fn active_model_profile(settings: &JsonValue) -> Option<&JsonValue> {
 pub(crate) fn model_connection(
     settings: &NormalizedModelSettings,
 ) -> Result<ModelConnection, String> {
+    model_connection_with(settings, &crate::secret_store::SecretStore::system())
+}
+
+fn model_connection_with(
+    settings: &NormalizedModelSettings,
+    secrets: &crate::secret_store::SecretStore,
+) -> Result<ModelConnection, String> {
     let settings = settings.as_value();
     if let Some(error) = settings
         .get("_configurationError")
@@ -229,6 +236,23 @@ pub(crate) fn model_connection(
                 .into(),
         );
     }
+    if let Some(auth) = profile_value("authType", "modelAuthType") {
+        if !matches!(auth.as_str(), Some("" | "api-key" | "none" | "oauth")) {
+            return Err("模型认证类型无效，请重新保存模型连接；未回退到其他认证方式".into());
+        }
+    }
+    // OAuth is a saved Host credential reference, not an API key. Keep only a
+    // logical endpoint in task snapshots; resolve the current process session at
+    // the final gateway boundary, and never borrow a selected API credential.
+    if profile_value("authType", "modelAuthType").and_then(JsonValue::as_str) == Some("oauth") {
+        let base = profile_setting("apiBase", "modelApiBase");
+        if deployment != "cloud" || base.trim_end_matches('/') != "https://api.x.ai/v1"
+            || !profile_setting("apiKey", "modelApiKey").is_empty()
+            || !profile_setting("localApiKey", "localApiKey").is_empty() {
+            return Err("Grok OAuth 连接配置无效：请使用已登录的 Grok 连接，不能附带 API Key 或自定义地址".into());
+        }
+        return Ok(ModelConnection { llm, api_key: String::new(), api_base: "oviraptor://grok-oauth".into(), deployment });
+    }
     let api_key = if deployment == "local" {
         // Keep local authentication separate from a profile's cloud key. This
         // avoids sending a hidden stale cloud credential to localhost while
@@ -274,6 +298,25 @@ pub(crate) fn model_connection(
             "本地模型必须配置明确的 API Base URL；安全策略不会回退读取 OPENAI_BASE_URL，防止误用云端环境变量或凭据".into(),
         );
     }
+    // Credential→keychain read-through (docs/KEYCHAIN_MIGRATION_PLAN.md). Default
+    // OFF → returns `api_key` unchanged (byte-for-byte today's behaviour). ON → the
+    // stored plaintext stays authoritative and is synced into the keychain (so a
+    // later phase can blank the plaintext and read from the keychain); scoped by
+    // the active model-profile id so profiles never share a key, and a keychain
+    // outage just falls back to the plaintext so a credential is never lost.
+    let api_key = {
+        let scope = active_profile
+            .and_then(|profile| profile.get("id"))
+            .and_then(JsonValue::as_str)
+            .unwrap_or("")
+            .to_string();
+        let id = if deployment == "local" {
+            crate::secret_store::llm_local_api_key(&scope)
+        } else {
+            crate::secret_store::llm_api_key(&scope)
+        };
+        secrets.resolve(&id, Some(&api_key)).unwrap_or_default()
+    };
     if api_key.is_empty() {
         return Err(
             "模型 API 凭据未配置：请在配置中心填写 API Key（第三方 OpenAI 兼容服务同时填写 Base URL）".into(),
@@ -300,6 +343,22 @@ pub(crate) fn gateway_profile(
     environment: &ModelConnection,
     proxy: Option<&str>,
 ) -> Result<GatewayProfile, String> {
+    if environment.api_base == "oviraptor://grok-oauth" {
+        if !environment.api_key.is_empty() || environment.deployment != "cloud" {
+            return Err("Grok OAuth 模型连接无效".into());
+        }
+        let endpoint = crate::agent_host_sidecar::model_bridge_endpoint()?;
+        return GatewayProfile::resolve(
+            &ResolvedModelProfile {
+                model: openai_chat_completion_model(&environment.llm),
+                api_base: format!("{}/api/model/oauth", endpoint.origin),
+                api_key: endpoint.session,
+                deployment: "cloud".into(),
+            },
+            &LocalResourcePolicy::default(),
+            None,
+        );
+    }
     let policy = model_resource_policy(environment);
     GatewayProfile::resolve(
         &ResolvedModelProfile {
@@ -327,6 +386,197 @@ pub(crate) fn gateway_profile_on(
     gateway_profile(&environment, proxy)
 }
 
+
 #[cfg(test)]
-#[path = "model_configuration_tests.rs"]
-mod tests;
+mod keychain_wiring_tests {
+    use super::*;
+    use crate::secret_store::{llm_api_key, testing};
+
+    fn cloud_settings(api_key: &str) -> NormalizedModelSettings {
+        NormalizedModelSettings::new(&serde_json::json!({
+            "modelProfiles": [{
+                "id": "mp1",
+                "llm": "openai/gpt-4o",
+                "deployment": "cloud",
+                "apiBase": "https://api.openai.com/v1",
+                "apiKey": api_key,
+            }],
+            "activeModelProfileId": "mp1",
+        }))
+    }
+
+    #[test]
+    fn keychain_off_returns_plaintext_unchanged_and_never_writes() {
+        let (store, backend) = testing::store(true, false);
+        let connection = model_connection_with(&cloud_settings("sk-legacy"), &store).unwrap();
+        assert_eq!(connection.api_key, "sk-legacy");
+        assert_eq!(backend.len(), 0, "read-through OFF must not touch the keychain");
+    }
+
+    #[test]
+    fn keychain_on_syncs_the_key_and_follows_db_rotation() {
+        let (store, backend) = testing::store(true, true);
+        let connection = model_connection_with(&cloud_settings("sk-legacy"), &store).unwrap();
+        assert_eq!(connection.api_key, "sk-legacy");
+        assert_eq!(backend.len(), 1, "the key is synced into the keychain scoped by profile");
+        // A key rotated in the DB wins and re-syncs the keychain.
+        let rotated = model_connection_with(&cloud_settings("sk-rotated"), &store).unwrap();
+        assert_eq!(rotated.api_key, "sk-rotated");
+    }
+
+    #[test]
+    fn keychain_on_but_unavailable_still_resolves_from_plaintext() {
+        let (store, backend) = testing::store(false, true);
+        let connection = model_connection_with(&cloud_settings("sk-legacy"), &store).unwrap();
+        assert_eq!(connection.api_key, "sk-legacy");
+        assert_eq!(backend.len(), 0);
+    }
+
+    #[test]
+    fn scope_is_the_active_model_profile_id() {
+        let (store, _backend) = testing::store(true, true);
+        let _ = model_connection_with(&cloud_settings("sk-legacy"), &store).unwrap();
+        // The synced entry is keyed by the model-profile id, matching the read scope.
+        assert_eq!(
+            store.resolve(&llm_api_key("mp1"), None),
+            Some("sk-legacy".to_string())
+        );
+    }
+}
+
+// Real-machine end-to-end proof that an LLM key sourced through the keychain
+// reaches the actual HTTP Authorization header, using the real gateway/transport
+// stack against a local capture server and a synthetic DeepSeek-shaped profile.
+// #[ignore]d and macOS-only: run with
+//   cargo test --lib keychain_e2e -- --ignored --nocapture
+#[cfg(all(test, target_os = "macos"))]
+mod keychain_e2e_tests {
+    use super::*;
+    use crate::agent_runtime::model::{CancelToken, ModelRequest, OpenAiCompatibleGateway};
+    use crate::secret_store::{llm_api_key, KeychainBackend, SecretBackend, SecretStore};
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+
+    /// A local HTTP server that records every request's Authorization header and
+    /// answers with a minimal, well-formed chat completion so the real client's
+    /// one-shot call returns promptly (Content-Length + Connection: close).
+    fn start_capture_server(auths: Arc<Mutex<Vec<String>>>) -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 4096];
+                let header_end = loop {
+                    match stream.read(&mut chunk) {
+                        Ok(0) => break buf.len(),
+                        Ok(n) => {
+                            buf.extend_from_slice(&chunk[..n]);
+                            if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                                break pos + 4;
+                            }
+                            if buf.len() > 1_000_000 {
+                                break buf.len();
+                            }
+                        }
+                        Err(_) => break buf.len(),
+                    }
+                };
+                let head = String::from_utf8_lossy(&buf[..header_end.min(buf.len())]).to_string();
+                for line in head.lines() {
+                    if line.to_ascii_lowercase().starts_with("authorization:") {
+                        let value = line[line.find(':').unwrap() + 1..].trim().to_string();
+                        auths.lock().unwrap().push(value);
+                    }
+                }
+                // Drain the request body so closing the socket never RSTs the client.
+                let content_length = head
+                    .lines()
+                    .find_map(|line| {
+                        let lower = line.to_ascii_lowercase();
+                        lower
+                            .strip_prefix("content-length:")
+                            .map(|rest| rest.trim().parse::<usize>().unwrap_or(0))
+                    })
+                    .unwrap_or(0);
+                let mut body_read = buf.len().saturating_sub(header_end);
+                while body_read < content_length {
+                    match stream.read(&mut chunk) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => body_read += n,
+                    }
+                }
+                let body = br#"{"choices":[{"message":{"role":"assistant","content":"OK"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.write_all(body);
+                let _ = stream.flush();
+            }
+        });
+        port
+    }
+
+    fn settings(base: &str, api_key: &str) -> NormalizedModelSettings {
+        NormalizedModelSettings::new(&serde_json::json!({
+            // Marks the config as independently-owned so an empty key never falls
+            // back to a real OPENAI_API_KEY env var during the blanked-DB phase.
+            "_configurationRefs": {"models": {}},
+            "modelProfiles": [{
+                "id": "mp-e2e",
+                "llm": "deepseek-flash",
+                "deployment": "cloud",
+                "apiBase": base,
+                "apiKey": api_key,
+            }],
+            "activeModelProfileId": "mp-e2e",
+        }))
+    }
+
+    fn send_once(settings: &NormalizedModelSettings, store: &SecretStore) -> String {
+        let environment = model_connection_with(settings, store).unwrap();
+        let gateway = gateway_profile(&environment, None).unwrap();
+        let client = OpenAiCompatibleGateway::new(gateway, &[]);
+        let request =
+            ModelRequest::new(vec![serde_json::json!({"role": "user", "content": "ping"})], vec![]);
+        let _ = client.complete_once_observed(&request, &CancelToken::new());
+        environment.api_key
+    }
+
+    #[test]
+    #[ignore = "real macOS keychain + local HTTP; run with --ignored"]
+    fn key_flows_from_keychain_to_the_authorization_header() {
+        const SERVICE: &str = "com.oviraptor.desktop.e2e";
+        const KEY: &str = "sk-deepseek-SYNTHETIC-e2e-abcdef0123";
+        let id = llm_api_key("mp-e2e");
+        let _ = KeychainBackend::new(SERVICE).delete(&id); // clean slate
+
+        let auths = Arc::new(Mutex::new(Vec::new()));
+        let port = start_capture_server(auths.clone());
+        let base = format!("http://127.0.0.1:{port}/v1");
+        let store = SecretStore::new(Some(Box::new(KeychainBackend::new(SERVICE))), true);
+
+        // Phase A: the DB holds the key (flag ON). The request carries it and the
+        // key is synced into the keychain.
+        let resolved_a = send_once(&settings(&base, KEY), &store);
+        assert_eq!(resolved_a, KEY);
+
+        // Phase B: the DB key is blanked. The only remaining source is the keychain,
+        // so the request must STILL carry the synthetic key.
+        let resolved_b = send_once(&settings(&base, ""), &store);
+        assert_eq!(resolved_b, KEY, "key must be served from the keychain when the DB is blank");
+
+        let captured = auths.lock().unwrap().clone();
+        KeychainBackend::new(SERVICE).delete(&id).unwrap(); // cleanup
+
+        assert!(captured.len() >= 2, "expected two requests on the wire, got {captured:?}");
+        for value in &captured {
+            assert_eq!(value, &format!("Bearer {KEY}"), "wire header must carry the key");
+        }
+    }
+}

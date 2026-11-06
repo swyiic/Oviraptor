@@ -6,7 +6,9 @@ pub fn create_sentinel_scan(
     scan_mode: Option<String>,
 ) -> Result<SentinelScan, String> {
     let connection = db::open(&state.db_path)?;
-    create_sentinel_asset_scan_in(&connection, project_id, asset_ids, scan_mode)
+    let scan = create_sentinel_asset_scan_in(&connection, project_id, asset_ids, scan_mode)?;
+    crate::scanning::scan_detail_store::provision_new_scan(&state.db_path, &state.app_data_dir, &scan.id)?;
+    Ok(scan)
 }
 
 fn create_sentinel_asset_scan_in(
@@ -169,7 +171,7 @@ pub fn create_sentinel_url_scan(
     orchestration_mode: Option<String>,
 ) -> Result<SentinelScan, String> {
     let connection = db::open(&state.db_path)?;
-    create_sentinel_url_scan_with_mode_in(
+    let scan = create_sentinel_url_scan_with_mode_in(
         &connection,
         project_id,
         task_name,
@@ -183,7 +185,9 @@ pub fn create_sentinel_url_scan(
         instruction,
         closure,
         orchestration_mode,
-    )
+    )?;
+    crate::scanning::scan_detail_store::provision_new_scan(&state.db_path, &state.app_data_dir, &scan.id)?;
+    Ok(scan)
 }
 
 /// Task-external approved inventory selection for a genuinely new Multi draft.
@@ -209,8 +213,8 @@ pub fn create_sentinel_url_scan_with_tool_selection(
 ) -> Result<SentinelScan, String> {
     let ids = approved_ids.unwrap_or_default();
     let connection = db::open(&state.db_path)?;
-    if ids.is_empty() {
-        return create_sentinel_url_scan_with_mode_in(
+    let scan = if ids.is_empty() {
+        create_sentinel_url_scan_with_mode_in(
             &connection,
             project_id,
             task_name,
@@ -224,10 +228,10 @@ pub fn create_sentinel_url_scan_with_tool_selection(
             instruction,
             closure,
             orchestration_mode,
-        );
-    }
-    let configuration = crate::tool_supply::ToolAdministratorConfiguration::from_app(&app)?;
-    create_sentinel_url_scan_with_tool_selection_in(
+        )?
+    } else {
+        let configuration = crate::tool_supply::ToolAdministratorConfiguration::from_app(&app)?;
+        create_sentinel_url_scan_with_tool_selection_in(
         &connection,
         &configuration,
         project_id,
@@ -243,7 +247,10 @@ pub fn create_sentinel_url_scan_with_tool_selection(
         closure,
         orchestration_mode,
         ids,
-    )
+    )?
+    };
+    crate::scanning::scan_detail_store::provision_new_scan(&state.db_path, &state.app_data_dir, &scan.id)?;
+    Ok(scan)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -336,38 +343,6 @@ fn create_sentinel_url_scan_with_tool_selection_execution_in(
     Ok(scan)
 }
 
-#[cfg(test)]
-#[allow(clippy::too_many_arguments)]
-fn create_sentinel_url_scan_in(
-    connection: &rusqlite::Connection,
-    project_id: i64,
-    task_name: String,
-    urls: Vec<String>,
-    scan_mode: Option<String>,
-    max_budget_usd: Option<f64>,
-    auth_session_id: Option<String>,
-    auth_session_ids: Option<Vec<String>>,
-    auth_session_scope_id: Option<String>,
-    skill_ids: Option<Vec<i64>>,
-    instruction: Option<String>,
-    closure: Option<String>,
-) -> Result<SentinelScan, String> {
-    create_sentinel_url_scan_with_mode_in(
-        connection,
-        project_id,
-        task_name,
-        urls,
-        scan_mode,
-        max_budget_usd,
-        auth_session_id,
-        auth_session_ids,
-        auth_session_scope_id,
-        skill_ids,
-        instruction,
-        closure,
-        None,
-    )
-}
 
 #[allow(clippy::too_many_arguments)]
 fn create_sentinel_url_scan_with_mode_in(
@@ -708,6 +683,8 @@ fn sentinel_scan_row(row: &Row<'_>) -> rusqlite::Result<SentinelScan> {
         task_path,
         previous_scan_id: row.get(6)?,
         llm_requests: row.get(7)?,
+        attempt_model_requests: 0,
+        attempt_usage_reason: String::new(),
         input_tokens: row.get(8)?,
         output_tokens: row.get(9)?,
         cached_tokens: row.get(10)?,
@@ -730,20 +707,52 @@ fn sentinel_scan_row(row: &Row<'_>) -> rusqlite::Result<SentinelScan> {
         archived_at: row.get(24)?,
         administrative_closure_recorded: row.get(25)?,
         closure_handoff_recorded: row.get(26)?,
+        last_command_state: String::new(),
+        last_command_verified: false,
+        last_command_review_state: String::new(),
+        last_command_kind: String::new(),
+        last_command_failure_reason: String::new(),
+        pending_command_count: 0,
+        pending_instruction_count: 0,
+        pending_verification_count: 0,
+        pending_commands: Vec::new(),
     })
+}
+
+fn attach_last_command(connection: &rusqlite::Connection, scan: &mut SentinelScan) {
+    let command = crate::scanning::task_binding::latest_command(connection, &scan.id);
+    scan.last_command_state = command.get("state").and_then(serde_json::Value::as_str).unwrap_or("").to_string();
+    scan.last_command_verified = command.get("verified").and_then(serde_json::Value::as_bool).unwrap_or(false);
+    scan.last_command_review_state = command.get("reviewState").and_then(serde_json::Value::as_str).unwrap_or("").to_string();
+    scan.last_command_kind = command.get("kind").and_then(serde_json::Value::as_str).unwrap_or("").to_string();
+    scan.last_command_failure_reason = command.get("failureReason").and_then(serde_json::Value::as_str).unwrap_or("").to_string();
+    match agent_channel::attempt_model_requests(connection, &scan.id, scan.attempt_count) {
+        Ok(count) => scan.attempt_model_requests = count,
+        Err(reason) => {
+            scan.attempt_model_requests = 0;
+            scan.attempt_usage_reason = reason;
+        }
+    };
+    scan.pending_command_count = crate::scanning::task_binding::pending_command_count(connection, &scan.id);
+    scan.pending_instruction_count = crate::scanning::task_binding::pending_instruction_count(connection, &scan.id);
+    scan.pending_verification_count = crate::scanning::task_binding::pending_verification_count(connection, &scan.id);
+    scan.pending_commands = crate::scanning::task_binding::pending_commands(connection, &scan.id);
 }
 
 fn sentinel_scan_by_id(
     connection: &rusqlite::Connection,
     scan_id: &str,
 ) -> Result<SentinelScan, String> {
-    connection
+    let _ = recover_unclaimed_continuation(connection, scan_id);
+    let mut scan = connection
         .query_row(
             &format!("SELECT {SENTINEL_SCAN_COLUMNS} FROM sentinel_scans WHERE id=?1"),
             [scan_id],
             sentinel_scan_row,
         )
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    attach_last_command(connection, &mut scan);
+    Ok(scan)
 }
 
 fn sentinel_attempt_stage(status: &str, checkpoint: &str) -> String {
@@ -877,27 +886,8 @@ fn sync_sentinel_attempt(connection: &rusqlite::Connection, scan_id: &str) {
 }
 
 const SENTINEL_RESCAN_COUNT_SQL: &str = "SELECT COUNT(*) FROM sentinel_targets t WHERE scan_id=?1 AND (?2=0 OR status NOT IN ('completed','recon_only','manual_review')) AND NOT EXISTS (SELECT 1 FROM sentinel_fuse_zone f WHERE f.archived=0 AND f.project_id=t.project_id AND f.normalized_url=lower(rtrim(trim(t.url),'/')))";
-#[cfg(test)]
-const SENTINEL_RESCAN_COPY_SQL: &str = "INSERT INTO sentinel_targets(project_id,scan_id,asset_id,company,url,status) SELECT t.project_id,?1,t.asset_id,t.company,t.url,'queued' FROM sentinel_targets t WHERE t.scan_id=?2 AND (?3=0 OR t.status NOT IN ('completed','recon_only','manual_review')) AND NOT EXISTS (SELECT 1 FROM sentinel_fuse_zone f WHERE f.archived=0 AND f.project_id=t.project_id AND f.normalized_url=lower(rtrim(trim(t.url),'/')))";
-#[cfg(test)]
-const SENTINEL_RESCAN_RECON_COPY_SQL: &str = "INSERT INTO sentinel_checkpoints(scan_id,url,stage,raw_json,updated_at) SELECT ?1,c.url,c.stage,c.raw_json,datetime('now','localtime') FROM sentinel_checkpoints c JOIN sentinel_targets t ON t.scan_id=?1 AND t.url=c.url WHERE c.scan_id=?2 AND c.stage='frontend_recon' ON CONFLICT(scan_id,url,stage) DO UPDATE SET raw_json=excluded.raw_json,updated_at=excluded.updated_at";
-#[cfg(test)]
-const SENTINEL_RESUME_COUNT_SQL: &str = "SELECT COUNT(*) FROM sentinel_targets WHERE scan_id=?1 AND status NOT IN ('completed','completed_with_gaps','partial','recon_only','manual_review','limited','protected_stop','failed','fuse_excluded','resume_incompatible','persistence_failure')";
 const SENTINEL_RESUME_TARGETS_SQL: &str = "SELECT company,url FROM sentinel_targets WHERE scan_id=?1 AND status NOT IN ('completed','completed_with_gaps','partial','recon_only','manual_review','limited','protected_stop','failed','fuse_excluded','resume_incompatible','persistence_failure') ORDER BY id";
 
-#[cfg(test)]
-fn prepare_web_scan_retry(
-    connection: &mut rusqlite::Connection,
-    scan_id: &str,
-    status: &str,
-) -> Result<i64, String> {
-    let transaction = connection
-        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-        .map_err(|error| error.to_string())?;
-    let count = prepare_web_scan_retry_in(&transaction, scan_id, status)?;
-    transaction.commit().map_err(|error| error.to_string())?;
-    Ok(count)
-}
 
 fn prepare_web_scan_retry_in(
     connection: &rusqlite::Connection,
@@ -1047,14 +1037,6 @@ fn next_scan_attempt_number(scan_root: &Path, minimum_attempt: u32) -> u32 {
     next_discovered_attempt.max(minimum_attempt.max(1))
 }
 
-#[cfg(test)]
-fn next_scan_attempt_work_dir(scan_root: &Path, minimum_attempt: u32) -> Result<PathBuf, String> {
-    fs::create_dir_all(scan_root).map_err(|error| error.to_string())?;
-    let attempt = next_scan_attempt_number(scan_root, minimum_attempt);
-    let work_dir = scan_root.join(format!("attempt-{attempt:04}"));
-    fs::create_dir_all(&work_dir).map_err(|error| error.to_string())?;
-    Ok(work_dir)
-}
 
 #[tauri::command]
 pub fn rescan_sentinel_scan(

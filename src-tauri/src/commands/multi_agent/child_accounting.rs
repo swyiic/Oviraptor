@@ -68,6 +68,15 @@ fn settle_child_usage_for_status_on(
 ) -> Result<(), String> {
     if !original_web_receipt {
         crate::agent_runtime::multi_agent::lease::validate_coordinator_lease(transaction, lease)?;
+        // A child whose model output was rejected already had its reservations
+        // resolved by the receipt-forfeit path. Re-settling its usage against the
+        // released reservation double-counts and, with hard limits set, fails as
+        // budget_usage_exceeds_reservation — which wedges the whole web branch at
+        // bootstrap/recovery. If this assignment was already reconciled by a
+        // forfeit receipt, settlement is an idempotent no-op.
+        if already_reconciled_by_receipt(transaction, &lease.root_run_id, &child.assignment_id)? {
+            return Ok(());
+        }
     }
     let (reserved_tokens, reserved_requests, budget_settled_at): (i64, i64, String) = transaction
         .query_row(
@@ -104,12 +113,20 @@ fn settle_child_usage_for_status_on(
         settle_child_model_usage_on(transaction, lease, child, usage, original_web_receipt)?;
         return Ok(());
     }
+    // A child's per-call token reservation (?1) is an admission hint, not a
+    // spending cap: the real ceiling is the run aggregate `total_tokens`, kept by
+    // the `spent+reserved-?1+?3<=total_tokens` guard below. So a reported, settled
+    // cost may exceed this child's reservation and is still billed, as long as the
+    // run aggregate holds. (Previously `?3<=?1` forced a few-token overrun — e.g.
+    // 8690 spent against an 8000 reservation — to fail as
+    // child_budget_settlement_exceeded_or_stale, wedging the branch; the matching
+    // per-dimension ledger relaxation lives in receipts/write.rs.)
     let settled = transaction
         .execute(
             "UPDATE agent_budget_ledger SET reserved_tokens=reserved_tokens-?1,reserved_requests=reserved_requests-?2,\
              spent_tokens=spent_tokens+?3,spent_requests=spent_requests+?4,updated_at=datetime('now','localtime') \
              WHERE root_run_id=?5 AND lease_epoch=?6 AND fencing_token=?7 AND reserved_tokens>=?1 AND reserved_requests>=?2 \
-             AND (total_tokens=0 OR ?3<=?1) AND (total_requests=0 OR ?4<=?2) \
+             AND (total_requests=0 OR ?4<=?2) \
              AND (total_tokens=0 OR spent_tokens+reserved_tokens-?1+?3<=total_tokens) \
              AND (total_requests=0 OR spent_requests+reserved_requests-?2+?4<=total_requests)",
             params![
@@ -317,4 +334,55 @@ fn finish_coordinator_run_in_transaction(
         }
     }
     Ok(final_clock)
+}
+
+/// True when this assignment's model reservations were already resolved by the
+/// receipt-forfeit path (a `forfeit` entry whose source carries `:receipt:`),
+/// i.e. the child's model call was reconciled after a rejected output. Used to
+/// keep a later settlement idempotent instead of double-counting.
+fn already_reconciled_by_receipt(
+    transaction: &rusqlite::Transaction<'_>,
+    root_run_id: &str,
+    assignment_id: &str,
+) -> Result<bool, String> {
+    transaction
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM agent_budget_entries \
+             WHERE root_run_id=?1 AND assignment_id=?2 AND kind='forfeit' \
+             AND instr(source_id, ':receipt:')>0)",
+            params![root_run_id, assignment_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("无法确认子智能体是否已由回执对账：{error}"))
+}
+
+#[cfg(test)]
+mod reconcile_guard_tests {
+    use rusqlite::Connection;
+
+    fn reconciled(connection: &Connection, root: &str, assignment: &str) -> bool {
+        let transaction = connection.unchecked_transaction().unwrap();
+        super::already_reconciled_by_receipt(&transaction, root, assignment).unwrap()
+    }
+
+    #[test]
+    fn receipt_forfeit_marks_an_assignment_reconciled() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE agent_budget_entries(root_run_id TEXT, assignment_id TEXT, kind TEXT, source_id TEXT);
+                 INSERT INTO agent_budget_entries VALUES('r1','asgA','forfeit','specialist:asgA:h:receipt:h2');
+                 INSERT INTO agent_budget_entries VALUES('r1','asgB','consume','specialist:asgB:h');
+                 INSERT INTO agent_budget_entries VALUES('r1','asgC','forfeit','clock:x:forfeit');",
+            )
+            .unwrap();
+        // Rejected-output child reconciled via a receipt forfeit → skip re-settle.
+        assert!(reconciled(&connection, "r1", "asgA"));
+        // A normally-consumed child is not receipt-reconciled → settle normally.
+        assert!(!reconciled(&connection, "r1", "asgB"));
+        // A non-receipt forfeit (e.g. clock) does not count as receipt reconciliation.
+        assert!(!reconciled(&connection, "r1", "asgC"));
+        // Unknown assignment → not reconciled.
+        assert!(!reconciled(&connection, "r1", "asgZ"));
+    }
 }

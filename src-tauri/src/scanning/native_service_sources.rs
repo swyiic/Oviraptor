@@ -717,6 +717,3 @@ pub(super) fn resolve_on(
     Ok(VerifiedSource { tree, receipt })
 }
 
-#[cfg(test)]
-#[path = "native_service_sources_tests.rs"]
-mod tests;

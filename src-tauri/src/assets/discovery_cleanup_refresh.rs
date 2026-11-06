@@ -28,32 +28,6 @@ pub(super) fn request_on_resume(c: &Connection, p: i64, run: &str) -> Result<Val
     )
 }
 
-/// Call after accepting changed target_names_json in the organization owner.
-/// Unit-directory changes affect existing evidence even when its own basis did
-/// not change. Same normalized names, reordered names, and whitespace do not.
-pub(super) fn request_targets_changed(
-    c: &Connection,
-    p: i64,
-    run: &str,
-    old: &str,
-    new: &str,
-) -> Result<bool, String> {
-    fn names(raw: &str) -> Result<BTreeSet<String>, String> {
-        let values: Vec<String> = serde_json::from_str(raw).map_err(err)?;
-        Ok(values
-            .into_iter()
-            .map(|s| review::scope::organization_key(&s))
-            .filter(|s| !s.is_empty())
-            .collect())
-    }
-    if names(old)? == names(new)? {
-        return Ok(false);
-    }
-    let gen = generation(c, p, run)?;
-    ensure(c)?;
-    c.execute("INSERT INTO asset_cleanup_local_refresh(run_id,project_id,generation,include_evidence,updated_at) VALUES(?1,?2,?3,1,?4) ON CONFLICT(run_id) DO UPDATE SET project_id=excluded.project_id,generation=excluded.generation,cursor='',current_key='',asset_cursor=-1,include_evidence=1,state='pending',checked_groups=0,awakened_groups=0,updated_at=excluded.updated_at",params![run,p,gen,now()]).map_err(err)?;
-    Ok(true)
-}
 
 /// Identity keys deliberately omit timestamps, asset samples/counts, certificate
 /// hashes and duplicate source receipts. Renewing a certificate with the same

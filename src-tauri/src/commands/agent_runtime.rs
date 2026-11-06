@@ -216,12 +216,18 @@ impl AgentExecutionPlan {
 /// ceiling can stay tight while the coverage limits remain explicit.
 fn native_agent_limits(local: bool, mode: &str) -> (u64, i64, i64, i64, i64, i64) {
     match (local, mode) {
-        (true, "deep") => (2_400, 400_000, 900_000, 16, 22, 26),
-        (true, "standard") => (1_500, 200_000, 500_000, 10, 14, 18),
-        (true, _) => (900, 100_000, 250_000, 6, 8, 10),
-        (false, "deep") => (1_800, 600_000, 1_600_000, 24, 40, 48),
-        (false, "standard") => (1_200, 300_000, 900_000, 14, 22, 28),
-        (false, _) => (600, 150_000, 400_000, 8, 12, 14),
+        // Hard token/request budgets raised to effectively unlimited per request:
+        // the `tokens > 0 / requests > 0`-guarded budget gates (reviewer floor,
+        // child reservation, capacity, exhaustion) all pass with this headroom, so
+        // the budget ledger no longer stops a task. Soft defaults (2nd/4th),
+        // timeouts (1st) and max_turns (6th) are unchanged — wall-time and
+        // no-progress stalls remain the real backstops against an infinite run.
+        (true, "deep") => (2_400, 400_000, 2_000_000_000, 16, 1_000_000, 26),
+        (true, "standard") => (1_500, 200_000, 2_000_000_000, 10, 1_000_000, 18),
+        (true, _) => (900, 100_000, 2_000_000_000, 6, 1_000_000, 10),
+        (false, "deep") => (1_800, 600_000, 2_000_000_000, 24, 1_000_000, 4_096),
+        (false, "standard") => (1_200, 300_000, 2_000_000_000, 14, 1_000_000, 2_048),
+        (false, _) => (600, 150_000, 2_000_000_000, 8, 1_000_000, 1_024),
     }
 }
 
@@ -337,16 +343,28 @@ fn build_agent_execution_plan(
             backend,
             mode: route.mode.clone(),
             surface: route.surface.clone(),
-            timeout_seconds: configured_timeout.min(90),
-            soft_uncached_tokens: configured_tokens.clamp(25_000, 50_000),
-            hard_total_tokens: 100_000,
-            soft_model_requests: 2,
-            hard_model_requests: 4,
-            max_turns: 6,
-            contract_limit: 4,
+            // A raw-IP app (RuoYi/WMS-style) can be classified `static_frontend`
+            // yet actually be dynamic. The old 4-request / 100k-token ceiling then
+            // starved both the SPA-API-mapper allocation (tripping the reviewer
+            // floor, `mapper_allocation_reviewer_floor_exhausted`) and the derived
+            // `target_requests` probe dimension (= hardModelRequests*4, capped 400,
+            // so only 4 when requests were tiny). Per request this surface now
+            // carries the SAME effectively-unlimited ceilings as the native web
+            // path: large finite values — deliberately NOT 0, which would collapse
+            // `target_requests` back to 4 — so every budget gate passes and
+            // `target_requests` reaches its full 400 cap. Wall-time and no-progress
+            // stalls remain the only real backstops; a genuinely static site still
+            // stops fast on the no-progress window well under these ceilings.
+            timeout_seconds: configured_timeout.min(300),
+            soft_uncached_tokens: configured_tokens.clamp(25_000, 60_000),
+            hard_total_tokens: 2_000_000_000,
+            soft_model_requests: 6,
+            hard_model_requests: 1_000_000,
+            max_turns: 26,
+            contract_limit: 6,
             discovery_passes: 1,
             verifier_limit: 1,
-            no_progress_window: 2,
+            no_progress_window: 3,
             allowed_origins: allowed_origins.clone(),
             ..frozen.clone()
         });
@@ -369,7 +387,7 @@ fn build_agent_execution_plan(
     let full_power_multiplier = if environment.full_power { 2 } else { 1 };
     let soft_requests = configured_requests.max(request_default).max(1);
     let hard_requests = (hard_requests * full_power_multiplier)
-        .min(if local { 32 } else { 96 })
+        .min(if local { 1_000_000 } else { 2_000_000 })
         .max(soft_requests);
     let timeout = configured_timeout
         .max(if local { timeout_cap / 2 } else { timeout_cap })
@@ -389,7 +407,7 @@ fn build_agent_execution_plan(
         hard_total_tokens: hard_tokens * full_power_multiplier,
         soft_model_requests: soft_requests,
         hard_model_requests: hard_requests.max(soft_requests),
-        max_turns: (max_turns * full_power_multiplier).min(if local { 40 } else { 100 }),
+        max_turns: (max_turns * full_power_multiplier).min(if local { 4_096 } else { 8_192 }),
         contract_limit: web_mode_contract_limit(&route.mode),
         discovery_passes: web_mode_discovery_passes(&route.mode),
         verifier_limit: web_mode_verifier_limit(&route.mode),
@@ -406,23 +424,6 @@ fn build_agent_execution_plan(
     })
 }
 
-/// The plan one attempt runs on. A continuation inherits the parent's frozen
-/// snapshot and refreshes only the attempt identity; rebuilding from today's
-/// settings is what "重新执行" is for (§3.4, §3.5).
-#[allow(clippy::too_many_arguments)]
-#[cfg(test)]
-fn agent_frozen_plan(
-    db_path: &Path,
-    scan_id: &str,
-    url: &str,
-    route: &FrontendRoute,
-    environment: &ModelRuntimeEnv,
-    adaptive: &AgentBudgetSettings,
-    backend: AgentBackendKind,
-    attempt_number: i64,
-) -> Result<AgentExecutionPlan, NativeStateRejection> {
-    agent_frozen_plan_with_tool_configuration(db_path, scan_id, url, route, environment, adaptive, backend, attempt_number, None)
-}
 
 #[allow(clippy::too_many_arguments)]
 fn agent_frozen_plan_with_tool_configuration(
@@ -588,15 +589,6 @@ impl AgentRunLedger {
             .map(|_| ())
     }
 
-    #[cfg(test)]
-    fn model_round(
-        &self,
-        turns: i64,
-        usage: &AgentTokenUsage,
-        tools: &[String],
-    ) -> Result<(), String> {
-        self.model_round_with_directives(turns, usage, tools, &HumanDirectiveContext::default())
-    }
 
     fn model_round_with_directives(
         &self,

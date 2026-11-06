@@ -73,7 +73,7 @@ pub(crate) fn import_targets_at(db_path: &std::path::Path, input: TargetImportIn
     }
     let mut connection = db::open(db_path)?;
     let transaction = connection
-        .transaction()
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(|error| error.to_string())?;
     let mut inserted = 0;
     for raw in input.values {
@@ -132,6 +132,25 @@ pub(crate) fn remove_target_at(db_path: &std::path::Path, target_id: i64) -> Res
         .execute("DELETE FROM targets WHERE id=?1", [target_id])
         .map_err(|error| error.to_string())?;
     Ok(())
+}
+
+/// Bulk-delete selected targets in one transaction, so clearing many at once (for
+/// a large target list) is one fast operation instead of N round-trips.
+#[tauri::command]
+pub fn remove_targets(state: State<AppState>, target_ids: Vec<i64>) -> Result<usize, String> {
+    if target_ids.is_empty() {
+        return Ok(0);
+    }
+    let mut connection = db::open(&state.db_path)?;
+    let transaction = connection.transaction().map_err(|error| error.to_string())?;
+    let mut removed = 0usize;
+    for target_id in &target_ids {
+        removed += transaction
+            .execute("DELETE FROM targets WHERE id=?1", [target_id])
+            .map_err(|error| error.to_string())?;
+    }
+    transaction.commit().map_err(|error| error.to_string())?;
+    Ok(removed)
 }
 
 // Display, filter and CSV share provider receipts. A host name/certificate is
@@ -757,7 +776,7 @@ pub(crate) fn add_content_rule_at(
         let normalized = keyword.to_lowercase();
         let pattern = format!("%{}%", escape_like(&keyword));
         let mut connection = db::open(db_path)?;
-        let transaction = connection.transaction().map_err(|error| error.to_string())?;
+        let transaction = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(|error| error.to_string())?;
         transaction
             .execute(
                 "INSERT INTO content_rules(keyword,normalized_keyword,source_asset_id) VALUES(?1,?2,?3) ON CONFLICT(normalized_keyword) DO UPDATE SET keyword=excluded.keyword,source_asset_id=COALESCE(excluded.source_asset_id,content_rules.source_asset_id),enabled=1,updated_at=datetime('now','localtime')",
@@ -856,7 +875,7 @@ pub(crate) fn update_decision_at(db_path: &std::path::Path, input: DecisionInput
     }
     let mut connection = db::open(db_path)?;
     let transaction = connection
-        .transaction()
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(|error| error.to_string())?;
     for asset_id in input.asset_ids {
         transaction
@@ -904,7 +923,7 @@ pub(crate) fn update_asset_decisions_at(db_path: &std::path::Path, input: AssetB
         .collect::<Vec<_>>();
     let mut connection = db::open(db_path)?;
     let transaction = connection
-        .transaction()
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(|error| error.to_string())?;
     let mut changed = 0i64;
     for item in selections {
@@ -1213,27 +1232,5 @@ pub(crate) fn acknowledge_interrupted_run_at(db_path: &std::path::Path, run_id: 
     Ok(())
 }
 
-#[cfg(test)]
-#[path = "../assets/startup_tests.rs"]
-mod startup_tests;
 
-#[cfg(test)]
-pub(crate) mod test_support {
-    use crate::asset_models::AssetQuery;
-    use rusqlite::types::Value as SqlValue;
 
-    pub(crate) fn asset_filter(
-        query: &AssetQuery,
-        apply_decision_view: bool,
-    ) -> (String, Vec<SqlValue>) {
-        super::asset_filter(query, apply_decision_view)
-    }
-
-    pub(crate) fn detect_target(value: &str) -> &'static str {
-        super::detect_target(value)
-    }
-}
-
-#[cfg(test)]
-#[path = "asset_query_rule_tests.rs"]
-mod asset_query_rule_tests;

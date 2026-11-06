@@ -5,11 +5,31 @@ import type { DiscoveryView, DiscoveryWitness } from './discoveryTypes';
 export type AgentModelUsage = { requests: number; reportedRequests: number; unknownRequests: number; inputTokens: number | null; outputTokens: number | null; cachedInputTokens?: number | null; reasoningTokens?: number | null };
 export type AgentHostMessage = { id: string; role: "user" | "assistant"; content: string; status: string; runId?: string | null; createdAt: string; failureCode?: string; stopReason?: string; usage?: AgentModelUsage };
 export type AgentHostConversation = { id: string; projectId: number; title: string; metadataRevision?: number; createdAt: string; lastActivityAt?: string; updatedAt?: string; pinned?: boolean; titleManuallySet?: boolean };
+export type AgentProjectMemoryEntry = { entryId: string; note: string; kind: string; tags: string[]; sourceConversationId: string | null; createdAt: string; updatedAt: string };
 export type AgentConversationWorkspace = { projectId: number; conversationId: string; path: string; exists: boolean; shared: true; description: string };
 export type AgentConversationFile = { path: string; name: string; absolutePath: string; size: number; modifiedAt: string; generatedAt: string; runId: string; recordId: string; versionId?: string|null; previewable: boolean; openable: boolean };
 export type AgentConversationFiles = { projectId: number; conversationId: string; workspacePath: string; shared: true; items: AgentConversationFile[]; truncated: boolean; hasMore?: boolean; nextCursor?:string|null; references?:Array<{path:string;absolutePath:string}>; unavailable: number };
 export type AgentConversationFilePreview = { path: string; name: string; size: number; modifiedAt: string; content: string; truncated: boolean; language: string; offset?:number; nextOffset?:number; versionId?:string };
+/** Agent-recorded pentest finding (host `agent_findings` table, via the `record_finding` tool) —
+ *  distinct from the native Tauri-side `sentinel_findings`; shown on its own until unified later. */
+export type AgentFindingRecord = {
+  title?: string; severity?: string; cvss?: number | string; confidence?: string; cwe?: string; cve?: string;
+  description?: string; evidence?: string; chain_context?: string; business_impact?: string;
+  poc_request?: string; poc_script?: string; poc_output?: string; recommendation?: string;
+  http_request?: { method?: string; url?: string; headers?: Record<string, string>; body?: string };
+  http_response?: { status?: number; headers?: Record<string, string>; body?: string };
+  /** workspace_ws captures (increment 4), time-ordered, at most 100 frames. */
+  ws_frames?: Array<{ dir?: "recv" | "send"; type?: "text" | "binary"; at?: number; text?: string; base64?: string; bytes?: number }>;
+  [key: string]: unknown;
+};
+export type AgentFinding = { id: string; conversationId: string; projectId: number; title: string; severity: string; kind: string; record: AgentFindingRecord; status: "unverified" | "confirmed" | "rejected"; createdAt: string; decidedAt: string };
+export type AgentWorkspaceFile = { path: string; bytes: number; modifiedAt: string };
+export type AgentWorkspaceFileContent = { path: string; bytes: number; truncated: boolean; content: string };
 export type AgentHostEvent = { type: string; conversationId?: string; runId?: string; messageId?: string; delta?: string; status?: string; content?: string; title?: string; code?: string; [key: string]: unknown };
+/** External MCP decision connector (jev-studio): advisory typed-decision tools, surfaced to
+ *  the agent as `jev_*`. Disabled by default; any failure degrades to "no extra tools". */
+export type McpJevStatus = { enabled: boolean; command: string; args: string[]; state: "disabled" | "starting" | "ready" | "error"; error: string; tools: Array<{ name: string; title: string; description: string }> };
+export type McpJevConfigInput = { enabled?: boolean; command?: string; args?: string[] };
 
 /** Header label for the session page: runtime + model from the live agent-host, never the legacy desktop profile. */
 export function agentRuntimeHeader(settings: AgentHostSettings | null | undefined): string {
@@ -59,22 +79,50 @@ export function createAgentHostChatClient(endpoint: AgentHostEndpoint, fetchImpl
         });
         return project.id;
       }
-      const { items } = await request<{ items: { id: number; name: string }[] }>("/api/projects");
-      const found = items.find(item => item.name === name);
+      const { items } = await request<{ items: { id: number; name: string; kind?: string }[] }>("/api/projects");
+      // Never fall back onto the reserved personal/direct-chat row by a name collision.
+      const found = items.find(item => item.kind !== "personal" && item.name === name);
       if (found) return found.id;
       return (await request<{ id: number }>("/api/projects", { method: "POST", body: JSON.stringify({ name }) })).id;
     },
+    /** The reserved "direct chat" space (agent-at-top): conversations started with no named
+     *  workspace land here. Ensures it exists and returns its (stable) host project. */
+    ensurePersonalProject: () => request<{ id: number; name: string; kind: string; externalId: string | null; createdAt: string }>("/api/projects/personal"),
     conversations: (projectId: number) => request<{ items: AgentHostConversation[] }>(`/api/conversations?projectId=${projectId}`).then(r => r.items),
     createConversation: (projectId: number, title?: string) => request<AgentHostConversation>("/api/conversations", { method: "POST", body: JSON.stringify({ projectId, title }) }),
+    /** The conversation a scan task reports to; the Host creates and binds one when none exists. */
+    openScanTaskConversation: (projectId: number, taskId: string) => request<{ conversation: AgentHostConversation; created: boolean; bound: boolean }>(`/api/projects/${projectId}/scan-tasks/${encodeURIComponent(taskId)}/conversation`, { method: "POST", body: "{}" }),
     updateConversation: (conversationId: string, projectId: number, patch: { title?: string; pinned?: boolean }) => request<AgentHostConversation>(`/api/conversations/${encodeURIComponent(conversationId)}`, { method: "PATCH", body: JSON.stringify({ projectId, ...patch }) }),
+    /** Re-home a conversation to a named workspace (agent-at-top §5, forward-only):
+     *  future turns use the target's workspace/memory/budget; past evidence stays put. */
+    attachConversation: (conversationId: string, projectId: number) => request<AgentHostConversation>(`/api/conversations/${encodeURIComponent(conversationId)}/attach`, { method: "POST", body: JSON.stringify({ projectId }) }),
     conversationWorkspace: (conversationId: string, projectId: number) => request<AgentConversationWorkspace>(`/api/conversations/${encodeURIComponent(conversationId)}/workspace?projectId=${projectId}`),
     conversationFile: (id:string,pid:number,path:string)=>request<AgentConversationFile>(`/api/conversations/${encodeURIComponent(id)}/files/info?projectId=${pid}&path=${encodeURIComponent(path)}`),
     fileVersions:(id:string,pid:number,path:string,after?:string)=>request<{items:Array<{versionId:string;createdAt:string;size:number;kind:string;sha256:string}>;hasMore:boolean;nextCursor:string|null}>(`/api/conversations/${encodeURIComponent(id)}/files/versions?projectId=${pid}&path=${encodeURIComponent(path)}${after?`&after=${encodeURIComponent(after)}`:''}`),
     conversationFiles: (conversationId: string, projectId: number, after?:string) => request<AgentConversationFiles>(`/api/conversations/${encodeURIComponent(conversationId)}/files?projectId=${projectId}${after?`&after=${encodeURIComponent(after)}`:''}`),
     previewConversationFile: (conversationId: string, projectId: number, path: string, versionId?:string, offset=0) => request<AgentConversationFilePreview>(`/api/conversations/${encodeURIComponent(conversationId)}/files/preview?projectId=${projectId}&path=${encodeURIComponent(path)}${versionId?`&versionId=${encodeURIComponent(versionId)}`:''}&offset=${offset}`),
     deleteConversation: (conversationId: string, projectId: number) => request<unknown>(`/api/conversations/${encodeURIComponent(conversationId)}?projectId=${projectId}`, { method: "DELETE" }),
+    projects: () => request<{ items: { id: number; name: string; kind?: string }[] }>("/api/projects").then(r => r.items),
+    projectMemory: (projectId: number) => request<{ items: AgentProjectMemoryEntry[] }>(`/api/projects/${projectId}/memory`).then(r => r.items),
+    forgetMemory: (projectId: number, entryId: string) => request<{ ok: boolean; removed: boolean }>(`/api/projects/${projectId}/memory/${encodeURIComponent(entryId)}`, { method: "DELETE" }),
+    clearMemory: (projectId: number) => request<{ ok: boolean; removed: number }>(`/api/projects/${projectId}/memory`, { method: "DELETE" }),
+    /** Global cross-workspace memory (scope='global'): visible from every project. */
+    globalMemory: () => request<{ items: AgentProjectMemoryEntry[] }>("/api/memory/global").then(r => r.items),
+    forgetGlobalMemory: (entryId: string) => request<{ ok: boolean; removed: boolean }>(`/api/memory/global/${encodeURIComponent(entryId)}`, { method: "DELETE" }),
+    mcpJevStatus: () => request<McpJevStatus>("/api/mcp/jev"),
+    setMcpJev: (input: McpJevConfigInput) => request<McpJevStatus>("/api/mcp/jev", { method: "POST", body: JSON.stringify(input) }),
+    /** Agent-recorded findings (record_finding tool). No project filter server-side —
+     *  callers scope by projectId client-side (each row carries its own). */
+    listFindings: (status?: "unverified" | "confirmed" | "rejected") => request<{ items: AgentFinding[] }>(`/api/findings${status ? `?status=${encodeURIComponent(status)}` : ""}`).then(r => r.items),
+    decideFinding: (id: string, confirm: boolean) => request<AgentFinding>(`/api/findings/${encodeURIComponent(id)}/decide`, { method: "POST", body: JSON.stringify({ confirm }) }),
+    deleteFinding: (id: string) => request<{ ok: boolean; removed: boolean }>(`/api/findings/${encodeURIComponent(id)}`, { method: "DELETE" }),
+    /** Operator surface for the agent's own workspace scripts/artifacts (§F) — distinct from
+     *  conversationFiles() above (chat-attachment records), this walks the live workspace dir. */
+    workspaceFiles: (conversationId: string) => request<{ files: AgentWorkspaceFile[] }>(`/api/conversations/${encodeURIComponent(conversationId)}/workspace/files`).then(r => r.files),
+    workspaceFile: (conversationId: string, path: string) => request<AgentWorkspaceFileContent>(`/api/conversations/${encodeURIComponent(conversationId)}/workspace/file?path=${encodeURIComponent(path)}`),
     messagePage: (conversationId:string,projectId:number,before?:string) => request<{items:AgentHostMessage[];hasMore:boolean;nextCursor:string|null}>(`/api/conversations/${encodeURIComponent(conversationId)}/messages?projectId=${projectId}&limit=50${before?`&before=${encodeURIComponent(before)}`:''}`),
     messages: (conversationId: string, projectId: number) => request<{ items: AgentHostMessage[] }>(`/api/conversations/${encodeURIComponent(conversationId)}/messages?projectId=${projectId}`).then(r => r.items),
+    chain: (conversationId: string, projectId: number) => request<{ hops: Array<{ id: string; factLabel: string; factValue: string; source: string; opensNext: boolean; action: string }> }>(`/api/conversations/${encodeURIComponent(conversationId)}/chain?projectId=${projectId}`).then(result => result.hops),
     send: (conversationId: string, projectId: number, text: string, taskId?: string, confirmedIntent?: string) => request<unknown>(`/api/conversations/${encodeURIComponent(conversationId)}/messages`, { method: "POST", body: JSON.stringify({ projectId, text, ...(taskId ? { taskId } : {}), ...(confirmedIntent ? { confirmedIntent } : {}) }) }),
     prepareTask: (conversationId: string, projectId: number, choice: string, scope: string) => request<{ id: string; scopeHash: string; startsScan: boolean }>(`/api/conversations/${encodeURIComponent(conversationId)}/approvals`, { method: "POST", body: JSON.stringify({ projectId, choice, scope }) }),
     confirmTask: (conversationId: string, projectId: number, approvalId: string, scopeHash: string) => request<{ id: string; status: string; startsScan: boolean }>(`/api/conversations/${encodeURIComponent(conversationId)}/approvals/${encodeURIComponent(approvalId)}/confirm`, { method: "POST", body: JSON.stringify({ projectId, scopeHash }) }),

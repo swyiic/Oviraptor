@@ -30,6 +30,19 @@ export function useAssetLogPanel(project: () => number | undefined, active: () =
     } catch { if (current()) readFailed.value = true; }
     finally { if (current()) loading.value = false; }
   }
+  // Polling fallback: the committed-event refresh below is best-effort and can be
+  // missed (a dropped event, a dead/quiet backend, a payload that doesn't match the
+  // current project filter), which left the log panel looking frozen. While the log
+  // view is open, also poll on a short interval so logs always auto-refresh.
+  let timer: ReturnType<typeof setInterval> | undefined;
+  watch(active, on => {
+    if (timer) { clearInterval(timer); timer = undefined; }
+    if (on) {
+      void refresh();
+      timer = setInterval(() => { if (!loading.value) void refresh(); }, 4000);
+    }
+  }, { immediate: true });
+
   useCommittedRefresh("asset-log-committed", () => active() ? key() : "", payload => {
     if (!payload || typeof payload !== "object") return false;
     const hint = payload as { logId?: number; runId?: number; projectId?: number | null };
@@ -38,6 +51,6 @@ export function useAssetLogPanel(project: () => number | undefined, active: () =
       && (hint.projectId === null || (Number.isSafeInteger(hint.projectId) && (hint.projectId ?? 0) > 0))
       && (project() === undefined || hint.projectId === project());
   }, () => loading.value, refresh, unavailable => { connectionUnavailable.value = unavailable; });
-  onBeforeUnmount(() => { disposed = true; generation++; });
+  onBeforeUnmount(() => { disposed = true; generation++; if (timer) clearInterval(timer); });
   return { logs, loading, readFailed, connectionUnavailable, refresh };
 }

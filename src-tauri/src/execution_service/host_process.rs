@@ -11,8 +11,6 @@ use std::time::{Duration, Instant};
 
 use super::OutputEvent as Event;
 
-#[cfg(all(test, unix))]
-use crate::native_pipeline::process::log;
 #[path = "process_output.rs"]
 pub(crate) mod output;
 use output::pump;
@@ -456,6 +454,3 @@ fn run_inner(
     })
 }
 
-#[cfg(all(test, unix))]
-#[path = "../native_pipeline/process_observer_tests.rs"]
-mod observer_tests;

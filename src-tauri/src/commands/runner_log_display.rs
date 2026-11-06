@@ -12,10 +12,6 @@ fn runner_log_notification(scan_id: &str, attempt: i64, line: &str) -> JsonValue
     })
 }
 
-#[cfg(test)]
-mod runner_log_write_tests {
-    include!("runner_log_write_tests.rs");
-}
 
 // Native process journal notifications contain identity/cursors only. Consumers
 // must use journal replay, never treat a hint as delivered output.

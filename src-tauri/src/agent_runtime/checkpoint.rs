@@ -3,6 +3,11 @@
 //! Recovery is deterministic: read the snapshot, replay only the events after
 //! it, mark unfinished tool calls as interrupted and never re-charge budget for
 //! work the event log already accounts for.
+//!
+//! Convergence口径 (deep-exploit): `no_progress_streak` is OUTCOME-based. Exploration
+//! advancing (new endpoints/params/coverage) is NOT progress; only new evidence or a
+//! newly confirmed finding resets the streak. A model round that produced neither
+//! advances it. See `replay`.
 use super::contract::TerminalState;
 use super::store::{self, AgentEventRow};
 use rusqlite::Connection;
@@ -156,16 +161,15 @@ pub fn replay(base: &RunState, events: &[AgentEventRow]) -> RunState {
                 state.cached_input_tokens += number(&event.payload, "/usage/cachedInputTokens");
                 state.output_tokens += number(&event.payload, "/usage/outputTokens");
                 state.used_tokens += number(&event.payload, "/usage/totalTokens");
-                if event
-                    .payload
-                    .get("progressAdvanced")
-                    .and_then(JsonValue::as_bool)
-                    .unwrap_or(false)
-                {
-                    state.no_progress_streak = 0;
-                } else {
-                    state.no_progress_streak += 1;
-                }
+                // Progress口径 (deep-exploit): a model round, by itself, is NOT progress.
+                // The old criterion reset the streak on `progressAdvanced` — i.e. on mere
+                // exploration/coverage advancing — so a run that kept discovering new
+                // endpoints/parameters but never produced an exploit would never look
+                // stalled (a root cause of the 10M-token spin). Progress is now defined by
+                // OUTPUT: only new evidence (EvidenceProduced) or a newly CONFIRMED finding
+                // (HypothesisUpdated=confirmed) resets the no-progress streak, below. Every
+                // model round that produced neither advances the streak toward convergence.
+                state.no_progress_streak += 1;
             }
             super::contract::AgentEventKind::ToolInvocationCompleted => {
                 // A local inspection sends zero requests, a paired probe can
@@ -227,6 +231,8 @@ pub fn replay(base: &RunState, events: &[AgentEventRow]) -> RunState {
             }
             super::contract::AgentEventKind::EvidenceProduced => {
                 state.evidence_records += 1;
+                // New PoC / impact evidence is real progress (the outcome口径).
+                state.no_progress_streak = 0;
             }
             super::contract::AgentEventKind::CoverageUpdated => {
                 for family in string_array(&event.payload, "families") {
@@ -238,6 +244,8 @@ pub fn replay(base: &RunState, events: &[AgentEventRow]) -> RunState {
             super::contract::AgentEventKind::HypothesisUpdated => {
                 if event.payload.get("status").and_then(JsonValue::as_str) == Some("confirmed") {
                     state.confirmed_findings += 1;
+                    // A newly confirmed finding is real progress (the outcome口径).
+                    state.no_progress_streak = 0;
                 }
             }
             super::contract::AgentEventKind::ProtectionDetected => {
@@ -354,4 +362,84 @@ fn string_array(value: &JsonValue, key: &str) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod convergence_tests {
+    use super::*;
+    use crate::agent_runtime::contract::AgentEventKind;
+    use crate::agent_runtime::store::AgentEventRow;
+
+    fn ev(sequence: i64, kind: AgentEventKind, payload: JsonValue) -> AgentEventRow {
+        AgentEventRow {
+            id: sequence,
+            run_id: "r".into(),
+            sequence,
+            event_type: kind,
+            payload,
+            artifact_refs: Vec::new(),
+            created_at: String::new(),
+        }
+    }
+
+    #[test]
+    fn model_rounds_alone_grow_the_streak() {
+        // A model round that produces no output is not progress — the streak climbs
+        // toward convergence (the opposite of the old exploration-counts-as-progress口径).
+        let events: Vec<_> = (1..=3)
+            .map(|s| ev(s, AgentEventKind::ModelRoundCompleted, serde_json::json!({})))
+            .collect();
+        let state = replay(&RunState::default(), &events);
+        assert_eq!(state.no_progress_streak, 3);
+        assert_eq!(state.turns, 3);
+    }
+
+    #[test]
+    fn new_evidence_resets_the_streak() {
+        let events = vec![
+            ev(1, AgentEventKind::ModelRoundCompleted, serde_json::json!({})),
+            ev(2, AgentEventKind::ModelRoundCompleted, serde_json::json!({})),
+            ev(3, AgentEventKind::EvidenceProduced, serde_json::json!({})),
+            ev(4, AgentEventKind::ModelRoundCompleted, serde_json::json!({})),
+        ];
+        let state = replay(&RunState::default(), &events);
+        // streak: 1, 2, (evidence → 0), 1
+        assert_eq!(state.no_progress_streak, 1);
+        assert_eq!(state.evidence_records, 1);
+    }
+
+    #[test]
+    fn coverage_advance_is_not_progress() {
+        // Exploration (new covered family) must NOT reset the streak under the new口径.
+        let events = vec![
+            ev(1, AgentEventKind::ModelRoundCompleted, serde_json::json!({})),
+            ev(2, AgentEventKind::CoverageUpdated, serde_json::json!({"families": ["sqli"]})),
+            ev(3, AgentEventKind::ModelRoundCompleted, serde_json::json!({})),
+        ];
+        let state = replay(&RunState::default(), &events);
+        assert_eq!(state.no_progress_streak, 2, "coverage advancing must not reset the streak");
+        assert!(state.covered_families.contains(&"sqli".to_string()));
+    }
+
+    #[test]
+    fn confirmed_finding_resets_but_unconfirmed_does_not() {
+        let confirmed = vec![
+            ev(1, AgentEventKind::ModelRoundCompleted, serde_json::json!({})),
+            ev(2, AgentEventKind::ModelRoundCompleted, serde_json::json!({})),
+            ev(3, AgentEventKind::HypothesisUpdated, serde_json::json!({"status": "confirmed"})),
+            ev(4, AgentEventKind::ModelRoundCompleted, serde_json::json!({})),
+        ];
+        let state = replay(&RunState::default(), &confirmed);
+        assert_eq!(state.no_progress_streak, 1); // reset at seq 3, then +1
+        assert_eq!(state.confirmed_findings, 1);
+
+        let unconfirmed = vec![
+            ev(1, AgentEventKind::ModelRoundCompleted, serde_json::json!({})),
+            ev(2, AgentEventKind::HypothesisUpdated, serde_json::json!({"status": "rejected"})),
+            ev(3, AgentEventKind::ModelRoundCompleted, serde_json::json!({})),
+        ];
+        let state = replay(&RunState::default(), &unconfirmed);
+        assert_eq!(state.no_progress_streak, 2, "a non-confirmed hypothesis is not progress");
+        assert_eq!(state.confirmed_findings, 0);
+    }
 }

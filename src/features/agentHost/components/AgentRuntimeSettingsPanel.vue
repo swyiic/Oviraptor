@@ -951,7 +951,7 @@ onUnmounted(() => {
 }
 
 .agent-runtime-status-grid span {
-  font-size: 10px;
+  font-size: var(--text-micro);
   color: var(--muted);
 }
 

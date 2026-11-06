@@ -5,32 +5,9 @@
 use super::{unpublished_projection::invoice_response, Tick};
 use crate::agent_runtime::multi_agent::budget::{self, Kind, DIMENSIONS};
 use rusqlite::{params, OptionalExtension, Transaction};
-#[cfg(test)]
-use rusqlite::{Connection, TransactionBehavior};
 use serde_json::Value;
 
 impl Tick {
-    /// Finish cost settlement and terminal proof for a v3 received invoice that
-    /// was committed before settlement writers completed. Uses only the frozen
-    /// journal invoice — no SDK replay.
-    /// Test harness entry; production requires explicit confirmation binding.
-    #[cfg(test)]
-    pub(crate) fn settle_unsettled_received(
-        db: &Connection,
-        root: &str,
-        call_id: &str,
-    ) -> Result<(), String> {
-        if !db.is_autocommit() {
-            return Err("root_tick_reconcile_requires_own_transaction".into());
-        }
-        let tx = Transaction::new_unchecked(db, TransactionBehavior::Immediate)
-            .map_err(|e| e.to_string())?;
-        let (tick, capture) = super::super::super::transaction::protect(&tx, || {
-            Self::settle_unsettled_received_in(&tx, root, call_id)
-        })?;
-        tx.commit().map_err(|e| e.to_string())?;
-        tick.persist_terminal_capture(db, capture)
-    }
     pub(super) fn settle_unsettled_received_in(
         tx: &Transaction<'_>,
         root: &str,
@@ -101,26 +78,6 @@ impl Tick {
         Ok((tick, capture))
     }
 
-    /// Consume only exactly bill-backed forfeits for a terminal v3 invoice.
-    /// Missing/inconsistent usage, over-cap bills and amounts requiring a new
-    /// settlement protocol stay unresolved. Never refunds or retries transport.
-    /// Test harness entry; production uses the confirmed transaction below.
-    #[cfg(test)]
-    pub(crate) fn reconcile_forfeited_unknown(
-        db: &Connection,
-        root: &str,
-        call_id: &str,
-    ) -> Result<(), String> {
-        if !db.is_autocommit() {
-            return Err("root_tick_reconcile_requires_own_transaction".into());
-        }
-        let tx = Transaction::new_unchecked(db, TransactionBehavior::Immediate)
-            .map_err(|e| e.to_string())?;
-        super::super::super::transaction::protect(&tx, || {
-            Self::reconcile_forfeited_unknown_in(&tx, root, call_id)
-        })?;
-        tx.commit().map_err(|e| e.to_string())
-    }
     pub(super) fn reconcile_forfeited_unknown_in(
         tx: &Transaction<'_>,
         root: &str,

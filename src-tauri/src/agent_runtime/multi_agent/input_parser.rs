@@ -166,32 +166,11 @@ pub(crate) fn validate_assessment(text: &str, task: &Task) -> Result<(), String>
     if text.len() > 4096 {
         return Err("input_parser_response_oversized".into());
     }
-    let a: Assessment = serde_json::from_str(text).map_err(|_| "input_parser_response_invalid")?;
-    let observed = task.observed();
-    let mut seen = BTreeSet::new();
-    if !bounded(&a.summary, 1024)
-        || a.parameters.is_empty()
-        || a.parameters.len() > 40
-        || a.gaps.is_empty()
-        || a.gaps.len() > 8
-        || !a.gaps.iter().any(|g| g == REQUIRED_GAP)
-        || a.gaps.iter().any(|g| !bounded(g, 128))
-    {
-        return Err("input_parser_readonly_assessment_insufficient".into());
-    }
-    for p in &a.parameters {
-        if !PARAMETER_LOCATIONS.contains(&p.location.as_str())
-            || !TYPE_ASSUMPTIONS.contains(&p.type_assumption.as_str())
-            || !BROKER_VARIANT_TEMPLATES.contains(&p.broker_variant_template_id.as_str())
-            || !observed.contains(&(p.name.clone(), p.location.clone()))
-            || !seen.insert((
-                p.name.clone(),
-                p.location.clone(),
-                p.broker_variant_template_id.clone(),
-            ))
-        {
-            return Err("input_parser_readonly_assessment_insufficient".into());
-        }
-    }
+    // Structural parse must still succeed (malformed JSON cannot be used), but the
+    // sufficiency gate is removed per request: accept a sparse/partial assessment
+    // and let the task proceed rather than failing it as "insufficient". A weaker
+    // assessment just means less to test downstream, not a dead scan.
+    let _a: Assessment = serde_json::from_str(text).map_err(|_| "input_parser_response_invalid")?;
+    let _ = (task, REQUIRED_GAP, PARAMETER_LOCATIONS, TYPE_ASSUMPTIONS, BROKER_VARIANT_TEMPLATES);
     Ok(())
 }

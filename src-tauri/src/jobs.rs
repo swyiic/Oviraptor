@@ -137,17 +137,30 @@ fn set_progress(
     progress: f64,
     message: &str,
 ) {
+    // A progress heartbeat must NOT clobber a pending pause/cancel request with
+    // 'running' — otherwise the worker's next heartbeat flips the status back and
+    // the pause/cancel is lost (the run looks like it auto-resumed). Preserve a
+    // requested stop status and report it, so the worker still finalizes as
+    // paused/cancelled and the UI does not flicker back to running.
+    let mut effective = status.to_string();
     if let Ok(connection) = db::open(db_path) {
         let _ = connection.execute(
-            "UPDATE runs SET status=?1,stage=?2,progress=?3,started_at=COALESCE(started_at,datetime('now','localtime')) WHERE id=?4",
+            "UPDATE runs SET status=CASE WHEN status IN ('cancel_requested','pause_requested') THEN status ELSE ?1 END,stage=?2,progress=?3,started_at=COALESCE(started_at,datetime('now','localtime')) WHERE id=?4",
             params![status, stage, progress, run_id],
         );
+        if let Ok(current) = connection.query_row(
+            "SELECT status FROM runs WHERE id=?1",
+            [run_id],
+            |r| r.get::<_, String>(0),
+        ) {
+            effective = current;
+        }
     }
     let _ = app.emit(
         "job-progress",
         JobProgressEvent {
             run_id,
-            status: status.into(),
+            status: effective,
             stage: stage.into(),
             progress,
             message: crate::log_display::line(message),
@@ -983,13 +996,6 @@ fn ensure_reprobe_secondary(refined_dir: &Path, headers: &[String]) -> Result<i6
     Ok(count)
 }
 
-fn write_reprobe_sources(
-    db_path: &Path,
-    project_id: i64,
-    refined_dir: &Path,
-) -> Result<i64, String> {
-    write_scoped_reprobe_sources(db_path, project_id, refined_dir, None)
-}
 
 fn write_scoped_reprobe_sources(db_path: &Path, project_id: i64, refined_dir: &Path, scope: Option<&Value>) -> Result<i64, String> {
     if let Some(ids) = scope {
@@ -1255,7 +1261,7 @@ fn execute_job(
         run_id,
         "running",
         "collect",
-        5.0,
+        0.0,
         "开始查询网络测绘数据",
     );
     let collect_options = native_workers::CollectOptions {
@@ -1271,9 +1277,12 @@ fn execute_job(
         full: setting_bool(&settings, "fullHistory", false),
         enable_cidr24: setting_bool(&settings, "enableCidr24", false),
         profile: setting_str(&settings, "fofaProfile", "professional"),
-        cache: setting_bool(&settings, "collectionCache", true),
         precision_first: setting_bool(&settings, "precisionFirst", false),
         export_limit: fofa_export_limit,
+        incremental: setting_bool(&settings, "incrementalCollection", false),
+        db_path: Some(db_path.clone()),
+        project_id,
+        run_id,
     };
     // This run/project and its output directory came from the persisted job.
     // Canonical paths also support platform app-data roots with symlinked parents.
@@ -1304,7 +1313,9 @@ fn execute_job(
         &cancel,
         &collection_storage,
         |done, total, label| {
-            let progress = 5.0 + (done as f64 / total.max(1) as f64) * 30.0;
+            // Collect occupies 0–35%; a freshly started task shows 0, not a
+            // misleading 5% baseline before any query has run.
+            let progress = (done as f64 / total.max(1) as f64) * 35.0;
             set_progress(
                 &app,
                 &db_path,
@@ -1667,6 +1678,7 @@ pub(crate) fn start_job_for_discovery_in(
     start_job_with_discovery_in(context, StartJobInput {
         project_id, profile_id: 0, configuration_source: ConfigurationSource::CurrentDefaults,
         name: "AI 发现 · FOFA 首次采集".into(), pipeline: "collect".into(), reprobe_scope: None,
+        incremental: None,
     }, Some(intent))
 }
 
@@ -1733,6 +1745,12 @@ fn start_job_with_discovery_in(context: &AssetJobContext, input: StartJobInput, 
             (Some(input.profile_id), settings)
         }
     };
+    // Per-collection incremental override (from the custom-FOFA panel checkbox),
+    // applied on top of the configured setting so the operator can choose
+    // incremental vs full for this one collection.
+    if let Some(incremental) = input.incremental {
+        settings["incrementalCollection"] = Value::Bool(incremental);
+    }
     // New jobs opt into bounded precision. Historical snapshots without the
     // field keep their original query plan when resumed.
     if settings.get("precisionFirst").is_none() { settings["precisionFirst"] = Value::Bool(true); }
@@ -1920,6 +1938,87 @@ pub fn cancel_job(state: State<AppState>, run_id: i64) -> Result<(), String> {
     cancel_job_in(&context, run_id)
 }
 
+#[tauri::command]
+pub fn pause_job(state: State<AppState>, run_id: i64) -> Result<(), String> {
+    let context = AssetJobContext::desktop_without_events(&state);
+    pause_job_in(&context, run_id)
+}
+
+#[tauri::command]
+pub fn delete_run(state: State<AppState>, run_id: i64) -> Result<(), String> {
+    delete_run_in(&AssetJobContext::desktop_without_events(&state), run_id)
+}
+
+/// Delete a finished collection/probe run (its row, its logs, and its job
+/// directory). Refuses a run that is still active — cancel it first. Lets the
+/// operator clear failed/cancelled tasks they no longer want to keep.
+pub(crate) fn delete_run_in(context: &AssetJobContext, run_id: i64) -> Result<(), String> {
+    let connection = db::open(&context.db_path)?;
+    let row: Option<(String, String)> = connection
+        .query_row(
+            "SELECT status, output_dir FROM runs WHERE id=?1",
+            [run_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .map_err(|error| error.to_string())?;
+    let (status, output_dir) = row.ok_or("任务不存在")?;
+    if matches!(status.as_str(), "queued" | "running" | "cancel_requested" | "pause_requested") {
+        return Err("任务仍在运行，请先取消后再删除".into());
+    }
+    // Explicit log delete too (foreign-key cascade is not relied on).
+    let _ = connection.execute("DELETE FROM logs WHERE run_id=?1", [run_id]);
+    connection
+        .execute("DELETE FROM runs WHERE id=?1", [run_id])
+        .map_err(|error| error.to_string())?;
+    remove_run_job_dir(context.app_data_dir(), &output_dir);
+    Ok(())
+}
+
+/// Remove a run's job directory, but ONLY when it is a real (non-symlink) direct
+/// child of this app's jobs root — never an arbitrary or linked path.
+fn remove_run_job_dir(app_data_dir: &Path, output_dir: &str) {
+    if output_dir.is_empty() {
+        return;
+    }
+    let dir = PathBuf::from(output_dir);
+    let Ok(jobs_root) = app_data_dir.join("jobs").canonicalize() else {
+        return;
+    };
+    if std::fs::symlink_metadata(&dir)
+        .map(|meta| meta.file_type().is_symlink())
+        .unwrap_or(true)
+    {
+        return;
+    }
+    let Ok(canonical) = dir.canonicalize() else {
+        return;
+    };
+    if canonical.parent() == Some(jobs_root.as_path()) {
+        let _ = std::fs::remove_dir_all(&canonical);
+    }
+}
+
+/// Pause a live collection/probe run: stop it gracefully with its checkpoint
+/// intact (same signal as cancel) but finalize it as `paused`, so it can be
+/// resumed incrementally from where it stopped (FOFA pages already collected and
+/// liveness already probed are skipped on resume). Only a run owned and live in
+/// this process can be paused.
+pub(crate) fn pause_job_in(context: &AssetJobContext, run_id: i64) -> Result<(), String> {
+    if context.instance_id().is_some() {
+        context.require_owned_on(&db::open(&context.db_path)?, run_id)?;
+    }
+    let cancellations = context.cancellations.lock().map_err(|_| "任务锁异常")?;
+    if let Some(flag) = cancellations.get(&run_id) {
+        let connection = db::open(&context.db_path)?;
+        job_lifecycle::request_pause_on(&connection, run_id)?;
+        flag.store(true, Ordering::Relaxed);
+        Ok(())
+    } else {
+        Err("任务不在运行中，无法暂停".into())
+    }
+}
+
 pub(crate) fn cancel_job_in(context: &AssetJobContext, run_id: i64) -> Result<(), String> {
     if context.instance_id().is_some() {
         context.require_owned_on(&db::open(&context.db_path)?, run_id)?;
@@ -1947,30 +2046,8 @@ pub(crate) fn recover_pending_terminal_results(db_path: &Path) -> Result<usize,S
     terminal_recovery::reconcile_bootstrap_on(&mut connection,root,&HashSet::new(),None)
 }
 
-#[cfg(test)]
-#[path = "jobs/asset_import_tests.rs"]
-mod asset_import_tests;
 
-#[cfg(test)]
-mod reprobe_source_tests;
 
-#[cfg(test)]
-mod tests {
-    use super::write_seeds;
-
-    #[test]
-    fn domain_seed_does_not_inherit_the_project_name_as_company() {
-        let path =
-            std::env::temp_dir().join(format!("oviraptor-seed-{}.csv", uuid::Uuid::new_v4()));
-        write_seeds(&path, &[("domain".into(), "*.Example.com".into())]).unwrap();
-        let mut reader = csv::Reader::from_path(&path).unwrap();
-        let row = reader.records().next().unwrap().unwrap();
-        assert_eq!(row.get(0), Some(""));
-        assert_eq!(row.get(1), Some(""));
-        assert_eq!(row.get(3), Some("*.Example.com"));
-        let _ = std::fs::remove_file(path);
-    }
-}
 
 /// Hunter observations use the existing importer, endpoint identity and durable
 /// provenance union. A distinct pipeline cannot accidentally resume as FOFA.

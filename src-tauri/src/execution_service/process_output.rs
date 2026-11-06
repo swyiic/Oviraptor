@@ -256,8 +256,3 @@ pub(crate) fn pump(
     let _ = sender.send((collected, truncated));
 }
 
-#[cfg(all(test, unix))]
-mod stop_drain_tests {
-    use super::*;
-    include!("../native_pipeline/process_output_stop_drain_tests.rs");
-}

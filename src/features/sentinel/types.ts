@@ -115,6 +115,9 @@ export interface SentinelScan {
   taskPath: string;
   previousScanId: string;
   llmRequests: number;
+  attemptModelRequests?: number;
+  attemptUsageReason?: string;
+  maxModelRequests?: number | null;
   inputTokens: number;
   outputTokens: number;
   cachedTokens: number;
@@ -135,6 +138,15 @@ export interface SentinelScan {
   latestAttemptStatus: string;
   latestAttemptCheckpoint: string;
   latestAttemptStopReason: string;
+  lastCommandState?: string;
+  lastCommandVerified?: boolean;
+  lastCommandReviewState?: string;
+  lastCommandKind?: string;
+  lastCommandFailureReason?: string;
+  pendingCommandCount?: number;
+  pendingInstructionCount?: number;
+  pendingVerificationCount?: number;
+  pendingCommands?: { commandId: string; state: string }[];
 }
 
 export interface SentinelScanAttempt {
@@ -445,6 +457,23 @@ export interface AgentRequestReviewInput {
   disposition: AgentRequestDisposition;
   note: string;
   operatorConfirmed: boolean;
+}
+
+/** One agent gate decision taken at a stage stop (list_agent_stage_decisions). */
+export interface AgentStageDecision {
+  id: number;
+  scanId: string;
+  attemptNumber: number;
+  stage: string;
+  /** ok | degraded | blocked | gap */
+  outcome: string;
+  /** continue | retry_adjusted | degrade | skip | needs_user */
+  decision: string;
+  /** 1 = false alarm absorbed, 2 = resource/budget downgrade, 3 = needs the user */
+  gateTier: number;
+  rationale: string;
+  detailJson: string;
+  createdAt: string;
 }
 
 export interface AgentTargetExecution {
@@ -1272,6 +1301,87 @@ export interface AgentAttemptToolPage {
   olderCursor: string | null;
 }
 
+export interface FindingExploit {
+  scanId: string;
+  findingId: number;
+  deepStatus: 'pending' | 'in_progress' | 'exploited' | 'not_exploitable' | 'waf_blocked' | 'error';
+  severity: string;
+  reproductionRequest: string;
+  pocScript: string;
+  pocOutput: string;
+  exploitTrace: unknown[];
+  impact: string;
+  requestsUsed: number;
+  iterationsUsed: number;
+}
+
+export interface AgentAttemptToolCount {
+  toolName: string;
+  count: number;
+}
+
+export interface AgentAttemptToolCounts {
+  scanId: string;
+  attemptNumber: number;
+  counts: AgentAttemptToolCount[];
+  total: number;
+}
+
+export interface ScanAgentToolStat {
+  toolName: string;
+  calls: number;
+  completed: number;
+  failed: number;
+  running: number;
+  errorClasses: Record<string, number>;
+}
+
+export interface ScanAgentFindingRollup {
+  findingId: number;
+  title: string;
+  severity: string;
+  recordKey: string;
+  targetUrl: string;
+  deepStatus: string;
+  requestsUsed: number;
+  iterationsUsed: number;
+  contractToolCalls: number;
+  toolsByName: Record<string, number>;
+}
+
+export interface ScanAgentStats {
+  schemaVersion: number;
+  scanId: string;
+  attemptNumber?: number | null;
+  recordedAt: string;
+  tokens: {
+    ledgerTotal: number;
+    ledgerInput: number;
+    ledgerOutput: number;
+    ledgerCached: number;
+    ledgerModelRequests: number;
+    runSummedTokens: number;
+    runSummedCached: number;
+    runSummedRequests: number;
+  };
+  agents: { coordinatorRuns: number; nativeRuns: number };
+  tools: ScanAgentToolStat[];
+  toolInvocationsTotal: number;
+  findingsBySeverity: Array<{ severity: string; count: number }>;
+  findingRollup?: ScanAgentFindingRollup[];
+  exploitStatus: Array<{ status: string; count: number }>;
+  operator: { pendingQuestions: number; pendingHighRiskActions: number };
+  attempts: Array<{
+    attemptNumber: number;
+    status: string;
+    totalTokens: number;
+    modelRequests: number;
+    inputTokens: number;
+    outputTokens: number;
+    cachedTokens: number;
+  }>;
+}
+
 export interface OrderedAssessmentAction {
   actionId: string; order: number; role: "spa_api_mapper" | "deep_investigator";
   tokenCeiling: 4000; modelRequests: 1; maxOutputTokens: 512; targetRequests: 0;
@@ -1350,4 +1460,30 @@ export interface HumanDirectiveReviewReceipt {
 export interface HumanDirectiveReviewResult {
   receipt: HumanDirectiveReviewReceipt;
   draft: HumanDirectiveDraft | null;
+}
+
+// OSS source-audit orchestration (web→source→greybox).
+export interface MatchedSource {
+  productId: string;
+  productName: string;
+  repoUrl: string;
+  host: string;
+  defaultRef: string;
+}
+export interface CollectedSource {
+  productId: string;
+  productName: string;
+  repoUrl: string;
+  gitRef: string;
+  quarantinePath: string;
+  targetUrls: string[];
+}
+export interface SourceAuditReport {
+  scanId: string;
+  consent: boolean;
+  identified: string[];
+  matched: MatchedSource[];
+  collected: CollectedSource[];
+  targetUrls: string[];
+  note: string;
 }

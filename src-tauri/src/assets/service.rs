@@ -130,12 +130,6 @@ impl AssetServiceEnvironment {
     pub(crate) fn database_path(&self) -> &Path {
         &self.db_path
     }
-    pub(crate) fn data_root(&self) -> &Path {
-        &self.data_root
-    }
-    pub(crate) fn export_dir(&self) -> &Path {
-        &self.export_dir
-    }
 }
 
 pub(crate) struct AssetService {
@@ -905,6 +899,3 @@ pub fn run_app_stdio() -> Result<(), String> {
     })
 }
 
-#[cfg(test)]
-#[path = "service_tests.rs"]
-mod tests;

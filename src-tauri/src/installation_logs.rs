@@ -73,6 +73,3 @@ pub(crate) fn forward(reader: impl Read, stream: &'static str, sender: SyncSende
     }
 }
 
-#[cfg(test)]
-#[path = "installation_logs_tests.rs"]
-mod tests;

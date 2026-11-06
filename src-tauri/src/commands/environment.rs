@@ -343,11 +343,3 @@ fn install_environment_dependencies_while_locked(
     Ok(result)
 }
 
-#[cfg(test)]
-pub(crate) mod test_support {
-    pub(crate) fn ensure_environment_install_idle(
-        connection: &rusqlite::Connection,
-    ) -> Result<(), String> {
-        super::ensure_environment_install_idle(connection)
-    }
-}

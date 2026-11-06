@@ -17,7 +17,9 @@ import { scanAgentHandoff, type ScanAgentHandoff } from "../scanAgentHandoff";
 import { useI18n } from "../../../i18n";
 
 const props = defineProps<{ projectId?: number; initialScanId?: string }>();
-const emit = defineEmits<{ start: []; openResults: [scan: SentinelScan]; analyzeScan: [value: ScanAgentHandoff]; prepareFollowup: [preview: GapFollowupPreview] }>();
+const emit = defineEmits<{ start: []; openResults: [scan: SentinelScan]; analyzeScan: [value: ScanAgentHandoff]; prepareFollowup: [preview: GapFollowupPreview]; taskChange: [scan: SentinelScan] }>();
+// The host renders this task's process panels in the #process slot.
+defineSlots<{ process?: (props: { scanId: string }) => unknown }>();
 const { tr } = useI18n();
 const error = computed(() => [actionError.value, statusError.value, listError.value,
   pageError.value, listenerError.value].filter(Boolean).join("\n"));
@@ -57,6 +59,9 @@ const executionLogOpen = ref(false);
 const compatibilityOpen = ref(false);
 const identityMaterialOpen = ref(false);
 const agentHandoff = computed(() => scanAgentHandoff(props.projectId, selected.value));
+// The old directive composer left the normal flow (migration plan §12.2 step 5);
+// it remains as a controlled diagnostic entry behind a local switch.
+const legacyNestDiagnostics = (() => { try { return globalThis.localStorage?.getItem("oviraptor.diagnostics.legacyNestComposer") === "1"; } catch { return false; } })();
 function openAgent() {
   const handoff = agentHandoff.value;
   if (handoff && !disposed) emit("analyzeScan", handoff);
@@ -113,7 +118,10 @@ watch(() => props.projectId, () => {
   void loadScans().then(() => loadStatus(undefined, true));
 }, { immediate: true, flush: "sync" });
 watch(() => props.initialScanId, (id) => {
-  if (id) void selectScan(id);
+  if (id && id !== scanId.value) void selectScan(id);
+});
+watch(() => selected.value?.id, () => {
+  if (selected.value && !disposed) emit("taskChange", selected.value);
 });
 watch([() => props.projectId, scanId], () => {
   taskViewGeneration++;
@@ -136,13 +144,10 @@ onUnmounted(() => {
   <section class="agent-dialog-page">
     <header>
       <div>
-        <span class="eyebrow">NEST EXECUTION</span>
-        <h2>{{ tr("执行概览", "Execution overview") }}</h2>
-        <p>{{ tr("在这里查看任务、证据与恢复状态；结果分析统一交给主 Agent 对话。", "Review tasks, evidence and recovery here; use the main Agent chat for results analysis.") }}</p>
+        <p>{{ tr("任务是怎么跑的：执行状态、调查图谱、轨迹、成本与恢复；结论在「结果与证据」，结果分析交给主 Agent 对话。", "How a task ran: status, investigation graph, trace, cost and recovery. Conclusions live in Results and evidence; use the main Agent chat for analysis.") }}</p>
       </div>
       <div class="button-row">
         <button v-refresh-feedback="{scope:projectId,error:listError||statusError||selectionError}" class="button ghost" type="button" @click="loadScans().then(() => loadStatus(undefined, true))">{{ tr("刷新状态", "Refresh status") }}</button>
-        <button class="button primary" type="button" @click="emit('start')">{{ tr("新调查", "New investigation") }}</button>
       </div>
     </header>
     <div v-if="error" class="form-error" role="alert">
@@ -155,11 +160,11 @@ onUnmounted(() => {
       <p v-if="selectionError" role="status">{{ tr("任务选择未同步，不影响任务执行：", "Task selection not synchronized; execution unaffected: ") }}{{ selectionError }}</p>
       <button v-if="selectionError" type="button" class="button ghost compact" :disabled="selectionBusy" @click="loadTaskSelection">{{ tr("重新读取任务选择", "Reload task selection") }}</button>
     </div>
-    <div v-if="!scans.length" class="empty-state">{{ tr("还没有调查。点右上角「新调查」提交 URL。", "No investigation yet. Use New investigation to submit a URL.") }}</div>
+    <div v-if="!scans.length" class="empty-state">{{ tr("还没有调查。在左侧「新调查」提交 URL。", "No investigation yet. Use the New investigation entry in the sidebar to submit a URL.") }}</div>
     <div v-else class="agent-dialog-layout">
       <details class="dialog-task-picker" :open="taskPickerOpen" @toggle="taskPickerOpen=($event.target as HTMLDetailsElement).open">
         <summary>{{ tr("切换任务", "Choose task") }} · {{ selected?.taskName || selected?.projectName || scanId || tr("尚未选择", "None selected") }} <small>{{ tr("已加载", "Loaded") }} {{ scans.length }}{{ hasMoreScans ? "+" : "" }}</small></summary>
-      <aside class="dialog-task-list" aria-label="调查任务">
+      <aside class="dialog-task-list" :aria-label="tr('调查任务', 'Investigation tasks')">
         <input v-model="scanSearch" type="search" :placeholder="tr('搜索历史任务', 'Search tasks')" :aria-label="tr('搜索历史任务', 'Search tasks')" />
         <button v-for="scan in visibleScans" :key="scan.id" type="button" :class="{ active: scan.id === scanId }" @click="selectScan(scan.id)">
           <strong>{{ scan.taskName || scan.projectName || scan.id.slice(0, 8) }}</strong>
@@ -180,7 +185,7 @@ onUnmounted(() => {
           </div>
           <div class="button-row">
             <button type="button" class="button primary compact" :disabled="!agentHandoff" @click="openAgent">{{ tr("交给 Agent 分析", "Analyze with Agent") }}</button>
-          <button type="button" class="button ghost compact" @click="emit('openResults', selected)">{{ tr("查看证据与尝试", "Evidence and attempts") }}</button>
+          <button type="button" class="button ghost compact" @click="emit('openResults', selected)">{{ tr("查看结果与证据", "Results and evidence") }}</button>
           </div>
         </div>
         <div v-if="state?.followup?.source" class="gap-assessment-note">
@@ -209,7 +214,7 @@ onUnmounted(() => {
             </div>
           </div>
           <small v-if="state.historicalPendingReceipts > (state.historicalReceiptItems?.length || 0)">{{ tr('这里只显示最近 50 条；其余记录仍保留且未自动处理。', 'Only the latest 50 appear here; other records remain untouched.') }}</small>
-          <button v-if="selected" type="button" class="button ghost compact" @click="emit('openResults', selected)">{{ tr('查看证据与尝试', 'Evidence and attempts') }}</button>
+          <button v-if="selected" type="button" class="button ghost compact" @click="emit('openResults', selected)">{{ tr('查看结果与证据', 'Results and evidence') }}</button>
         </div>
         <div v-if="state && state.stopDiagnostic.code !== 'in_progress'" class="dialog-task-header" role="status">
           <div>
@@ -237,6 +242,7 @@ onUnmounted(() => {
           {{ tr("本任务仍有费用或送达记录待核对", "This task has unsettled usage or delivery records") }} · {{ pendingAssessmentCount }}{{ state?.humanAssessmentObligations?.truncated ? "+" : "" }}
           <button type="button" class="button ghost compact" @click="threadFilter='';executionLogOpen=true">{{ tr("查看原调用待核对项", "Inspect original call obligations") }}</button>
         </div>
+        <slot v-if="scanId" name="process" :scan-id="scanId" />
         <details class="dialog-execution-section" :open="identityMaterialOpen" @toggle="identityMaterialOpen=($event.target as HTMLDetailsElement).open"><summary>{{ tr("登录身份与原始材料", "Identity and original material") }}</summary>
         <AgentIdentityMaterial v-if="identityMaterialOpen" :project-id="selected?.projectId ?? props.projectId" :scan-id="scanId" />
         </details>
@@ -454,18 +460,19 @@ onUnmounted(() => {
             <button v-if="pendingDraft.status !== 'rejected'" class="button primary" type="button" :disabled="sending || !canConfirmDirective(pendingDraft)" @click="confirmDirective(pendingDraft)">{{ sending ? tr("确认中", "Confirming") : tr("确认并入队", "Confirm and queue") }}</button>
           </footer>
         </section>
-        <details class="dialog-execution-section dialog-compatibility" :open="compatibilityOpen" @toggle="compatibilityOpen=($event.target as HTMLDetailsElement).open">
+        <p v-if="!legacyNestDiagnostics" class="input-hint">{{ tr("补充方向、暂停、取消请在主会话中提出：点击上方「交给 Agent 分析」，会回到该任务绑定的原会话；进度、证据、控制和成本仍在本页查看。", "Ask for supplements, pause or cancel in the main conversation: use Analyze with Agent above to return to the conversation bound to this task. Progress, evidence, controls and cost stay on this page.") }}</p>
+        <details class="dialog-execution-section dialog-compatibility" :open="compatibilityOpen" @toggle="compatibilityOpen=($event.target as HTMLDetailsElement).open" v-if="legacyNestDiagnostics">
           <summary>{{ tr("高级：旧任务指令兼容入口", "Advanced: legacy task directives") }}</summary>
           <p class="input-hint">{{ tr("用于尚未迁入主 Agent 的角色关注点与旧指令草案。原任务校验和确认步骤仍适用；普通分析请使用上方 Agent 入口。", "For role guidance and old directive drafts not yet available in the main Agent. Original checks and confirmation still apply; use the Agent above for analysis.") }}</p>
         <form class="dialog-composer" @submit.prevent="send">
           <p class="input-hint">{{ tr("发送到", "Send to") }}：{{ !threadFilter || threadFilter === "team" ? tr("团队频道", "Team") : selectedThreadLabel }}</p>
-          <textarea v-model="draft" :aria-label="tr('调查方向与补充说明', 'Investigation correction')" rows="3" maxlength="2000" :placeholder="tr('写下要修正的方向，例如先验证登录接口，不要停在 404', 'Write a correction, for example keep testing the login endpoint instead of stopping on 404')"></textarea>
+          <textarea v-model="draft" :aria-label="tr('调查方向与补充说明', 'Investigation correction')" rows="3" maxlength="2000" :placeholder="tr('写下要修正的方向，或使用 /deepdive、/wafbypass、/recon 快捷指令', 'Write a correction, or use /deepdive, /wafbypass, /recon playbooks')"></textarea>
           <p class="input-hint">{{ tr("新建同质任务保留用于身份比对的 Cookie、Token、密码等原文。发送生成草案，确认后由主管处理。", "New homogeneous tasks preserve original cookies, tokens and passwords for identity comparison. Send creates a draft; the supervisor handles it after confirmation.") }}</p>
           <button class="button" type="submit" :disabled="sending || !draft.trim() || directiveDrafts.some((item) => item.status !== 'rejected')">{{ sending ? tr("解析中", "Parsing") : tr("解析指令", "Parse directive") }}</button>
         </form>
         </details>
       </div>
-      <aside class="agent-dialog-context" aria-label="任务上下文与待办">
+      <aside class="agent-dialog-context" :aria-label="tr('任务上下文与待办', 'Task context and to-dos')">
         <strong>{{ tr('任务上下文', 'Task context') }}</strong>
         <p v-if="!state">{{ tr('选择任务后读取已落库的运行状态。', 'Select a task to read its persisted status.') }}</p>
         <template v-else>

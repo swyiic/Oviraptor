@@ -1,5 +1,8 @@
 import { reactive, type Ref } from "vue";
 import type { SentinelFinding, SentinelFuseEntry, SentinelTarget, SentinelValidation } from "../types";
+import { useI18n } from "../../../i18n";
+
+const { tr } = useI18n();
 
 export type FuseDetailTab = "summary" | "fingerprint" | "assets" | "endpoints" | "proof";
 type FuseDetailState = {
@@ -11,12 +14,16 @@ type FuseDetailState = {
   validations: SentinelValidation[];
 };
 
+// The label slot is a getter so each read follows the current UI language.
+const detailTab = (key: FuseDetailTab, label: () => string) =>
+  Object.defineProperty([key], 1, { get: label, enumerable: true }) as unknown as [FuseDetailTab, string];
+
 export const fuseDetailTabs: [FuseDetailTab, string][] = [
-  ["summary", "概要"],
-  ["fingerprint", "指纹配置"],
+  detailTab("summary", () => tr("概要", "Summary")),
+  detailTab("fingerprint", () => tr("指纹配置", "Fingerprint")),
   ["assets", "JS / API"],
-  ["endpoints", "端点验证"],
-  ["proof", "漏洞证明"],
+  detailTab("endpoints", () => tr("端点验证", "Endpoint checks")),
+  detailTab("proof", () => tr("漏洞证明", "Vulnerability proof")),
 ];
 
 export function sameTargetUrl(left: string, right: string) {
@@ -75,7 +82,7 @@ export function useFuseDetails(options: {
       state.loaded = true;
     } catch (error) {
       state.open = false;
-      options.notifyError(`完整情报加载失败：${String(error)}`);
+      options.notifyError(tr(`完整情报加载失败：${String(error)}`, `Failed to load full intelligence: ${String(error)}`));
     } finally {
       state.loading = false;
     }

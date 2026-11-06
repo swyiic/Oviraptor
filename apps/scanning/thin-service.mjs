@@ -15,9 +15,19 @@ const HOST_PROXY_PERMISSIONS = Object.freeze({
   scan_preflight: 'investigation.read',
   scan_recovery: 'investigation.read',
   scan_results: 'investigation.read',
+  scan_fingerprint_search: 'investigation.read',
+  scan_fingerprint_read: 'investigation.read',
   scan_start: 'investigation.execute',
   scan_pause: 'investigation.control',
   scan_resume: 'investigation.execute',
+  scan_continue_targets: 'investigation.execute',
+  scan_bind: 'investigation.execute',
+  scan_reassociate_binding: 'investigation.execute',
+  scan_command: 'investigation.execute',
+  scan_command_ack: 'investigation.execute',
+  scan_review: 'investigation.execute',
+  scan_verify: 'investigation.execute',
+  scan_retry_delivery: 'investigation.execute',
 });
 
 export function phase1ToolNames() {

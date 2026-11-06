@@ -83,7 +83,7 @@ export function tracePresentation(tr: (zh: string, en: string) => string) {
     const scans = Number(support.distinctScans || entry.patterns.sourceScans || 1);
     const models = Number(support.distinctModels || (entry.patterns.model ? 1 : 0));
     const normalizer = String(entry.patterns.normalizerVersion || "legacy");
-    return `${scans} 个独立任务 · ${models || "—"} 个模型来源 · ${normalizer}`;
+    return tr(`${scans} 个独立任务 · ${models || "—"} 个模型来源 · ${normalizer}`, `${scans} independent tasks · ${models || "—"} model sources · ${normalizer}`);
   }
 
   function formatBytes(value: number) {

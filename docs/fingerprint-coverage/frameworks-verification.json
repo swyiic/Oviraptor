@@ -1,0 +1,140 @@
+{
+  "schemaVersion": 1,
+  "verifiedAt": "2026-10-30T09:23:02.216292+00:00",
+  "version": "1.1.121",
+  "frameworks": {
+    "originalPreserved": 821,
+    "added": 11,
+    "uniqueDefaults": 832,
+    "heldHtmlBranches": 13,
+    "inventoryEntries": 75,
+    "responseFixtures": 127,
+    "responseFixturesValid": true
+  },
+  "tests": {
+    "distinctRustCases": 37,
+    "fingerprintFilter": 22,
+    "selectedEvidenceFilter": 5,
+    "overlap": 1,
+    "exposureCases": 11,
+    "hostTaskAndPlaintextCases": 26,
+    "uiCases": 21,
+    "resourceCases": 14,
+    "freshImport": {
+      "boolean": 0,
+      "builtinPreserved": 832,
+      "effective": 832,
+      "legacy": 0,
+      "localFilesCreated": 0,
+      "networkRequests": 0,
+      "realDatabaseAccess": false,
+      "repeatBytesUnchanged": true,
+      "sourceSha256": "17d85807e088bf4ebf2c52f06794bf145df656f73df31b3df797831c8fc84a49",
+      "valid": true
+    }
+  },
+  "skills": {
+    "versions": {
+      "secknowledge-skill": "2.5.1",
+      "src-bounty-skill": "1.3.1"
+    },
+    "changedDocuments": 20,
+    "localLinks": 105,
+    "newAuditFindings": 0,
+    "existingMediumFindings": 8,
+    "publishedToRequestedWikiDirectories": true,
+    "realApplicationSkillDatabaseImported": false
+  },
+  "app": {
+    "appVersion": "1.1.121",
+    "packs": 3,
+    "uniqueFingerprints": 832,
+    "packFilesByteIdentical": true,
+    "hostSourcesByteIdentical": true,
+    "hostReceiptFiles": 118,
+    "scanningAppVersion": "1.4.3",
+    "newToolsPresent": true,
+    "nativeMarkers": [
+      "condition-tree-v1",
+      "framework-nextjs",
+      "selected_saved_fields_plaintext",
+      "bundled_fingerprint_resources"
+    ],
+    "databaseFiles": [],
+    "codesignDeepStrictVerified": true,
+    "architecture": "arm64",
+    "appInstalledOrLaunched": false
+  },
+  "archive": {
+    "path": "src-tauri/target/release/bundle/Oviraptor-1.1.121-macos-arm64.zip",
+    "bytes": 31123934,
+    "sha256": "2cd7c865ef35949706df0c605b05307a76fd37edea2e81a6d58265ba6b347a7c",
+    "crcVerified": true,
+    "criticalFilesByteCompared": 125,
+    "databaseFiles": []
+  },
+  "sourceFreezeFilesVerified": 16,
+  "protectedFilesUnchanged": [
+    {
+      "path": "/Users/swyiic/Desktop/Rust/Oviraptor/src-tauri/resources/fingerprint-packs/default.fingerprints.json",
+      "sha256": "e0b55405548d7414a26fd4de2ed28852547b8088ec187d885afb1ccd52615726",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/swyiic/Desktop/Rust/Oviraptor/src-tauri/resources/fingerprint-packs/enterprise.fingerprints.json",
+      "sha256": "81e293df57ae0bfdc66db87dc974da9f172fad824a03d01668cbf08a646c89b5",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/swyiic/Desktop/Rust/Oviraptor/src-tauri/resources/rules/fingerprints.json",
+      "sha256": "82efaf0cc4efeea972814803ecd3e4fd3be4b28616f19ee7c17bc8f621418bee",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/swyiic/Desktop/Rust/Oviraptor/src-tauri/resources/rules/active_exposures.json",
+      "sha256": "f6ee9572c4e60f6ba89079e20770cb1fe04868fd5f9898d9ca5c36e528ca3c8e",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/swyiic/Desktop/Rust/Oviraptor/src-tauri/src/scanning/exposure_probe.rs",
+      "sha256": "17d85807e088bf4ebf2c52f06794bf145df656f73df31b3df797831c8fc84a49",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/swyiic/Desktop/Rust/Oviraptor/src-tauri/src/scanning/fingerprint_logic.rs",
+      "sha256": "97ec7518be96094342d66bf0825adfb6cf151636d734f2f21ecd5a9a9c98d3f8",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/swyiic/Desktop/Rust/Oviraptor/src-tauri/src/scanning/fingerprint_pack.rs",
+      "sha256": "c2b849b1e5b58f8c78b5182d2d0e4908f221ff6b85fd503db8e7503d14364531",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/swyiic/oviraptor/fingerprints.user.json",
+      "sha256": "f118fc0461f13f8753226cf948f3535534d48585391e2fee55135119d028e11b",
+      "unchanged": true
+    },
+    {
+      "path": "/Users/swyiic/oviraptor/fingerprints.boolean.json",
+      "sha256": "218105d5285bc8a6cc89760c1d6c0f8c927250a126dadb7e33940a311b53e494",
+      "unchanged": true
+    }
+  ],
+  "plaintextScope": "authorized_tool_results_tool_arguments_current_tool_clipping_selected_task_evidence_values",
+  "retainedProcessing": [
+    "assistant_natural_text_and_reasoning",
+    "user_prompt_processing",
+    "oauth_configuration_logs",
+    "long_term_and_folded_memory_summaries"
+  ],
+  "executionBoundaries": {
+    "realDatabaseOpenedOrModifiedByThisWork": false,
+    "casAccessed": false,
+    "realTargetsRequested": 0,
+    "appInstalledOrLaunched": false,
+    "realModelTaskEndToEndVerified": false,
+    "nativeExecutorGeneralSkillResourceToolsAdded": false,
+    "gitResetOrAutomaticCommit": false
+  }
+}

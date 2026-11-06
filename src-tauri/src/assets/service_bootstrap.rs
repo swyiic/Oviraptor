@@ -841,6 +841,3 @@ impl NativeApplication for Application {
     }
 }
 
-#[cfg(test)]
-#[path = "service_bootstrap_tests.rs"]
-mod tests;

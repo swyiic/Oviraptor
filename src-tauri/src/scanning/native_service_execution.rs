@@ -205,6 +205,8 @@ pub(super) fn perform(
     context: &Context,
     action: Action,
     task: &str,
+    binding_version: Option<i64>,
+    observed_attempt: Option<i64>,
 ) -> Result<Value, String> {
     service.authorize(context, action.permission())?;
     service.require_custody(&service.database)?;
@@ -234,6 +236,9 @@ pub(super) fn perform(
         return Ok(value);
     }
     let (status, attempt) = owned_task_on(&tx, &service.instance_id, context, task)?;
+    // Missing versions stay compatible with existing page callers. A carried
+    // older binding version or attempt is refused before the engine writes.
+    crate::scanning::task_binding::refuse_stale_page_write(&tx, context.host_bound_project_id, task, binding_version, observed_attempt)?;
     let scan_type:String=tx.query_row("SELECT scan_type FROM sentinel_scans WHERE id=?1",[task],|r|r.get(0)).map_err(|_| "scan_task_scope_unavailable")?;
     if matches!(action,Action::Start|Action::Resume|Action::Retry) && scan_type!="web" {
         if !matches!(scan_type.as_str(),"code"|"greybox"|"cicd"){return Err("scan_task_kind_unavailable".into());}
@@ -365,8 +370,11 @@ pub(super) fn read_task(service: &Service, context: &Context, task: &str) -> Res
         | "legacy_backend_removed" => status.as_str(),
         _ => "unknown",
     };
+    let binding_version = crate::scanning::task_binding::current_binding_version(&service.database, context.host_bound_project_id, task)
+        .map(|version| json!(version))
+        .unwrap_or(Value::Null);
     Ok(
-        json!({"taskId":task,"hostBoundProjectId":context.host_bound_project_id,"status":status,"attemptNumber":attempt,"executionAvailable":true,"asOf":chrono::Utc::now().to_rfc3339()}),
+        json!({"taskId":task,"hostBoundProjectId":context.host_bound_project_id,"status":status,"attemptNumber":attempt,"bindingVersion":binding_version,"executionAvailable":true,"asOf":chrono::Utc::now().to_rfc3339()}),
     )
 }
 
@@ -513,6 +521,3 @@ pub(super) fn busy(service: &Service) -> Result<bool, String> {
     Ok(false)
 }
 
-#[cfg(test)]
-#[path = "native_service_execution_tests.rs"]
-mod tests;

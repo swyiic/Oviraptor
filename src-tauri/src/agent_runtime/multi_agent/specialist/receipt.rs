@@ -161,17 +161,6 @@ pub(super) fn verify_received(
     Ok(saved)
 }
 
-/// The receipt, usage event and checkpoint commit together before downstream work.
-#[cfg(test)]
-pub fn record_received(
-    connection: &Connection,
-    call: &PendingCall,
-    text: &str,
-    tool_calls_present: bool,
-    usage: &UsageDelta,
-) -> Result<StoredResponse, String> {
-    record_received_with_provenance(connection, call, text, tool_calls_present, usage, true)
-}
 
 pub fn record_received_with_provenance(
     connection: &Connection,

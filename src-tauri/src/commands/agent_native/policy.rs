@@ -57,18 +57,58 @@ enum StallAction {
     Stop,
 }
 
-/// The first no-progress window is a check, not a stop. The second one ends the target.
+/// A stall is concluded (partial ledger published) once this many stall checks
+/// have passed AND no open work remains. The old no-progress stop used the same
+/// small count but ignored open work, which cut wide-surface targets after ~6
+/// turns; here the open-work gate — not a bigger number — is what prevents a
+/// premature give-up, so a target with anything left to probe is never stopped.
+const AGENT_IDLE_STALL_CHECK_CEILING: i64 = 2;
+
+/// No-progress no longer ENDS a web target early. A login/endpoint has a wide
+/// attack surface (account enumeration; captcha reuse / OCR / front-end-only
+/// validation; slide-captcha key recovery; SMS/email flooding; XFF/WAF bypass;
+/// authz and parameter abuse) that frequently yields no NEW evidence record for
+/// several turns while still being worth pursuing. Stopping after two stalled
+/// checks made the executor give up after ~6 turns — the premature termination
+/// users complained about. Keep re-checking the queue and nudging the model to go
+/// deeper instead of stopping. The real backstops against an infinite run stay in
+/// force and are checked before this: max_turns (agent_text_only_stop), wall-time,
+/// and the hard token/request budget — so this never spins unbounded. A model
+/// that is genuinely done still ends cleanly by calling finish_target, which
+/// closes the coverage ledger and settles its budget (unlike a no-progress stop).
 fn agent_stall_action(state: &mut NativeAgentState, plan: &AgentExecutionPlan) -> StallAction {
     if state.no_progress_streak < plan.no_progress_window.max(1) {
         return StallAction::Continue;
     }
-    if state.stall_checks < 1 {
-        state.stall_checks += 1;
-        state.no_progress_streak = 0;
-        state.last_expansion_reason = "连续无进展，先检查队列再继续".to_string();
-        return StallAction::Check;
+    state.stall_checks += 1;
+    state.no_progress_streak = 0;
+    state.last_expansion_reason =
+        "连续无进展：重新检查队列并尝试更深入的手法，不提前终止".to_string();
+    StallAction::Check
+}
+
+/// The attempt still has productive work the model could pursue: a non-empty web
+/// queue, a pending API probe, a discovered endpoint it has not touched, or a
+/// required coverage family it has neither exercised nor marked not-applicable.
+/// Mirrors the signals `agent_reject_premature_finish` uses to let a voluntary
+/// finish_target through, so an idle stall is judged "done" by the same
+/// definition the finish gate already trusts.
+fn agent_has_open_work(runtime: &AgentToolRuntime, queue: &[String]) -> bool {
+    if !queue.is_empty() || !runtime.pending_api_queue.is_empty() {
+        return true;
     }
-    StallAction::Stop
+    let open_surface = runtime.discovered_api_keys.iter().any(|key| {
+        let (method, path) = key.split_once('|').unwrap_or(("GET", key.as_str()));
+        !runtime.touched(method, path)
+    });
+    if open_surface {
+        return true;
+    }
+    agent_required_families()
+        .into_iter()
+        .any(|family| {
+            !runtime.families.contains(family) && !runtime.not_applicable.contains(family)
+        })
 }
 
 /// A text-only model round has already consumed a turn and its usage. Classify
@@ -79,6 +119,7 @@ fn agent_text_only_stop(
     plan: &AgentExecutionPlan,
     state: &mut NativeAgentState,
     runtime: &AgentToolRuntime,
+    queue: &[String],
 ) -> Option<(&'static str, String)> {
     if state.turns >= plan.max_turns.max(1) {
         return Some((AGENT_STOP_DERIVED, "达到计划内最大轮数".to_string()));
@@ -86,13 +127,32 @@ fn agent_text_only_stop(
     if let Some(stop) = agent_budget_stop(context, plan, state, runtime) {
         return Some(stop);
     }
-    if matches!(agent_stall_action(state, plan), StallAction::Stop) {
-        return Some((
+    match agent_stall_action(state, plan) {
+        StallAction::Stop => Some((
             AGENT_STOP_NO_PROGRESS,
             "连续两次检查都没有新增证据".to_string(),
-        ));
+        )),
+        StallAction::Check => {
+            // A stalled model that keeps emitting text-only rounds while no open
+            // work remains is only burning paid rounds toward the hard ceiling.
+            // Conclude here so native_exit publishes the partial coverage ledger
+            // plus the already-staged findings (BoundedCompleted) instead of
+            // spinning. A target that still has an open queue / untouched surface
+            // / unexercised family keeps its full runway — only the hard caps stop
+            // it — so the wide-surface login case the no-progress stop was removed
+            // for is never given up early.
+            if state.stall_checks >= AGENT_IDLE_STALL_CHECK_CEILING
+                && !agent_has_open_work(runtime, queue)
+            {
+                return Some((
+                    AGENT_STOP_NO_PROGRESS,
+                    "连续多轮无进展且无待办面：收口并发布已有结果".to_string(),
+                ));
+            }
+            None
+        }
+        StallAction::Continue => None,
     }
-    None
 }
 
 fn agent_reject_premature_finish(

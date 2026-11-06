@@ -27,6 +27,12 @@ struct LogLimits {
     per_run: i64,
     global: i64,
     days: i64,
+    // Retention sweeps scan the whole table, so running one on every insert makes
+    // each append O(table size). Instead run a sweep only when the new row's
+    // monotonic id lands on this stride: cost amortises over `enforce_stride`
+    // inserts, and the table overshoots its caps by at most that many rows between
+    // sweeps — immaterial against the caps below.
+    enforce_stride: i64,
 }
 impl Default for LogLimits {
     fn default() -> Self {
@@ -34,6 +40,7 @@ impl Default for LogLimits {
             per_run: 5000,
             global: 100000,
             days: 30,
+            enforce_stride: 256,
         }
     }
 }
@@ -96,16 +103,46 @@ fn trim_query(
     Ok(count)
 }
 fn enforce(connection: &Connection, limits: LogLimits) -> Result<(), String> {
-    // Process old databases in bounded memory. Invalid legacy date strings are
-    // never guessed to be expired; row caps still bound their retained count.
-    while trim_query(
-        connection,
-        "SELECT id,run_id,level,stage,message FROM logs
-        WHERE julianday(created_at)<julianday('now','localtime')-?1 ORDER BY id LIMIT 512",
-        limits.days,
-        true,
-    )? > 0
-    {}
+    // Process old databases in bounded memory. Compare the stored canonical
+    // timestamp as text against a precomputed cutoff so the (created_at,id) index
+    // drives the scan, instead of julianday() reading every row. The GLOB keeps
+    // the invariant that invalid legacy date strings are never guessed to be
+    // expired: only well-formed 'YYYY-MM-DD HH:MM:SS' values are eligible, and row
+    // caps still bound whatever the GLOB leaves behind.
+    let cutoff: String = connection
+        .query_row(
+            "SELECT datetime('now','localtime',?1)",
+            [format!("-{} days", limits.days)],
+            |row| row.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    loop {
+        let mut statement = connection
+            .prepare(
+                "SELECT id,run_id,level,stage,message FROM logs
+                WHERE created_at<?1 AND created_at GLOB '????-??-?? ??:??:??'
+                ORDER BY created_at,id LIMIT 512",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = statement
+            .query_map([&cutoff], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?;
+        drop(statement);
+        if rows.is_empty() {
+            break;
+        }
+        discard(connection, rows, true)?;
+    }
     let overfull = {
         let mut statement=connection.prepare("SELECT run_id FROM logs WHERE run_id IS NOT NULL GROUP BY run_id HAVING count(*)>?1").map_err(|e|e.to_string())?;
         let rows = statement
@@ -218,7 +255,7 @@ fn append_with_limits(
 ) -> Result<(), String> {
     initialize(connection)?;
     let transaction = connection
-        .transaction()
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(|error| error.to_string())?;
     transaction
         .execute(
@@ -241,7 +278,11 @@ fn append_with_limits(
             .optional()
             .map_err(|error| error.to_string())?,
     };
-    enforce(&transaction, limits)?;
+    // Amortise the whole-table retention sweep: run it only when this insert's
+    // monotonic id lands on the stride, not on every append.
+    if limits.enforce_stride > 0 && hint.log_id % limits.enforce_stride == 0 {
+        enforce(&transaction, limits)?;
+    }
     transaction.commit().map_err(|error| error.to_string())?;
     notify(&hint);
     Ok(())
@@ -294,9 +335,78 @@ pub(crate) fn read(
 }
 
 #[cfg(test)]
-#[path = "asset_logs_tests.rs"]
-mod tests;
+mod tests {
+    use super::*;
 
-#[cfg(test)]
-#[path = "asset_log_retention_tests.rs"]
-mod retention_tests;
+    fn setup() -> Connection {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE runs(id INTEGER PRIMARY KEY, project_id INTEGER);
+                 CREATE TABLE logs(id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER,
+                   level TEXT NOT NULL DEFAULT 'info', stage TEXT NOT NULL DEFAULT '',
+                   message TEXT NOT NULL,
+                   created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')));
+                 CREATE INDEX idx_asset_logs_created_at ON logs(created_at,id);
+                 INSERT INTO runs(id,project_id) VALUES(1,1);",
+            )
+            .unwrap();
+        initialize(&connection).unwrap();
+        connection
+    }
+
+    #[test]
+    fn stride_gates_the_sweep_but_still_bounds_the_table() {
+        let mut connection = setup();
+        let limits = LogLimits {
+            per_run: 10,
+            global: 1000,
+            days: 30,
+            enforce_stride: 8,
+        };
+        for _ in 0..40 {
+            append_with_limits(&mut connection, 1, "info", "s", "m", |_| {}, limits).unwrap();
+        }
+        let count: i64 = connection
+            .query_row("SELECT count(*) FROM logs", [], |r| r.get(0))
+            .unwrap();
+        // The last append (id 40) lands on the stride, so the sweep trims run 1 back
+        // to its per-run cap. The table never approaches the 40 rows appended.
+        assert!(count >= limits.per_run, "sweep over-trimmed: {count}");
+        assert!(
+            count <= limits.per_run + limits.enforce_stride,
+            "sweep did not run: {count}"
+        );
+    }
+
+    #[test]
+    fn expired_rows_go_but_invalid_dates_never_do() {
+        let connection = setup();
+        for (message, created_at) in [
+            ("old", "2000-01-01 00:00:00"),
+            ("fresh", "2999-01-01 00:00:00"),
+            ("bad", "not-a-date"),
+        ] {
+            connection
+                .execute(
+                    "INSERT INTO logs(run_id,level,stage,message,created_at) VALUES(1,'info','s',?1,?2)",
+                    params![message, created_at],
+                )
+                .unwrap();
+        }
+        enforce(&connection, LogLimits::default()).unwrap();
+        let remaining: Vec<String> = {
+            let mut statement = connection.prepare("SELECT message FROM logs ORDER BY id").unwrap();
+            statement
+                .query_map([], |r| r.get(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap()
+        };
+        assert!(!remaining.iter().any(|m| m == "old"), "{remaining:?}");
+        assert!(remaining.iter().any(|m| m == "fresh"), "{remaining:?}");
+        assert!(remaining.iter().any(|m| m == "bad"), "{remaining:?}");
+    }
+}
+
+

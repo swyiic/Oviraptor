@@ -30,7 +30,10 @@ fn builtin_rule_pack_source(key: &str) -> Option<(&'static str, &'static str)> {
     match key {
         "semgrep-rules" => Some(("https://github.com/semgrep/semgrep-rules.git", "develop")),
         "codeql-queries" => Some(("https://github.com/github/codeql.git", "main")),
-        "owasp-benchmark" => Some(("https://github.com/OWASP/Benchmark.git", "master")),
+        "owasp-benchmark" => Some((
+            "https://github.com/OWASP-Benchmark/BenchmarkJava.git",
+            "master",
+        )),
         _ => None,
     }
 }
@@ -77,6 +80,14 @@ pub fn save_security_rule_pack(
     if !repository.starts_with("https://") {
         return Err("规则库仓库地址只允许使用 HTTPS".into());
     }
+    if !valid_rule_pack_key(&key) {
+        return Err(
+            "规则库标识只允许小写字母、数字、点、下划线和连字符，且不超过 64 个字符".into(),
+        );
+    }
+    if !valid_git_reference(reference) {
+        return Err("规则库分支或标签名称无效".into());
+    }
     if !["semgrep", "codeql", "benchmark"].contains(&engine.as_str()) {
         return Err("规则库引擎只支持 semgrep、codeql 或 benchmark".into());
     }
@@ -117,11 +128,81 @@ pub fn delete_security_rule_pack(state: State<AppState>, pack_id: i64) -> Result
         .map(|_| ())
 }
 
+/// The key becomes a directory name under the rule pack root, so it must not
+/// be able to name a parent or absolute path.
+fn valid_rule_pack_key(key: &str) -> bool {
+    let mut chars = key.chars();
+    key.len() <= 64
+        && chars
+            .next()
+            .is_some_and(|first| first.is_ascii_lowercase() || first.is_ascii_digit())
+        && chars.all(|value| {
+            value.is_ascii_lowercase() || value.is_ascii_digit() || matches!(value, '.' | '_' | '-')
+        })
+        && !key.contains("..")
+}
+
+/// A reference is passed to git as a positional argument; one starting with
+/// `-` would be parsed as an option such as `--upload-pack=`.
+fn valid_git_reference(reference: &str) -> bool {
+    reference.len() <= 200
+        && !reference.starts_with('-')
+        && !reference.contains("..")
+        && reference
+            .chars()
+            .all(|value| value.is_ascii_alphanumeric() || matches!(value, '.' | '_' | '-' | '/'))
+}
+
 fn rule_pack_root(db_path: &Path) -> PathBuf {
     db_path
         .parent()
         .unwrap_or(Path::new("."))
         .join("security-rule-packs")
+}
+
+/// Migrate only the retired bundled source when the operator explicitly
+/// syncs it. The old repository now contains only a migration README. Keep
+/// custom repositories and explicitly chosen alternative branches intact.
+fn effective_rule_pack_source(key: &str, repo: &str, reference: &str) -> (String, String) {
+    if key == "owasp-benchmark"
+        && repo.trim() == "https://github.com/OWASP/Benchmark.git"
+        && matches!(reference.trim(), "" | "master")
+    {
+        (
+            "https://github.com/OWASP-Benchmark/BenchmarkJava.git".into(),
+            "master".into(),
+        )
+    } else {
+        (repo.into(), reference.into())
+    }
+}
+
+fn known_rule_pack_origin_migration(key: &str, origin: &str, repo: &str, reference: &str) -> bool {
+    key == "owasp-benchmark"
+        && origin.trim() == "https://github.com/OWASP/Benchmark.git"
+        && repo.trim() == "https://github.com/OWASP-Benchmark/BenchmarkJava.git"
+        && reference.trim() == "master"
+}
+
+/// Git stderr is shown in the rule-pack error and progress fields. Scrub the
+/// whole record before the 320-character progress cut. An empty scrub is not
+/// replaced with the original text.
+fn git_stderr_for_ui(text: &str, limit: usize) -> String {
+    let scrubbed = crate::agent_runtime::secrets::redact_text_with(text, None);
+    let trimmed = scrubbed.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    trimmed.chars().take(limit).collect()
+}
+
+fn git_failure_message(command: &str, stderr: &str) -> String {
+    let shown = git_stderr_for_ui(stderr, usize::MAX);
+    if shown.is_empty() {
+        format!("git {command} 执行失败")
+    } else {
+        shown
+    }
 }
 
 fn run_git(path: Option<&Path>, args: &[&str]) -> Result<String, String> {
@@ -134,12 +215,10 @@ fn run_git(path: Option<&Path>, args: &[&str]) -> Result<String, String> {
         .output()
         .map_err(|error| format!("无法执行 git：{error}"))?;
     if !output.status.success() {
-        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(if detail.is_empty() {
-            format!("git {} 执行失败", args.first().copied().unwrap_or("命令"))
-        } else {
-            detail
-        });
+        return Err(git_failure_message(
+            args.first().copied().unwrap_or("命令"),
+            &String::from_utf8_lossy(&output.stderr),
+        ));
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
@@ -209,7 +288,11 @@ fn run_git_with_progress(
         if line.is_empty() {
             continue;
         }
-        last_line = line.chars().take(320).collect();
+        let shown = git_stderr_for_ui(line, 320);
+        if shown.is_empty() {
+            continue;
+        }
+        last_line = shown;
         let progress = git_progress_percent(line)
             .map(|value| base + value * span / 100)
             .unwrap_or(base);
@@ -228,20 +311,115 @@ fn run_git_with_progress(
     }
 }
 
-fn rule_pack_changes(path: &Path, old_version: &str) -> Result<(i64, i64, i64, String), String> {
-    let output = if old_version.is_empty() {
-        run_git(Some(path), &["ls-files"])?
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RulePackBaselineKind {
+    Initial,
+    Recorded,
+    Local,
+    Unavailable,
+}
+
+struct RulePackBaseline {
+    version: String,
+    kind: RulePackBaselineKind,
+}
+
+/// Historical versions were short object IDs. Resolve them before fetch/reset,
+/// then keep the actual object reachable while a shallow fetch runs maintenance.
+/// Only object IDs are accepted here; database text must never become a git ref
+/// expression, an option, or a path in the diff command.
+fn resolve_rule_pack_commit(path: &Path, version: &str) -> Option<String> {
+    if !(4..=64).contains(&version.len()) || !version.bytes().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    run_git(
+        Some(path),
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("{version}^{{commit}}"),
+        ],
+    )
+    .ok()
+    .filter(|resolved| {
+        matches!(resolved.len(), 40 | 64) && resolved.bytes().all(|c| c.is_ascii_hexdigit())
+    })
+}
+
+fn rule_pack_baseline(path: &Path, old_version: &str) -> Result<RulePackBaseline, String> {
+    let baseline = if old_version.is_empty() {
+        RulePackBaseline {
+            version: String::new(),
+            kind: RulePackBaselineKind::Initial,
+        }
+    } else if let Some(version) = resolve_rule_pack_commit(path, old_version) {
+        RulePackBaseline {
+            version,
+            kind: RulePackBaselineKind::Recorded,
+        }
+    } else if path.join(".git").exists() {
+        // A previous attempt may have updated the checkout but failed before
+        // recording the new version. Compare its real pre-sync HEAD explicitly;
+        // never label this as a comparison against the unavailable database ID.
+        match run_git(Some(path), &["rev-parse", "--verify", "HEAD^{commit}"]) {
+            Ok(version) => RulePackBaseline {
+                version,
+                kind: RulePackBaselineKind::Local,
+            },
+            Err(_) => RulePackBaseline {
+                version: old_version.into(),
+                kind: RulePackBaselineKind::Unavailable,
+            },
+        }
+    } else {
+        RulePackBaseline {
+            version: old_version.into(),
+            kind: RulePackBaselineKind::Unavailable,
+        }
+    };
+    if matches!(
+        baseline.kind,
+        RulePackBaselineKind::Recorded | RulePackBaselineKind::Local
+    ) {
+        run_git(
+            Some(path),
+            &[
+                "update-ref",
+                "refs/oviraptor/rule-pack-baseline",
+                &baseline.version,
+            ],
+        )?;
+    }
+    Ok(baseline)
+}
+
+fn rule_pack_changes(
+    path: &Path,
+    baseline: &RulePackBaseline,
+    current: &str,
+) -> Result<(i64, i64, i64, String), String> {
+    let output = match baseline.kind {
+        RulePackBaselineKind::Initial => run_git(Some(path), &["ls-files"])?
             .lines()
             .map(|file| format!("A\t{file}"))
             .collect::<Vec<_>>()
-            .join("\n")
-    } else {
-        let current = run_git(Some(path), &["rev-parse", "HEAD"])?;
-        if current.starts_with(old_version) || old_version.starts_with(&current) {
-            String::new()
-        } else {
-            run_git(Some(path), &["diff", "--name-status", old_version, "HEAD"])?
-        }
+            .join("\n"),
+        // These zeroes are schema placeholders, NOT a claim of zero changes.
+        // The ready result carries complete-no-baseline so the UI hides them.
+        RulePackBaselineKind::Unavailable => String::new(),
+        _ if baseline.version == current => String::new(),
+        _ => run_git(
+            Some(path),
+            &[
+                "diff",
+                "--no-ext-diff",
+                "--name-status",
+                &baseline.version,
+                current,
+                "--",
+            ],
+        )?,
     };
     let mut added = 0;
     let mut modified = 0;
@@ -281,6 +459,111 @@ fn rule_pack_changes(path: &Path, old_version: &str) -> Result<(i64, i64, i64, S
     ))
 }
 
+/// Run synchronously inside the command's background thread. Keeping this
+/// boundary explicit also lets regressions use real git and an isolated DB.
+fn sync_rule_pack_repository(
+    db_path: &Path,
+    pack_id: i64,
+    path: &Path,
+    key: &str,
+    repo: &str,
+    reference: &str,
+    old_version: &str,
+) -> Result<(), String> {
+    let baseline;
+    if path.join(".git").exists() {
+        // Never fetch and hard-reset a checkout that tracks another
+        // repository than the one this rule pack names.
+        let origin = run_git(Some(&path), &["config", "--get", "remote.origin.url"])?;
+        if origin.trim() != repo.trim() {
+            if known_rule_pack_origin_migration(key, &origin, repo, reference) {
+                // This exact upstream move is the only permitted origin rewrite.
+                // If fetch fails, retry still resolves the old DB source to this
+                // new URL and accepts the already-migrated checkout.
+                run_git(Some(path), &["remote", "set-url", "origin", repo])?;
+            } else {
+                return Err("规则库目录的远端与配置的仓库不一致，已停止同步".into());
+            }
+        }
+        baseline = rule_pack_baseline(path, old_version)?;
+        let mut fetch = vec![
+            "fetch".into(),
+            "--progress".into(),
+            "--depth".into(),
+            "1".into(),
+            "--end-of-options".into(),
+            "origin".into(),
+        ];
+        if !reference.trim().is_empty() {
+            fetch.push(reference.to_string());
+        }
+        run_git_with_progress(&db_path, pack_id, Some(&path), &fetch, "download", 5, 55)?;
+        update_rule_pack_progress(
+            &db_path,
+            pack_id,
+            65,
+            "checkout",
+            "正在应用最新规则，Git LFS 文件保持为指针以避免阻塞",
+        );
+        run_git_with_progress(
+            &db_path,
+            pack_id,
+            Some(&path),
+            &["reset".into(), "--hard".into(), "FETCH_HEAD".into()],
+            "checkout",
+            65,
+            20,
+        )?;
+    } else {
+        baseline = rule_pack_baseline(path, old_version)?;
+        let destination = path.to_string_lossy().to_string();
+        let mut clone = vec![
+            "clone".into(),
+            "--progress".into(),
+            "--depth".into(),
+            "1".into(),
+        ];
+        if !reference.trim().is_empty() {
+            clone.extend(["--branch".into(), reference.to_string()]);
+        }
+        clone.extend(["--".into(), repo.to_string(), destination]);
+        run_git_with_progress(&db_path, pack_id, None, &clone, "download", 5, 80)?;
+    }
+    update_rule_pack_progress(&db_path, pack_id, 88, "index", "正在计算规则版本和变更清单");
+    let version = run_git(Some(path), &["rev-parse", "--verify", "HEAD^{commit}"])?;
+    let (added, modified, deleted, changes) = rule_pack_changes(path, &baseline, &version)?;
+    let (stage, message) = match baseline.kind {
+        RulePackBaselineKind::Unavailable => ("complete-no-baseline", "规则库同步完成；历史比较基线不可用，本次不统计增删改。已保存完整版本供下次比较。"),
+        RulePackBaselineKind::Local => ("complete-local-baseline", "规则库同步完成；原记录的历史版本不可用，本次与同步前的本地版本比较，已重新建立比较基线。"),
+        RulePackBaselineKind::Initial => ("complete", "规则库首次同步完成；变更清单为本次导入的文件。"),
+        RulePackBaselineKind::Recorded => ("complete", "规则库同步完成"),
+    };
+    let connection = db::open(&db_path)?;
+    connection.execute("UPDATE security_rule_packs SET repository=?1,reference=?2,local_path=?3,previous_version=?4,version=?5,status='ready',last_sync_at=datetime('now','localtime'),error='',added_count=?6,modified_count=?7,deleted_count=?8,change_summary=?9,progress=100,progress_stage=?10,progress_message=?11,updated_at=datetime('now','localtime') WHERE id=?12",params![repo,reference,path.to_string_lossy(),baseline.version,version,added,modified,deleted,changes,stage,message,pack_id]).map_err(|e|e.to_string())?;
+    Ok(())
+}
+
+fn run_rule_pack_sync(
+    db_path: &Path,
+    pack_id: i64,
+    path: &Path,
+    key: &str,
+    repo: &str,
+    reference: &str,
+    old_version: &str,
+) {
+    if let Err(message) =
+        sync_rule_pack_repository(db_path, pack_id, path, key, repo, reference, old_version)
+    {
+        if let Ok(connection) = db::open(db_path) {
+            let _ = connection.execute(
+                "UPDATE security_rule_packs SET status='error',error=?1,progress_stage='error',progress_message=?1,updated_at=datetime('now','localtime') WHERE id=?2",
+                params![message, pack_id],
+            );
+        }
+    }
+}
+
 #[tauri::command]
 pub fn sync_security_rule_pack(
     state: State<AppState>,
@@ -317,8 +600,13 @@ pub fn sync_security_rule_pack(
             reference = builtin_reference.into();
         }
     }
+    (repo, reference) = effective_rule_pack_source(&key, &repo, &reference);
     if repo.trim().is_empty() || !repo.starts_with("https://") {
         return Err("规则库缺少有效的 HTTPS 仓库地址".into());
+    }
+    // Rows saved before validation existed are checked again here.
+    if !valid_rule_pack_key(&key) || !valid_git_reference(&reference) {
+        return Err("规则库标识或分支名称无效，请重新保存规则库".into());
     }
     let path = rule_pack_root(&state.db_path).join(&key);
     fs::create_dir_all(rule_pack_root(&state.db_path)).map_err(|e| e.to_string())?;
@@ -330,64 +618,15 @@ pub fn sync_security_rule_pack(
         .map_err(|e| e.to_string())?;
     let db_path = state.db_path.clone();
     thread::spawn(move || {
-        let result = (|| -> Result<(), String> {
-            if path.join(".git").exists() {
-                let mut fetch = vec![
-                    "fetch".into(),
-                    "--progress".into(),
-                    "--depth".into(),
-                    "1".into(),
-                    "origin".into(),
-                ];
-                if !reference.trim().is_empty() {
-                    fetch.push(reference.clone());
-                }
-                run_git_with_progress(&db_path, pack_id, Some(&path), &fetch, "download", 5, 55)?;
-                update_rule_pack_progress(
-                    &db_path,
-                    pack_id,
-                    65,
-                    "checkout",
-                    "正在应用最新规则，Git LFS 文件保持为指针以避免阻塞",
-                );
-                run_git_with_progress(
-                    &db_path,
-                    pack_id,
-                    Some(&path),
-                    &["reset".into(), "--hard".into(), "FETCH_HEAD".into()],
-                    "checkout",
-                    65,
-                    20,
-                )?;
-            } else {
-                let destination = path.to_string_lossy().to_string();
-                let mut clone = vec![
-                    "clone".into(),
-                    "--progress".into(),
-                    "--depth".into(),
-                    "1".into(),
-                ];
-                if !reference.trim().is_empty() {
-                    clone.extend(["--branch".into(), reference.clone()]);
-                }
-                clone.extend([repo.clone(), destination]);
-                run_git_with_progress(&db_path, pack_id, None, &clone, "download", 5, 80)?;
-            }
-            update_rule_pack_progress(&db_path, pack_id, 88, "index", "正在计算规则版本和变更清单");
-            let version = run_git(Some(&path), &["rev-parse", "--short", "HEAD"])?;
-            let (added, modified, deleted, changes) = rule_pack_changes(&path, &old_version)?;
-            let connection = db::open(&db_path)?;
-            connection.execute("UPDATE security_rule_packs SET repository=?1,reference=?2,local_path=?3,previous_version=?4,version=?5,status='ready',last_sync_at=datetime('now','localtime'),error='',added_count=?6,modified_count=?7,deleted_count=?8,change_summary=?9,progress=100,progress_stage='complete',progress_message='规则库同步完成',updated_at=datetime('now','localtime') WHERE id=?10",params![repo,reference,path.to_string_lossy(),old_version,version,added,modified,deleted,changes,pack_id]).map_err(|e|e.to_string())?;
-            Ok(())
-        })();
-        if let Err(message) = result {
-            if let Ok(connection) = db::open(&db_path) {
-                let _ = connection.execute(
-                    "UPDATE security_rule_packs SET status='error',error=?1,progress_stage='error',progress_message=?1,updated_at=datetime('now','localtime') WHERE id=?2",
-                    params![message, pack_id],
-                );
-            }
-        }
+        run_rule_pack_sync(
+            &db_path,
+            pack_id,
+            &path,
+            &key,
+            &repo,
+            &reference,
+            &old_version,
+        );
     });
     connection
         .query_row(
@@ -396,4 +635,29 @@ pub fn sync_security_rule_pack(
             rule_pack_row,
         )
         .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod validation_tests {
+    use super::{valid_git_reference, valid_rule_pack_key};
+
+    #[test]
+    fn rule_pack_keys_cannot_leave_the_rule_pack_root() {
+        assert!(valid_rule_pack_key("semgrep-rules"));
+        assert!(valid_rule_pack_key("owasp.benchmark_2"));
+        for key in ["", "../x", "..", "a/b", "/abs", ".hidden", "-x", "A"] {
+            assert!(!valid_rule_pack_key(key), "{key}");
+        }
+        assert!(!valid_rule_pack_key(&"a".repeat(65)));
+    }
+
+    #[test]
+    fn git_references_cannot_be_options() {
+        assert!(valid_git_reference(""));
+        assert!(valid_git_reference("main"));
+        assert!(valid_git_reference("release/v1.2"));
+        for reference in ["--upload-pack=touch x", "-b", "a..b", "a b", "a;b"] {
+            assert!(!valid_git_reference(reference), "{reference}");
+        }
+    }
 }

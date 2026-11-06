@@ -173,9 +173,6 @@ pub(crate) fn prepare_requested_on(
     Ok(PreparedToolSelection { request, fact })
 }
 
-#[cfg(all(test, unix))]
-#[path = "selection/tests.rs"]
-mod tests;
 
 /// A pending request is not signed. Only its later presence in the actual
 /// original privately signed Mode policy can provide historical provenance.

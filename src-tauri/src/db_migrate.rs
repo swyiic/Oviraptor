@@ -44,6 +44,123 @@ fn ensure_column(
     }
 }
 
+/// Rebuilds `table` with SQLite's documented procedure
+/// (https://sqlite.org/lang_altertable.html#otheralter). `batch` must create
+/// `<table>__rebuild`, copy the rows from `<table>`, drop `<table>` and rename
+/// `<table>__rebuild` into place. Renaming the old table aside instead would
+/// make SQLite rewrite every child FOREIGN KEY to the temporary name, and its
+/// DROP would cascade-delete the child rows. The whole rebuild is one
+/// transaction, so a failed copy leaves the original table untouched.
+fn rebuild_table(connection: &mut Connection, table: &str, batch: &str) -> Result<(), String> {
+    // foreign_keys cannot change inside a transaction.
+    connection
+        .pragma_update(None, "foreign_keys", "OFF")
+        .map_err(|error| error.to_string())?;
+    let result = (|| {
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| error.to_string())?;
+        let violations = |transaction: &rusqlite::Transaction<'_>| -> Result<i64, String> {
+            transaction
+                .query_row("SELECT count(*) FROM pragma_foreign_key_check(?1)", [table], |row| row.get(0))
+                .map_err(|error| error.to_string())
+        };
+        // Orphans that predate the rebuild are left as they were; only rows the
+        // rebuild itself would break stop it.
+        let before = violations(&transaction)?;
+        transaction
+            .execute_batch(batch)
+            .map_err(|error| error.to_string())?;
+        let after = violations(&transaction)?;
+        if after > before {
+            return Err(format!("{table} 重建后新增 {} 条外键冲突", after - before));
+        }
+        transaction.commit().map_err(|error| error.to_string())
+    })();
+    let restored = connection
+        .pragma_update(None, "foreign_keys", "ON")
+        .map_err(|error| error.to_string());
+    result.and(restored)
+}
+
+/// Older launches rebuilt tables by renaming them to these names first, which
+/// left child FOREIGN KEY clauses pointing at the dropped temporary table.
+const LEGACY_REBUILD_NAMES: [(&str, &str); 5] = [
+    ("agent_review_requests_legacy_verdict", "agent_review_requests"),
+    ("agent_finding_candidates_legacy_verdict", "agent_finding_candidates"),
+    ("sentinel_processes_legacy", "sentinel_processes"),
+    ("sentinel_targets_legacy", "sentinel_targets"),
+    ("sentinel_validations_legacy", "sentinel_validations"),
+];
+
+/// Points child FOREIGN KEY clauses left behind by the old rename-aside
+/// rebuilds back at their real parent. Rows already cascade-deleted by those
+/// rebuilds cannot be recovered; this only lets new rows be written again.
+fn repair_legacy_foreign_keys(connection: &mut Connection) -> Result<(), String> {
+    let tables: Vec<(String, String)> = {
+        let mut statement = connection
+            .prepare(
+                "SELECT name,sql FROM sqlite_master WHERE type='table' AND sql LIKE '%\\_legacy%' ESCAPE '\\'",
+            )
+            .map_err(|error| error.to_string())?;
+        let rows = statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())?;
+        rows
+    };
+    for (table, sql) in tables {
+        if LEGACY_REBUILD_NAMES.iter().any(|(legacy, _)| *legacy == table) {
+            continue;
+        }
+        let mut repaired = sql.clone();
+        for (legacy, parent) in LEGACY_REBUILD_NAMES {
+            repaired = repaired
+                .replace(&format!("\"{legacy}\""), parent)
+                .replace(legacy, parent);
+        }
+        if repaired == sql {
+            continue;
+        }
+        let Some(definition) = repaired.find('(').map(|start| &repaired[start..]) else {
+            continue;
+        };
+        if !table
+            .chars()
+            .all(|value| value.is_ascii_alphanumeric() || value == '_')
+        {
+            return Err("数据库迁移包含非法表名".into());
+        }
+        let dependents: Vec<String> = {
+            let mut statement = connection
+                .prepare(
+                    "SELECT sql FROM sqlite_master WHERE tbl_name=?1 AND type IN ('index','trigger') AND sql IS NOT NULL",
+                )
+                .map_err(|error| error.to_string())?;
+            let rows = statement
+                .query_map([&table], |row| row.get(0))
+                .map_err(|error| error.to_string())?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| error.to_string())?;
+            rows
+        };
+        let mut batch = format!(
+            "CREATE TABLE {table}__rebuild {definition};\n\
+             INSERT INTO {table}__rebuild SELECT * FROM {table};\n\
+             DROP TABLE {table};\n\
+             ALTER TABLE {table}__rebuild RENAME TO {table};\n"
+        );
+        for statement in dependents {
+            batch.push_str(&statement);
+            batch.push_str(";\n");
+        }
+        rebuild_table(connection, &table, &batch)
+            .map_err(|error| format!("修复 {table} 外键失败：{error}"))?;
+    }
+    Ok(())
+}
+
 fn migration_version(connection: &Connection, key: &str) -> i64 {
     connection
         .query_row(

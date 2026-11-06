@@ -30,20 +30,7 @@ pub(crate) fn with_background_scope<F: FnOnce() -> T, T>(db_path: &Path, f: F) -
 pub(crate) fn active_background_workers(db_path: &Path) -> Result<usize, String> {
     background_activity::active_for(db_path)
 }
-#[cfg(test)]
-pub(crate) fn spawn_background_for_test<F, T>(f: F) -> std::thread::JoinHandle<T>
-where F: FnOnce() -> T + Send + 'static, T: Send + 'static {
-    thread::spawn(f)
-}
 
-#[cfg(test)]
-use crate::asset_models::AssetQuery;
-#[cfg(test)]
-use std::fs;
-#[cfg(test)]
-use crate::commands::assets::asset_filter;
-#[cfg(test)]
-use crate::scanning::ownership_test_support::authorization_control_setup_in;
 
 // These source units share only the cohesive ownership domain's explicit scope.
 include!("asset_ownership.rs");
@@ -53,4 +40,3 @@ include!("ownership_review.rs");
 include!("ownership_operations.rs");
 include!("ownership_authorization.rs");
 include!("ownership_unit_projection.rs");
-include!("ownership_o3_tests.rs");

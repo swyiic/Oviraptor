@@ -26,11 +26,11 @@ const FALLBACK_PLUGINS: readonly BuiltinPluginManifest[] = freeze([
     id: "asset", label: ["资产", "Assets"], description: ["管理资产、归属与公开暴露面；本地管理不需要模型。", "Manage assets, ownership and public exposure. Local management needs no model."],
     defaultView: "dashboard", views: ["dashboard", "tasks", "assets", "seeds", "ownership", "exposure", "changes", "quarantine", "query"], hasLogs: true, requirements: [],
     pages: [
-      { id: "dashboard", view: "dashboard", label: ["仪表盘", "Dashboard"] },
-      { id: "tasks", view: "tasks", label: ["任务中心", "Tasks"] },
-      { id: "assets", view: "assets", label: ["资产", "Assets"] },
-      { id: "seeds", view: "seeds", label: ["项目种子", "Project seeds"] },
-      { id: "ownership", view: "ownership", label: ["归属门禁", "Ownership gate"] },
+      { id: "dashboard", view: "dashboard", label: ["总览", "Overview"] },
+      { id: "tasks", view: "tasks", label: ["采集任务", "Collection jobs"] },
+      { id: "assets", view: "assets", label: ["资产列表", "Asset list"] },
+      { id: "seeds", view: "seeds", label: ["发现种子", "Discovery seeds"] },
+      { id: "ownership", view: "ownership", label: ["归属确认", "Ownership review"] },
       { id: "exposure", view: "exposure", label: ["公开暴露面", "Public exposure"] },
       { id: "changes", view: "changes", label: ["变化对比", "Changes"] },
       { id: "quarantine", view: "quarantine", label: ["隔离区", "Quarantine"] },
@@ -49,11 +49,14 @@ const FALLBACK_PLUGINS: readonly BuiltinPluginManifest[] = freeze([
   {
     id: "sentinel", label: ["扫描", "Scanning"], description: ["查看扫描结果，或进入现有工作台发起 Web、源码、灰盒和 CI 调查。", "Review scan results, or use the existing workbench for Web, source, greybox and CI investigations."],
     defaultView: "sentinel", views: ["sentinel"], hasLogs: true, requirements: [],
+    // 瘦身到总览/任务/结果三项(docs/AGENT_SCAN_RESULTS_REDESIGN.md §4): 执行过程(dialog)
+    // 从任务/结果内的任务上下文打开，新建扫描(workbench)、已停止目标(fuse)、人工验证
+    // 队列(validations)折进总览/任务的子区入口，知识库(knowledge)迁到顶层「库」区。
+    // SentinelBoard 仍认得这些 Tab 值，只是不再作为独立侧栏页。
     pages: [
-      { id: "dialog", view: "sentinel", section: "dialog", label: ["执行概览", "Execution overview"] },
+      { id: "overview", view: "sentinel", section: "overview", label: ["总览", "Overview"] },
+      { id: "queue", view: "sentinel", section: "queue", label: ["扫描任务", "Scan tasks"] },
       { id: "urls", view: "sentinel", section: "results", label: ["结果与证据", "Results and evidence"] },
-      { id: "queue", view: "sentinel", section: "queue", label: ["任务与成本", "Tasks and cost"] },
-      { id: "skills", view: "sentinel", section: "workbench", label: ["知识与策略", "Knowledge and policy"] },
       { id: "logs", view: "logs", label: ["扫描日志", "Scan logs"] },
     ],
     commands: [command("scanning.list-link-candidates", "read"), command("scanning.open-workspace", "navigate")],

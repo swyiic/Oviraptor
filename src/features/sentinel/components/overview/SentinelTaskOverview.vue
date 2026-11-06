@@ -26,7 +26,7 @@ const taskGroups = computed(() => {
   >();
   for (const scan of props.scans) {
     const raw = scan.createdAt || scan.updatedAt || "";
-    const date = raw ? raw.slice(0, 10) : "未标注日期";
+    const date = raw ? raw.slice(0, 10) : tr("未标注日期", "Undated");
     let group = dates.get(date);
     if (!group) {
       group = { date, types: [] };
@@ -50,16 +50,19 @@ const taskGroups = computed(() => {
       ),
     }));
 });
+
+function groupTaskCount(group: { types: { scans: SentinelScan[] }[] }) {
+  return group.types.reduce((sum, bucket) => sum + bucket.scans.length, 0);
+}
 </script>
 
 <template>
   <section class="panel sentinel-panel">
     <div class="panel-heading">
       <div>
-        <span class="eyebrow">LOADED TASKS</span>
         <h3>{{ tr("已加载任务", "Loaded tasks") }}</h3>
         <p class="task-overview-caption">
-          仅展示已加载且符合当前项目与搜索条件的任务，不代表全部历史任务。
+          {{ tr("仅展示已加载且符合当前项目与搜索条件的任务，不代表全部历史任务。", "Only loaded tasks matching the current project and search are shown, not all historical tasks.") }}
         </p>
       </div>
       <span class="project-scope-note">{{ props.projectId ? tr("跟随顶部当前项目", "Following current project") : tr("当前为全部项目汇总", "All-project summary") }}</span>
@@ -73,13 +76,7 @@ const taskGroups = computed(() => {
         <header>
           <strong>{{ group.date }}</strong
           ><span
-            >{{
-              group.types.reduce(
-                (sum, bucket) => sum + bucket.scans.length,
-                0,
-              )
-            }}
-            个任务</span
+            >{{ tr(`${groupTaskCount(group)} 个任务`, `${groupTaskCount(group)} tasks`) }}</span
           >
         </header>
         <div
@@ -91,7 +88,7 @@ const taskGroups = computed(() => {
             <span class="scan-type-pill">{{
               scanTypeLabel(bucket.type)
             }}</span
-            ><small>{{ bucket.scans.length }} 个</small>
+            ><small>{{ tr(`${bucket.scans.length} 个`, `${bucket.scans.length}`) }}</small>
           </div>
           <div class="sentinel-task-grid">
             <div
@@ -120,8 +117,7 @@ const taskGroups = computed(() => {
                 <h3>{{ scanTitle(scan) }}</h3>
                 <p>{{ scan.projectName }} · {{ scan.id }}</p>
                 <small class="task-date-line"
-                  >创建于
-                  {{ scan.createdAt || scan.updatedAt || "—" }}</small
+                  >{{ tr(`创建于 ${scan.createdAt || scan.updatedAt || "—"}`, `Created ${scan.createdAt || scan.updatedAt || "—"}`) }}</small
                 ><small
                   v-if="scanSummary(scan)"
                   class="live-checkpoint"

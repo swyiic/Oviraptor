@@ -26,6 +26,7 @@ pub(crate) mod tool_administrator;
 pub(crate) mod environment;
 #[path = "commands/model_profiles.rs"]
 pub(crate) mod model_profiles;
+pub(crate) mod credential_storage;
 #[path = "commands/ownership.rs"]
 pub(crate) mod ownership;
 // Default module resolution preserves commands/exposure/<child>.rs.

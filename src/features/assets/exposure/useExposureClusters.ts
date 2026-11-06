@@ -5,6 +5,9 @@
 import { computed, ref, watch, getCurrentInstance, onUnmounted } from "vue";
 import { exposureErrorText, isUnregisteredCommand, type ExposurePage, type JsonLike } from "./contracts";
 import type { ExposureCluster, ExposureClusterMember } from "./api";
+import { useI18n } from "../uiPorts";
+
+const { tr } = useI18n();
 
 export interface ExposureClustersApi {
   pageExposureClusters?: (
@@ -48,11 +51,11 @@ const emptyMembers = (): MemberPage => ({
 });
 
 function readPage<T>(value: unknown): ExposurePage<T> {
-  if (typeof value !== "object" || value === null) throw new Error("分页返回结构无效");
+  if (typeof value !== "object" || value === null) throw new Error(tr("分页返回结构无效", "Invalid page response shape"));
   const row = value as Record<string, unknown>;
-  if (!Array.isArray(row.items)) throw new Error("分页缺少 items 列表");
-  if (typeof row.total !== "number") throw new Error("分页缺少过滤总数");
-  if (typeof row.hasMore !== "boolean") throw new Error("分页缺少 hasMore");
+  if (!Array.isArray(row.items)) throw new Error(tr("分页缺少 items 列表", "The page is missing the items list"));
+  if (typeof row.total !== "number") throw new Error(tr("分页缺少过滤总数", "The page is missing the filtered total"));
+  if (typeof row.hasMore !== "boolean") throw new Error(tr("分页缺少 hasMore", "The page is missing hasMore"));
   return {
     items: row.items as T[],
     total: row.total,
@@ -166,7 +169,7 @@ export function useExposureClusters(deps: ExposureClustersDeps) {
       } else {
         // A refresh failure keeps the last trustworthy snapshot and labels it stale.
         stale.value = true;
-        deps.notify("error", `簇列表刷新失败，显示的是上一次的快照：${text}`);
+        deps.notify("error", tr(`簇列表刷新失败，显示的是上一次的快照：${text}`, `Cluster list refresh failed; showing the last snapshot: ${text}`));
       }
       return false;
     } finally {
@@ -194,7 +197,7 @@ export function useExposureClusters(deps: ExposureClustersDeps) {
       cursor.value = page.nextCursor;
     } catch (reason) {
       if (discarded(claimed, projectId) || kind !== kindFilter.value || search !== searchFilter.value) return;
-      deps.notify("error", `加载更多簇失败：${exposureErrorText(reason)}`);
+      deps.notify("error", tr(`加载更多簇失败：${exposureErrorText(reason)}`, `Failed to load more clusters: ${exposureErrorText(reason)}`));
     } finally {
       if (claimed === generation) loadingMore.value = false;
     }
@@ -264,40 +267,49 @@ export function useExposureClusters(deps: ExposureClustersDeps) {
 
   /** Wording that distinguishes "grouped nothing" from "could not read". */
   const notice = computed(() => {
-    if (!deps.projectId()) return "请先选择工作空间";
-    if (!available.value) return "簇读取接口尚未注册，这里显示的不是“没有聚类结果”";
-    if (readError.value && !loaded.value) return `簇读取失败：${readError.value}`;
-    if (stale.value) return `显示的是上一次成功读取的簇快照：${readError.value}`;
+    if (!deps.projectId()) return tr("请先选择工作空间", "Select a workspace first");
+    if (!available.value) return tr("簇读取接口尚未注册，这里显示的不是“没有聚类结果”", "The cluster API is not registered yet; this does not mean there are no clusters");
+    if (readError.value && !loaded.value) return tr(`簇读取失败：${readError.value}`, `Failed to read clusters: ${readError.value}`);
+    if (stale.value) return tr(`显示的是上一次成功读取的簇快照：${readError.value}`, `Showing the last successfully read cluster snapshot: ${readError.value}`);
     if (!clusters.value.length) {
       return total.value === 0
-        ? "还没有满足成簇条件的公开观察（至少两个准入资产共享同一字节或同一注册域）"
-        : `当前过滤没有命中，共 ${total.value} 个簇`;
+        ? tr("还没有满足成簇条件的公开观察（至少两个准入资产共享同一字节或同一注册域）", "No public observations meet the clustering conditions yet (at least two eligible assets sharing the same bytes or the same registered domain)")
+        : tr(`当前过滤没有命中，共 ${total.value} 个簇`, `No matches for the current filter; ${total.value} clusters in total`);
     }
-    return `本页 ${clusters.value.length} / 共 ${total.value} 个簇；直接依据 ${summary.value.direct} 项、继承 ${summary.value.inherited} 项、带缺口 ${summary.value.gaps} 个`;
+    const { direct, inherited, gaps } = summary.value;
+    return tr(
+      `本页 ${clusters.value.length} / 共 ${total.value} 个簇；直接依据 ${direct} 项、继承 ${inherited} 项、带缺口 ${gaps} 个`,
+      `${clusters.value.length} on this page / ${total.value} clusters total; ${direct} direct, ${inherited} inherited, ${gaps} with gaps`,
+    );
   });
 
   /// G1-1 which rule drew this cluster's boundary. An old backend that does not report it
   /// is said to be unreported, never assumed to be the public-suffix rule.
   function boundaryText(row: ExposureCluster): string {
-    if (row.kind === "content") return "相同响应内容";
-    if (typeof row.boundaryBasis !== "string") return "边界依据未报告（旧后端）";
-    if (row.boundaryBasis === "") return "旧版末两段分组（G1 之前，未按公共后缀，可能误合并）";
-    if (row.boundaryBasis === "psl") return `公共后缀注册域（${row.pslVersion || "版本未记录"}）`;
-    if (row.boundaryBasis === "exact_host") return "精确主机（无可注册域）";
-    return row.boundaryLabel || `未知边界 ${row.boundaryBasis}`;
+    if (row.kind === "content") return tr("相同响应内容", "Identical response content");
+    if (typeof row.boundaryBasis !== "string") return tr("边界依据未报告（旧后端）", "Boundary basis not reported (older backend)");
+    if (row.boundaryBasis === "") return tr("旧版末两段分组（G1 之前，未按公共后缀，可能误合并）", "Legacy last-two-labels grouping (pre-G1, ignores the public suffix list; may over-merge)");
+    if (row.boundaryBasis === "psl") {
+      const version = row.pslVersion || tr("版本未记录", "version not recorded");
+      return tr(`公共后缀注册域（${version}）`, `Public-suffix registered domain (${version})`);
+    }
+    if (row.boundaryBasis === "exact_host") return tr("精确主机（无可注册域）", "Exact host (no registrable domain)");
+    return row.boundaryLabel || tr(`未知边界 ${row.boundaryBasis}`, `Unknown boundary ${row.boundaryBasis}`);
   }
 
   function cacheLabel(row: ExposureCluster): string {
-    if (!row.cacheTime) return "尚无缓存结论";
-    const expiry = row.cacheExpiresAt ? `，有效期至 ${row.cacheExpiresAt}` : "，未设期限";
-    return `缓存于 ${row.cacheTime}${expiry}`;
+    if (!row.cacheTime) return tr("尚无缓存结论", "No cached conclusion yet");
+    const expiry = row.cacheExpiresAt ? tr(`，有效期至 ${row.cacheExpiresAt}`, `, valid until ${row.cacheExpiresAt}`) : tr("，未设期限", ", no expiry set");
+    return tr(`缓存于 ${row.cacheTime}${expiry}`, `Cached at ${row.cacheTime}${expiry}`);
   }
 
   function evidenceLabel(member: ExposureClusterMember): string {
-    if (!member.admittedNow) return "已失效：不再满足准入";
-    if (member.evidenceSource === "direct") return "自带结论";
-    if (member.evidenceSource === "stale_representative_revoked") return "代表已撤权，结论待复核";
-    return `继承自 ${member.inheritedFromLabel || `资产 ${member.inheritedFromAssetId ?? "?"}`}`;
+    if (!member.admittedNow) return tr("已失效：不再满足准入", "Expired: no longer eligible");
+    if (member.evidenceSource === "direct") return tr("自带结论", "Own conclusion");
+    if (member.evidenceSource === "stale_representative_revoked") return tr("代表已撤权，结论待复核", "Representative revoked; conclusion needs review");
+    const assetId = member.inheritedFromAssetId ?? "?";
+    const source = member.inheritedFromLabel || tr(`资产 ${assetId}`, `Asset ${assetId}`);
+    return tr(`继承自 ${source}`, `Inherited from ${source}`);
   }
 
   function provenance(row: ExposureCluster): JsonLike {

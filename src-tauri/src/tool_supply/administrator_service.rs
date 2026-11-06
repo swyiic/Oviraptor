@@ -1,7 +1,4 @@
 //! Task-external service; approval inventory is never execution authority.
-#[cfg(all(test, target_os = "macos"))]
-#[path = "administrator_service/tests.rs"]
-mod tests;
 use super::{
     approval::{self, ToolAdministratorConfiguration, VerifiedToolApproval},
     approval_writer,

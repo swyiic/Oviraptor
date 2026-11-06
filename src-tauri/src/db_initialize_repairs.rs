@@ -10,6 +10,16 @@ fn migrate_builtin_prompts_and_recon_routes(connection: &mut Connection) -> Resu
         "UPDATE agent_skills SET description='按看功能、触发请求、还原参数、分析业务 JS、匹配本地知识和一次性保底发现的顺序执行；只把证据充分的高价值候选交给后续复核。',instructions=?1,updated_at=datetime('now','localtime') WHERE name='业务前端深度分析' AND builtin=1 AND instructions<>?1",
         [DEFAULT_BUSINESS_FRONTEND_SKILL],
     );
+    // Seed the supplement skill into older databases, and keep its shipped text
+    // in sync, without touching user-authored or packaged skills.
+    let _ = connection.execute(
+        "INSERT OR IGNORE INTO agent_skills(name,description,instructions,builtin,enabled) VALUES('web-deep-attack-supplement','登录/认证面深挖、已发现 API 的鉴权与逻辑滥用、识别到框架后的已知公开漏洞复现、开源二开项目的上游比对；授权范围内的非破坏性取证式测试。',?1,1,1)",
+        [DEFAULT_WEB_ATTACK_SUPPLEMENT_SKILL],
+    );
+    let _ = connection.execute(
+        "UPDATE agent_skills SET instructions=?1,updated_at=datetime('now','localtime') WHERE name='web-deep-attack-supplement' AND builtin=1 AND instructions<>?1",
+        [DEFAULT_WEB_ATTACK_SUPPLEMENT_SKILL],
+    );
     let old_target_schema: String = connection
         .query_row(
             "SELECT sql FROM sqlite_master WHERE type='table' AND name='sentinel_targets'",
@@ -18,9 +28,10 @@ fn migrate_builtin_prompts_and_recon_routes(connection: &mut Connection) -> Resu
         )
         .unwrap_or_default();
     if old_target_schema.contains("UNIQUE(project_id,url)") {
-        let _ = connection.execute_batch(r#"
-            ALTER TABLE sentinel_targets RENAME TO sentinel_targets_legacy;
-            CREATE TABLE sentinel_targets (
+        // Best effort as before, but atomic: a failed copy now leaves the old
+        // table and its rows in place instead of an empty replacement.
+        let _ = rebuild_table(connection, "sentinel_targets", r#"
+            CREATE TABLE sentinel_targets__rebuild (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
                 scan_id TEXT REFERENCES sentinel_scans(id) ON DELETE CASCADE,
@@ -32,9 +43,10 @@ fn migrate_builtin_prompts_and_recon_routes(connection: &mut Connection) -> Resu
                 updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
                 UNIQUE(project_id,scan_id,url)
             );
-            INSERT INTO sentinel_targets(id,project_id,scan_id,asset_id,company,url,status,created_at,updated_at)
-              SELECT id,project_id,scan_id,NULL,company,url,status,created_at,updated_at FROM sentinel_targets_legacy;
-            DROP TABLE sentinel_targets_legacy;
+            INSERT INTO sentinel_targets__rebuild(id,project_id,scan_id,asset_id,company,url,status,created_at,updated_at)
+              SELECT id,project_id,scan_id,NULL,company,url,status,created_at,updated_at FROM sentinel_targets;
+            DROP TABLE sentinel_targets;
+            ALTER TABLE sentinel_targets__rebuild RENAME TO sentinel_targets;
         "#);
     }
     // 旧版表重建后再次补齐自适应路由字段；新版数据库上的重复列错误可忽略。
@@ -104,9 +116,8 @@ fn migrate_targets_and_opportunities(connection: &mut Connection) -> Result<(), 
         )
         .unwrap_or_default();
     if old_validation_schema.contains("UNIQUE(scan_id,url)") {
-        connection.execute_batch(r#"
-            ALTER TABLE sentinel_validations RENAME TO sentinel_validations_legacy;
-            CREATE TABLE sentinel_validations (
+        rebuild_table(connection, "sentinel_validations", r#"
+            CREATE TABLE sentinel_validations__rebuild (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 scan_id TEXT NOT NULL REFERENCES sentinel_scans(id) ON DELETE CASCADE,
                 url TEXT NOT NULL,
@@ -120,9 +131,10 @@ fn migrate_targets_and_opportunities(connection: &mut Connection) -> Result<(), 
                 updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
                 UNIQUE(scan_id,url,finding_key)
             );
-            INSERT INTO sentinel_validations(id,scan_id,url,finding_key,finding_kind,verdict,severity,note,evidence,created_at,updated_at)
-              SELECT id,scan_id,url,'url-summary','',verdict,severity,note,evidence,created_at,updated_at FROM sentinel_validations_legacy;
-            DROP TABLE sentinel_validations_legacy;
+            INSERT INTO sentinel_validations__rebuild(id,scan_id,url,finding_key,finding_kind,verdict,severity,note,evidence,created_at,updated_at)
+              SELECT id,scan_id,url,'url-summary','',verdict,severity,note,evidence,created_at,updated_at FROM sentinel_validations;
+            DROP TABLE sentinel_validations;
+            ALTER TABLE sentinel_validations__rebuild RENAME TO sentinel_validations;
             CREATE INDEX IF NOT EXISTS idx_sentinel_validation_scan ON sentinel_validations(scan_id,updated_at);
 CREATE TABLE IF NOT EXISTS investigation_validations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -153,7 +165,44 @@ CREATE TABLE IF NOT EXISTS investigation_validations (
 );
 CREATE INDEX IF NOT EXISTS idx_investigation_validations_scan ON investigation_validations(scan_id,updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_investigation_validations_opportunity ON investigation_validations(opportunity_id,updated_at DESC);
-        "#).map_err(|error| error.to_string())?;
+        "#)?;
+    }
+    // The homogeneous-worker schema added `agent_acceptance_verdicts.attempt`
+    // (and moved the unique key to (assignment_id,verdict,attempt) so a retry's
+    // verdict is not silently dropped). The table is created with
+    // CREATE TABLE IF NOT EXISTS, so a database that already had the old shape
+    // never gained the column — every worker verdict INSERT and the coordinator
+    // finalize join then fail with "no such column: attempt" / a missing ON
+    // CONFLICT target, so scans finish with no accepted results and cannot be
+    // deleted. Rebuild the old table once to the current schema.
+    let verdict_schema: String = connection
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='agent_acceptance_verdicts'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or_default();
+    if !verdict_schema.is_empty() && !verdict_schema.contains("attempt") {
+        rebuild_table(connection, "agent_acceptance_verdicts", r#"
+            CREATE TABLE agent_acceptance_verdicts__rebuild (
+              verdict_id TEXT PRIMARY KEY CHECK(verdict_id GLOB 'vrd-*'),
+              assignment_id TEXT NOT NULL,
+              slice_id TEXT NOT NULL,
+              verdict TEXT NOT NULL CHECK(verdict IN ('accept','retry','reject')),
+              machine_checks_json TEXT NOT NULL,
+              model_judgement_json TEXT NOT NULL DEFAULT '',
+              reason_codes_json TEXT NOT NULL,
+              evidence_refs_json TEXT NOT NULL,
+              decided_by_lease_epoch INTEGER NOT NULL,
+              attempt INTEGER NOT NULL DEFAULT 1,
+              created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+              UNIQUE(assignment_id, verdict, attempt)
+            );
+            INSERT INTO agent_acceptance_verdicts__rebuild(verdict_id,assignment_id,slice_id,verdict,machine_checks_json,model_judgement_json,reason_codes_json,evidence_refs_json,decided_by_lease_epoch,attempt,created_at)
+              SELECT verdict_id,assignment_id,slice_id,verdict,machine_checks_json,model_judgement_json,reason_codes_json,evidence_refs_json,decided_by_lease_epoch,1,created_at FROM agent_acceptance_verdicts;
+            DROP TABLE agent_acceptance_verdicts;
+            ALTER TABLE agent_acceptance_verdicts__rebuild RENAME TO agent_acceptance_verdicts;
+        "#)?;
     }
     // Older opportunity scoring treated inferred paths, frontend routes and
     // fingerprint knowledge as directly verifiable. Reclassify them once as

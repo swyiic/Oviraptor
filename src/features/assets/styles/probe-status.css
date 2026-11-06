@@ -1,14 +1,14 @@
 .status-web_alive,
 .status-alive_clean,
 .decision-confirmed,
-.tier-p1 { background:#e7f7f0; color:#14875f; }
+.tier-p1 { background:color-mix(in srgb, var(--green) 10%, var(--ui-surface)); color:color-mix(in srgb, var(--green) 82%, var(--ui-ink)); }
 .status-web_restricted,
 .status-virtual_host_required,
-.status-browser_render_required { background:#fff4e5; color:#b86d13; }
+.status-browser_render_required { background:color-mix(in srgb, var(--amber) 11%, var(--ui-surface)); color:color-mix(in srgb, var(--amber) 82%, var(--ui-ink)); }
 .status-web_abnormal,
-.status-tcp_alive_non_http { background:#edf3ff; color:#286bcd; }
-.status-blocked_content { background:#fff0f0; color:#c94d4d; }
+.status-tcp_alive_non_http { background:color-mix(in srgb, var(--blue) 8%, var(--ui-surface)); color:color-mix(in srgb, var(--blue) 82%, var(--ui-ink)); }
+.status-blocked_content { background:color-mix(in srgb, var(--red) 8%, var(--ui-surface)); color:#c94d4d; }
 .status-unreachable,
 .status-skipped,
 .decision-rejected,
-.decision-not_applicable { background:#f1f2f5; color:#6d7581; }
+.decision-not_applicable { background:var(--ui-surface-sunken); color:var(--ui-muted); }

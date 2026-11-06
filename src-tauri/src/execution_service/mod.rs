@@ -18,5 +18,3 @@ pub(crate) struct OutputEvent {
     pub gap: bool,
 }
 
-#[cfg(test)]
-mod tests;

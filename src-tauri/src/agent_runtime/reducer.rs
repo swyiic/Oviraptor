@@ -5,10 +5,6 @@
 //! the test-only `commit` helper is not their shared production write gate.
 pub(crate) mod backend_exit;
 use super::contract::{terminal_code, TerminalSignals, TerminalState};
-#[cfg(test)]
-use super::store;
-#[cfg(test)]
-use rusqlite::Connection;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Reduction {
@@ -43,9 +39,21 @@ pub fn reduce(signals: &TerminalSignals) -> Reduction {
         };
     }
     if let Some(error) = &signals.configuration_error {
+        let is_integrity = error.contains("完整性") || error.contains("integrity");
+        // §9.0 tier-1 gate release: a brittle schema-shape wobble is not a real
+        // configuration failure — it must not hard-fail the whole scan. Keep the
+        // attempt recoverable (`Incomplete`) so it can continue/retry. An
+        // evidence-integrity error is never brittle and always stays `Failed`.
+        if !is_integrity && super::contract::is_brittle_configuration_signal(error) {
+            return Reduction {
+                state: TerminalState::Incomplete,
+                code: terminal_code::BRITTLE_STAGE_ABSORBED.to_string(),
+                reason: error.clone(),
+            };
+        }
         return Reduction {
             state: TerminalState::Failed,
-            code: if error.contains("完整性") || error.contains("integrity") {
+            code: if is_integrity {
                 terminal_code::EVIDENCE_INTEGRITY.to_string()
             } else {
                 terminal_code::CONFIGURATION.to_string()
@@ -200,32 +208,42 @@ fn non_empty(value: &str, fallback: &str) -> String {
     }
 }
 
-/// Reduce and persist. A run that already holds a terminal state keeps it — the
-/// second writer is rejected rather than allowed to rewrite history.
 #[cfg(test)]
-pub fn commit(
-    connection: &Connection,
-    run_id: &str,
-    signals: &TerminalSignals,
-) -> Result<Reduction, String> {
-    let reduction = reduce(signals);
-    // First writer wins: a run that already holds a terminal state is never
-    // rewritten, whatever a later backend or retry reports.
-    if let Some(existing) = store::load_run(connection, run_id)? {
-        if existing.is_terminal() {
-            return Ok(Reduction {
-                state: existing.terminal_state.unwrap_or(TerminalState::Failed),
-                code: existing.terminal_code.clone(),
-                reason: existing.terminal_reason.clone(),
-            });
-        }
+mod gate_release_tests {
+    use super::*;
+    use crate::agent_runtime::contract::TerminalSignals;
+
+    fn config_error(text: &str) -> Reduction {
+        reduce(&TerminalSignals {
+            configuration_error: Some(text.to_string()),
+            ..TerminalSignals::default()
+        })
     }
-    store::mark_run_terminal(
-        connection,
-        run_id,
-        reduction.state,
-        &reduction.code,
-        &reduction.reason,
-    )?;
-    Ok(reduction)
+
+    #[test]
+    fn tier1_schema_wobble_is_recoverable_not_failed() {
+        // §9.0 tier-1: a brittle schema-shape stop stays recoverable so the scan
+        // can continue, instead of hard-failing the whole target.
+        let reduction = config_error("root_frame_mapper_schema_invalid");
+        assert_eq!(reduction.state, TerminalState::Incomplete);
+        assert_eq!(reduction.code, terminal_code::BRITTLE_STAGE_ABSORBED);
+    }
+
+    #[test]
+    fn integrity_error_is_never_absorbed_even_if_schema_shaped() {
+        // An evidence-integrity error is tier-3-grade: it must stay Failed even if
+        // its text happens to carry the schema token.
+        let reduction = config_error("证据完整性校验失败：schema_invalid");
+        assert_eq!(reduction.state, TerminalState::Failed);
+        assert_eq!(reduction.code, terminal_code::EVIDENCE_INTEGRITY);
+    }
+
+    #[test]
+    fn plain_configuration_error_still_fails() {
+        // A genuine configuration error is not brittle and must still hard-fail.
+        let reduction = config_error("missing_model_endpoint");
+        assert_eq!(reduction.state, TerminalState::Failed);
+        assert_eq!(reduction.code, terminal_code::CONFIGURATION);
+    }
 }
+

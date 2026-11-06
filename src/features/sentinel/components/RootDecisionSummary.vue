@@ -56,26 +56,26 @@ const sections = computed(() => decision.value ? [
 </template>
 
 <style scoped>
-.root-decision-summary { grid-column: 2 / -1; min-width: 0; margin: 8px 0 12px; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--app-surface, #fff); color: var(--app-ink, #202327); font-size: 12px; line-height: 1.65; }
+.root-decision-summary { grid-column: 2 / -1; min-width: 0; margin: 8px 0 12px; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--app-surface, var(--ui-surface)); color: var(--app-ink, var(--ui-ink)); font-size:var(--text-body); line-height: 1.65; }
 .root-decision-summary header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.root-decision-summary header strong { font-size: 13px; white-space: normal; color: var(--app-ink, #202327); }
-.root-decision-summary header span, .decision-boundary, .decision-empty, .root-decision-summary small { color: var(--app-muted, var(--muted, #6c727d)); font-size: 11px; }
+.root-decision-summary header strong { font-size:var(--text-strong); white-space: normal; color: var(--app-ink, var(--ui-ink)); }
+.root-decision-summary header span, .decision-boundary, .decision-empty, .root-decision-summary small { color: var(--app-muted, var(--muted, var(--ui-muted))); font-size:var(--text-meta); }
 .decision-boundary { margin: 8px 0 12px; }
-.decision-human-context { display: inline-flex; margin: 8px 0 2px; padding: 3px 9px; border: 1px solid var(--line); border-radius: 6px; color: var(--app-muted, var(--muted, #6c727d)); background: var(--app-bg, transparent); font-size: 11px; }
-.decision-local-tools { margin: 12px 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--app-bg, transparent); }
+.decision-human-context { display: inline-flex; margin: 8px 0 2px; padding: 3px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); color: var(--app-muted, var(--muted, var(--ui-muted))); background: var(--app-bg, transparent); font-size:var(--text-meta); }
+.decision-local-tools { margin: 12px 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--app-bg, transparent); }
 .decision-local-tools h4 { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; }
 .root-decision-summary .decision-local-tools ul { display: flex; flex-wrap: wrap; gap: 6px; padding: 0; list-style: none; }
-.root-decision-summary .decision-local-tools li, .root-decision-summary .decision-local-tools li + li { display: inline-flex; align-items: center; gap: 6px; margin: 0; padding: 3px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--app-surface, #fff); }
+.root-decision-summary .decision-local-tools li, .root-decision-summary .decision-local-tools li + li { display: inline-flex; align-items: center; gap: 6px; margin: 0; padding: 3px 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--app-surface, var(--ui-surface)); }
 .tool-record-dot { flex: 0 0 5px; width: 5px; height: 5px; border-radius: 50%; background: var(--accent, #5b8ff9); }
 .decision-sections { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 20px; }
-.root-decision-summary h4 { margin: 0 0 5px; font-size: 12px; font-weight: 650; }
-.root-decision-summary ul { margin: 0; padding-left: 18px; overflow-wrap: anywhere; }
-.root-decision-summary li + li { margin-top: 5px; }
-.root-decision-summary p { margin: 5px 0; overflow-wrap: anywhere; }
+.root-decision-summary h4 { margin: 0 0 6px; font-size:var(--text-body); font-weight: 650; }
+.root-decision-summary ul { margin: 0; padding-left: 20px; overflow-wrap: anywhere; }
+.root-decision-summary li + li { margin-top: 6px; }
+.root-decision-summary p { margin: 6px 0; overflow-wrap: anywhere; }
 .decision-usage { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
 .decision-usage small { display: block; margin-top: 3px; }
 .decision-cost-notes { margin-top: 10px; }
-.decision-cost-notes summary { cursor: pointer; color: var(--app-muted, var(--muted, #6c727d)); font-size: 11px; }
-.decision-cost-notes summary:focus-visible { outline: 2px solid var(--accent, #5b8ff9); outline-offset: 3px; border-radius: 3px; }
+.decision-cost-notes summary { cursor: pointer; color: var(--app-muted, var(--muted, var(--ui-muted))); font-size:var(--text-meta); }
+.decision-cost-notes summary:focus-visible { outline: 2px solid var(--accent, #5b8ff9); outline-offset: 3px; border-radius: var(--radius-xs); }
 @media (max-width: 760px) { .decision-sections { grid-template-columns: 1fr; gap: 12px; } .root-decision-summary { padding: 12px; } }
 </style>

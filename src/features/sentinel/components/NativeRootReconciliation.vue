@@ -215,118 +215,121 @@ onUnmounted(() => { disposed = true; generation++; resetApproval(); resetDiscove
 </script>
 
 <template>
-  <details class="native-root-reconciliation" @toggle="onToggle">
+  <details class="native-root-reconciliation native-drawer native-surface" @toggle="onToggle">
     <summary>{{ tr('恢复诊断与原费用', 'Recovery diagnostics and original costs') }}</summary>
-    <p>{{ tr('可一键核对原费用与已批准评估。已付费任务的剩余目标执行尚无安全恢复通道；下方的新 Root 评估只处理已保存证据，不代表扫描继续。',
-      'Check original bills and approved assessments together. Paid remaining target execution has no safe recovery channel yet; a fresh Root assessment below analyzes saved evidence and does not resume scanning.') }}</p>
-    <p>{{ tr('核对原账单后，只结算已经收到的真实费用。费用确认不会续跑任务或重发原调用。',
-      'Review the original bill to settle received actual costs. Confirmation never resumes the task or resends its original call.') }}</p>
-    <button v-refresh-feedback="{scope:scanId+':'+attempt,busy:loading||discoveryLoading,error:error||discoveryError}" type="button" class="button small" :disabled="loading || confirming || continuationLoading || approving || statusLoading || discoveryLoading" @click="refreshRecovery">{{ tr('刷新恢复诊断', 'Refresh recovery diagnostics') }}</button>
-    <p v-if="discoveryLoading" role="status">{{ tr('正在只读找回签发记录…', 'Recovering issuance records read-only…') }}</p>
-    <p v-if="discoveryMessage" role="status">{{ discoveryMessage }}</p>
-    <p v-if="discoveryError" role="alert">{{ discoveryError }}</p>
-    <p v-if="loading" role="status">{{ tr('正在读取原费用…', 'Reading original costs…') }}</p>
-    <p v-if="error" role="alert">{{ error }}</p>
-    <p v-if="message" role="status">{{ message }}</p>
-    <template v-if="inventory">
-      <p v-if="inventory.truncated" role="status">{{ tr('优先显示待核对原账单；确认本页费用后可刷新查看后续账单。仅显示部分记录，未列出的账单和回执仍保留，不能据此认为全部费用已结清。', 'Unconfirmed original bills are shown first. After confirming this page, refresh to review later bills. Only part of the records are shown; unlisted bills and receipts remain, and this view does not prove all costs are settled.') }}</p>
-      <p v-if="!inventory.items.length && !inventory.blocked.length && !inventory.receipts.length">{{ tr('此尝试没有可确认的 Root 原费用。', 'No original Root costs to confirm in this attempt.') }}</p>
-      <article v-for="item in inventory.items" :key="item.callId">
-        <strong>{{ tr('待核对原账单', 'Original bill awaiting review') }}</strong>
-        <p>{{ item.scanId }} · {{ tr('尝试', 'Attempt') }} {{ item.attemptNumber }} · Root <code>{{ item.rootRunId }}</code> · {{ tr('轮次', 'Round') }} {{ item.round }}</p>
-        <p>{{ tr('原调用', 'Original call') }}: <code>{{ item.callId }}</code> · {{ tr('原租约尝试', 'Original lease attempt') }}: <code>{{ item.leaseAttemptId }}</code></p>
-        <p>{{ tr('供应商实际用量', 'Supplier actual usage') }}: {{ tr('输入', 'Input') }} {{ item.usage.inputTokens }} · {{ tr('缓存', 'Cached') }} {{ item.usage.cachedInputTokens }} · {{ tr('输出', 'Output') }} {{ item.usage.outputTokens }} · {{ tr('总计', 'Total') }} {{ item.usage.totalTokens }} · {{ tr('模型请求', 'Model requests') }} {{ item.usage.modelRequests }}</p>
-        <p>{{ tr('原请求哈希', 'Original request hash') }}: <code>{{ item.requestHash }}</code></p>
-        <p>{{ tr('冻结依据哈希', 'Frozen basis hash') }}: <code>{{ item.basisHash }}</code></p>
-        <p>{{ tr('账单哈希', 'Invoice hash') }}: <code>{{ item.invoiceHash }}</code></p>
-        <p>{{ tr('确认绑定哈希', 'Confirmation binding hash') }}: <code>{{ item.confirmationHash }}</code></p>
-        <p>{{ item.operation === 'settle_received' ? tr('结算已收到的账单', 'Settle received bill') : tr('将匹配的原未决费用转为实际已用', 'Reconcile matching original unresolved costs') }}</p>
-        <button type="button" class="button small" :disabled="loading || confirming" @click="select(item)">{{ tr('核对这张原账单', 'Review this original bill') }}</button>
-      </article>
-      <section v-if="selected" class="root-cost-confirmation" role="group" :aria-label="tr('确认原费用', 'Confirm original costs')">
-        <strong>{{ tr('确认上述实际费用属于这次原调用？', 'Confirm these actual costs belong to this original call?') }}</strong>
-        <p>{{ selected.scanId }} · {{ tr('尝试', 'Attempt') }} {{ selected.attemptNumber }} · <code>{{ selected.callId }}</code></p>
-        <p>{{ tr('确认绑定哈希', 'Confirmation binding hash') }}: <code>{{ selected.confirmationHash }}</code></p>
-        <button type="button" class="button small" :disabled="loading || confirming" @click="confirm">{{ confirming ? tr('正在确认…', 'Confirming…') : tr('确认原费用对账', 'Confirm original cost reconciliation') }}</button>
-        <button type="button" class="button ghost small" :disabled="confirming" @click="selected = undefined">{{ tr('取消', 'Cancel') }}</button>
-      </section>
-      <article v-for="item in inventory.blocked" :key="item.callId" class="root-cost-blocked">
-        <strong>{{ tr('原费用仍未解决', 'Original costs remain unresolved') }}</strong>
-        <p>Root <code>{{ item.rootRunId }}</code> · <code>{{ item.callId }}</code></p>
-        <p>{{ tr('原证据不足、费用不匹配或预算不允许确认。原记录和未决费用保持，不可据此恢复执行。',
-          'Original evidence, cost matching or budget checks do not permit confirmation. Original records and unresolved costs remain; execution is not enabled.') }}</p>
-      </article>
-      <article v-for="receipt in inventory.receipts" :key="receipt.receiptId" class="root-cost-receipt">
-        <strong>{{ tr('原费用已确认', 'Original actual costs confirmed') }}</strong>
-        <p>{{ receipt.scanId }} · {{ tr('尝试', 'Attempt') }} {{ receipt.attemptNumber }} · Root <code>{{ receipt.rootRunId }}</code> · <code>{{ receipt.callId }}</code></p>
-        <p>{{ tr('不可变对账回执', 'Immutable reconciliation receipt') }}: <code>{{ receipt.receiptId }}</code></p>
-        <p>{{ tr('原租约尝试', 'Original lease attempt') }}: <code>{{ receipt.leaseAttemptId }}</code> · {{ tr('轮次', 'Round') }} {{ receipt.round }}</p>
-        <p>{{ tr('原请求哈希', 'Original request hash') }}: <code>{{ receipt.requestHash }}</code></p>
-        <p>{{ tr('冻结依据哈希', 'Frozen basis hash') }}: <code>{{ receipt.basisHash }}</code></p>
-        <p>{{ tr('账单哈希', 'Invoice hash') }}: <code>{{ receipt.invoiceHash }}</code></p>
-        <p>{{ tr('实际用量', 'Actual usage') }}: {{ receipt.usage.inputTokens }} / {{ receipt.usage.cachedInputTokens }} / {{ receipt.usage.outputTokens }} · {{ tr('总计', 'Total') }} {{ receipt.usage.totalTokens }} · {{ tr('模型请求', 'Model requests') }} {{ receipt.usage.modelRequests }}</p>
-        <p>{{ tr('费用已对账；此回执不授予执行权限，也不会自动续跑。', 'Costs reconciled; this receipt grants no execution permission or automatic resume.') }}</p>
-        <button type="button" class="button small" :disabled="loading || confirming || continuationLoading || approving || statusLoading" @click="previewContinuation(receipt)">{{ tr('预览新工作剩余授权', 'Preview remaining authorization for new work') }}</button>
-      </article>
-      <p v-if="continuationLoading" role="status">{{ tr('正在只读核验原授权和剩余额…', 'Checking original authorization and remaining balances read-only…') }}</p>
-      <p v-if="continuationError" role="alert">{{ continuationError }}</p>
-      <section v-if="continuation && !approveAttempted" class="root-continuation-preview" :aria-label="tr('新工作只读预览', 'Read-only new work preview')">
-        <strong>{{ tr('新工作只读预览 · 仍未可执行', 'Read-only new work preview · execution unavailable') }}</strong>
-        <p>{{ tr('用原冻结 Web 证据开始一次新的 Root 评估，沿用剩余预算与原截止时间。', 'Begin a fresh Root assessment of the original frozen Web evidence, retaining remaining budgets and the original deadline.') }}</p>
-        <p>{{ continuation.scanId }} · {{ tr('原尝试', 'Original attempt') }} {{ continuation.attemptNumber }} · {{ tr('拟新尝试（尚未创建）', 'Proposed attempt (not created)') }} {{ continuation.proposedAttemptNumber }}</p>
-        <p>{{ continuation.targetKey }} · Root <code>{{ continuation.rootRunId }}</code></p>
-        <p>{{ tr('原截止时点', 'Original deadline') }}: {{ continuation.financialSource.originalDeadline }}</p>
-        <p>{{ tr('模型共享剩余 tokens / 请求', 'Shared remaining model tokens / requests') }}: {{ remainingLabel(continuation.financialSource.sharedRemainingTokens) }} / {{ remainingLabel(continuation.financialSource.sharedRemainingRequests) }}</p>
-        <ul><li v-for="(amount, index) in continuation.financialSource.remaining" :key="index">{{ tr(dimensionLabels[index][0], dimensionLabels[index][1]) }}: {{ remainingLabel(amount) }}</li></ul>
-        <p>{{ tr('账本时间余额不是新超时额度；新工作必须沿用原截止时点。', 'Journal wall time balance is not a new timeout allowance; new work must retain the original deadline.') }}</p>
-        <p>{{ tr('已核验历史根任务数', 'Historical roots checked') }}: {{ continuation.historicalRootsChecked }} · {{ tr('读取时有效身份数', 'Valid identities at read time') }}: {{ continuation.identityCount }}</p>
-        <p>{{ tr('原模式回执', 'Original mode receipt') }}: <code>{{ continuation.originalModeReceiptId }}</code></p>
-        <p>{{ tr('原冻结计划哈希', 'Original frozen plan hash') }}: <code>{{ continuation.taskDescription.originalPlanHash }}</code></p>
-        <p>{{ tr('原模型绑定哈希', 'Original model binding hash') }}: <code>{{ continuation.modelBindingHash }}</code></p>
-        <p>{{ tr('历史财务证明哈希', 'Historical financial proof hash') }}: <code>{{ continuation.financialSource.financialPhysicalHash }}</code></p>
-        <p>{{ tr('预览绑定哈希', 'Preview binding hash') }}: <code>{{ continuation.proposalHash }}</code></p>
-        <p>{{ tr('这是读取时的授权快照，没有创建新尝试、Root 或执行权限；独立批准前会再次核验，不会续跑或重放原请求。', 'This authorization snapshot created no attempt, Root or execution permission. Independent approval revalidates it; original requests are never resumed or replayed.') }}</p>
-        <p v-if="continuation.historicalRootsChecked !== 1">{{ tr('多历史 Root 授权链尚未证明，目前不能批准新评估。', 'Multiple historical Root grant chains are not proven; approval is unavailable.') }}</p>
-        <template v-else-if="!approveAttempted">
-          <label><input v-model="approvalChecked" type="checkbox">{{ tr('我批准一次新的冻结 Web 证据评估，沿用上述原剩余预算与截止时间；旧请求不重放，不执行目标剩余工作。', 'I approve one fresh frozen Web evidence assessment with the original remaining budgets and deadline; old requests are not replayed and remaining target work is not executed.') }}</label>
-          <button type="button" class="button small" :disabled="!approvalChecked || approving || statusLoading" @click="approveContinuation">{{ tr('批准新的 Root 评估', 'Approve fresh Root assessment') }}</button>
+    <div class="native-drawer-body">
+      <p>{{ tr('可一键核对原费用与已批准评估。已付费任务的剩余目标执行尚无安全恢复通道；下方的新 Root 评估只处理已保存证据，不代表扫描继续。',
+        'Check original bills and approved assessments together. Paid remaining target execution has no safe recovery channel yet; a fresh Root assessment below analyzes saved evidence and does not resume scanning.') }}</p>
+      <p>{{ tr('核对原账单后，只结算已经收到的真实费用。费用确认不会续跑任务或重发原调用。',
+        'Review the original bill to settle received actual costs. Confirmation never resumes the task or resends its original call.') }}</p>
+      <button v-refresh-feedback="{scope:scanId+':'+attempt,busy:loading||discoveryLoading,error:error||discoveryError}" type="button" class="button small" :disabled="loading || confirming || continuationLoading || approving || statusLoading || discoveryLoading" @click="refreshRecovery">{{ tr('刷新恢复诊断', 'Refresh recovery diagnostics') }}</button>
+      <p v-if="discoveryLoading" role="status">{{ tr('正在只读找回签发记录…', 'Recovering issuance records read-only…') }}</p>
+      <p v-if="discoveryMessage" role="status">{{ discoveryMessage }}</p>
+      <p v-if="discoveryError" role="alert">{{ discoveryError }}</p>
+      <p v-if="loading" role="status">{{ tr('正在读取原费用…', 'Reading original costs…') }}</p>
+      <p v-if="error" role="alert">{{ error }}</p>
+      <p v-if="message" role="status">{{ message }}</p>
+      <template v-if="inventory">
+        <p v-if="inventory.truncated" role="status">{{ tr('优先显示待核对原账单；确认本页费用后可刷新查看后续账单。仅显示部分记录，未列出的账单和回执仍保留，不能据此认为全部费用已结清。', 'Unconfirmed original bills are shown first. After confirming this page, refresh to review later bills. Only part of the records are shown; unlisted bills and receipts remain, and this view does not prove all costs are settled.') }}</p>
+        <p v-if="!inventory.items.length && !inventory.blocked.length && !inventory.receipts.length">{{ tr('此尝试没有可确认的 Root 原费用。', 'No original Root costs to confirm in this attempt.') }}</p>
+        <article v-for="item in inventory.items" :key="item.callId">
+          <strong>{{ tr('待核对原账单', 'Original bill awaiting review') }}</strong>
+          <p>{{ item.scanId }} · {{ tr('尝试', 'Attempt') }} {{ item.attemptNumber }} · Root <code>{{ item.rootRunId }}</code> · {{ tr('轮次', 'Round') }} {{ item.round }}</p>
+          <p>{{ tr('原调用', 'Original call') }}: <code>{{ item.callId }}</code> · {{ tr('原租约尝试', 'Original lease attempt') }}: <code>{{ item.leaseAttemptId }}</code></p>
+          <p>{{ tr('供应商实际用量', 'Supplier actual usage') }}: {{ tr('输入', 'Input') }} {{ item.usage.inputTokens }} · {{ tr('缓存', 'Cached') }} {{ item.usage.cachedInputTokens }} · {{ tr('输出', 'Output') }} {{ item.usage.outputTokens }} · {{ tr('总计', 'Total') }} {{ item.usage.totalTokens }} · {{ tr('模型请求', 'Model requests') }} {{ item.usage.modelRequests }}</p>
+          <p>{{ tr('原请求哈希', 'Original request hash') }}: <code>{{ item.requestHash }}</code></p>
+          <p>{{ tr('冻结依据哈希', 'Frozen basis hash') }}: <code>{{ item.basisHash }}</code></p>
+          <p>{{ tr('账单哈希', 'Invoice hash') }}: <code>{{ item.invoiceHash }}</code></p>
+          <p>{{ tr('确认绑定哈希', 'Confirmation binding hash') }}: <code>{{ item.confirmationHash }}</code></p>
+          <p>{{ item.operation === 'settle_received' ? tr('结算已收到的账单', 'Settle received bill') : tr('将匹配的原未决费用转为实际已用', 'Reconcile matching original unresolved costs') }}</p>
+          <button type="button" class="button small" :disabled="loading || confirming" @click="select(item)">{{ tr('核对这张原账单', 'Review this original bill') }}</button>
+        </article>
+        <section v-if="selected" class="root-cost-confirmation" role="group" :aria-label="tr('确认原费用', 'Confirm original costs')">
+          <strong>{{ tr('确认上述实际费用属于这次原调用？', 'Confirm these actual costs belong to this original call?') }}</strong>
+          <p>{{ selected.scanId }} · {{ tr('尝试', 'Attempt') }} {{ selected.attemptNumber }} · <code>{{ selected.callId }}</code></p>
+          <p>{{ tr('确认绑定哈希', 'Confirmation binding hash') }}: <code>{{ selected.confirmationHash }}</code></p>
+          <button type="button" class="button small" :disabled="loading || confirming" @click="confirm">{{ confirming ? tr('正在确认…', 'Confirming…') : tr('确认原费用对账', 'Confirm original cost reconciliation') }}</button>
+          <button type="button" class="button ghost small" :disabled="confirming" @click="selected = undefined">{{ tr('取消', 'Cancel') }}</button>
+        </section>
+        <article v-for="item in inventory.blocked" :key="item.callId" class="root-cost-blocked">
+          <strong>{{ tr('原费用仍未解决', 'Original costs remain unresolved') }}</strong>
+          <p>Root <code>{{ item.rootRunId }}</code> · <code>{{ item.callId }}</code></p>
+          <p>{{ tr('原证据不足、费用不匹配或预算不允许确认。原记录和未决费用保持，不可据此恢复执行。',
+            'Original evidence, cost matching or budget checks do not permit confirmation. Original records and unresolved costs remain; execution is not enabled.') }}</p>
+        </article>
+        <article v-for="receipt in inventory.receipts" :key="receipt.receiptId" class="root-cost-receipt">
+          <strong>{{ tr('原费用已确认', 'Original actual costs confirmed') }}</strong>
+          <p>{{ receipt.scanId }} · {{ tr('尝试', 'Attempt') }} {{ receipt.attemptNumber }} · Root <code>{{ receipt.rootRunId }}</code> · <code>{{ receipt.callId }}</code></p>
+          <p>{{ tr('不可变对账回执', 'Immutable reconciliation receipt') }}: <code>{{ receipt.receiptId }}</code></p>
+          <p>{{ tr('原租约尝试', 'Original lease attempt') }}: <code>{{ receipt.leaseAttemptId }}</code> · {{ tr('轮次', 'Round') }} {{ receipt.round }}</p>
+          <p>{{ tr('原请求哈希', 'Original request hash') }}: <code>{{ receipt.requestHash }}</code></p>
+          <p>{{ tr('冻结依据哈希', 'Frozen basis hash') }}: <code>{{ receipt.basisHash }}</code></p>
+          <p>{{ tr('账单哈希', 'Invoice hash') }}: <code>{{ receipt.invoiceHash }}</code></p>
+          <p>{{ tr('实际用量', 'Actual usage') }}: {{ receipt.usage.inputTokens }} / {{ receipt.usage.cachedInputTokens }} / {{ receipt.usage.outputTokens }} · {{ tr('总计', 'Total') }} {{ receipt.usage.totalTokens }} · {{ tr('模型请求', 'Model requests') }} {{ receipt.usage.modelRequests }}</p>
+          <p>{{ tr('费用已对账；此回执不授予执行权限，也不会自动续跑。', 'Costs reconciled; this receipt grants no execution permission or automatic resume.') }}</p>
+          <button type="button" class="button small" :disabled="loading || confirming || continuationLoading || approving || statusLoading" @click="previewContinuation(receipt)">{{ tr('预览新工作剩余授权', 'Preview remaining authorization for new work') }}</button>
+        </article>
+        <p v-if="continuationLoading" role="status">{{ tr('正在只读核验原授权和剩余额…', 'Checking original authorization and remaining balances read-only…') }}</p>
+        <p v-if="continuationError" role="alert">{{ continuationError }}</p>
+        <section v-if="continuation && !approveAttempted" class="root-continuation-preview" :aria-label="tr('新工作只读预览', 'Read-only new work preview')">
+          <strong>{{ tr('新工作只读预览 · 仍未可执行', 'Read-only new work preview · execution unavailable') }}</strong>
+          <p>{{ tr('用原冻结 Web 证据开始一次新的 Root 评估，沿用剩余预算与原截止时间。', 'Begin a fresh Root assessment of the original frozen Web evidence, retaining remaining budgets and the original deadline.') }}</p>
+          <p>{{ continuation.scanId }} · {{ tr('原尝试', 'Original attempt') }} {{ continuation.attemptNumber }} · {{ tr('拟新尝试（尚未创建）', 'Proposed attempt (not created)') }} {{ continuation.proposedAttemptNumber }}</p>
+          <p>{{ continuation.targetKey }} · Root <code>{{ continuation.rootRunId }}</code></p>
+          <p>{{ tr('原截止时点', 'Original deadline') }}: {{ continuation.financialSource.originalDeadline }}</p>
+          <p>{{ tr('模型共享剩余 tokens / 请求', 'Shared remaining model tokens / requests') }}: {{ remainingLabel(continuation.financialSource.sharedRemainingTokens) }} / {{ remainingLabel(continuation.financialSource.sharedRemainingRequests) }}</p>
+          <ul><li v-for="(amount, index) in continuation.financialSource.remaining" :key="index">{{ tr(dimensionLabels[index][0], dimensionLabels[index][1]) }}: {{ remainingLabel(amount) }}</li></ul>
+          <p>{{ tr('账本时间余额不是新超时额度；新工作必须沿用原截止时点。', 'Journal wall time balance is not a new timeout allowance; new work must retain the original deadline.') }}</p>
+          <p>{{ tr('已核验历史根任务数', 'Historical roots checked') }}: {{ continuation.historicalRootsChecked }} · {{ tr('读取时有效身份数', 'Valid identities at read time') }}: {{ continuation.identityCount }}</p>
+          <p>{{ tr('原模式回执', 'Original mode receipt') }}: <code>{{ continuation.originalModeReceiptId }}</code></p>
+          <p>{{ tr('原冻结计划哈希', 'Original frozen plan hash') }}: <code>{{ continuation.taskDescription.originalPlanHash }}</code></p>
+          <p>{{ tr('原模型绑定哈希', 'Original model binding hash') }}: <code>{{ continuation.modelBindingHash }}</code></p>
+          <p>{{ tr('历史财务证明哈希', 'Historical financial proof hash') }}: <code>{{ continuation.financialSource.financialPhysicalHash }}</code></p>
+          <p>{{ tr('预览绑定哈希', 'Preview binding hash') }}: <code>{{ continuation.proposalHash }}</code></p>
+          <p>{{ tr('这是读取时的授权快照，没有创建新尝试、Root 或执行权限；独立批准前会再次核验，不会续跑或重放原请求。', 'This authorization snapshot created no attempt, Root or execution permission. Independent approval revalidates it; original requests are never resumed or replayed.') }}</p>
+          <p v-if="continuation.historicalRootsChecked !== 1">{{ tr('多历史 Root 授权链尚未证明，目前不能批准新评估。', 'Multiple historical Root grant chains are not proven; approval is unavailable.') }}</p>
+          <template v-else-if="!approveAttempted">
+            <label><input v-model="approvalChecked" type="checkbox">{{ tr('我批准一次新的冻结 Web 证据评估，沿用上述原剩余预算与截止时间；旧请求不重放，不执行目标剩余工作。', 'I approve one fresh frozen Web evidence assessment with the original remaining budgets and deadline; old requests are not replayed and remaining target work is not executed.') }}</label>
+            <button type="button" class="button small" :disabled="!approvalChecked || approving || statusLoading" @click="approveContinuation">{{ tr('批准新的 Root 评估', 'Approve fresh Root assessment') }}</button>
+          </template>
+        </section>
+      </template>
+      <section v-if="approveAttempted && approvedProposal" class="root-continuation-issuance" role="status">
+        <strong>{{ tr('独立批准与新评估状态', 'Independent approval and fresh assessment status') }}</strong>
+        <p>{{ approvedProposal.scanId }} · {{ tr('原尝试 / 新尝试', 'Source / new attempt') }} {{ approvedProposal.attemptNumber }} / {{ approvedProposal.proposedAttemptNumber }} · <code>{{ approvedProposal.proposalHash }}</code></p>
+        <p>{{ tr('用原冻结 Web 证据开始一次新的 Root 评估，沿用剩余预算与原截止时间；旧请求不重放。', 'Fresh Root assessment of original frozen Web evidence with remaining original budgets and deadline; old requests are not replayed.') }}</p>
+        <p>{{ approvedProposal.taskDescription.targetKey }} · {{ tr('原 Root / 费用回执', 'Source Root / cost receipt') }} <code>{{ approvedProposal.rootRunId }}</code> / <code>{{ approvedProposal.receiptId }}</code></p>
+        <template v-if="recoveredReceipt">
+          <p>{{ tr('原调用 / 账单哈希', 'Original call / invoice hash') }}: <code>{{ recoveredReceipt.callId }}</code> / <code>{{ recoveredReceipt.invoiceHash }}</code></p>
+          <p>{{ tr('原实际输入 / 缓存 / 输出 / 请求', 'Original actual input / cached / output / requests') }}: {{ recoveredReceipt.usage.inputTokens }} / {{ recoveredReceipt.usage.cachedInputTokens }} / {{ recoveredReceipt.usage.outputTokens }} / {{ recoveredReceipt.usage.modelRequests }}</p>
         </template>
+        <p>{{ tr('原冻结计划哈希', 'Original frozen plan hash') }}: <code>{{ approvedProposal.taskDescription.originalPlanHash }}</code></p>
+        <p>{{ tr('原截止时点', 'Original deadline') }}: {{ approvedProposal.financialSource.originalDeadline }}</p>
+        <p>{{ tr('批准时原模型共享剩余 tokens / 请求', 'Original shared remaining model tokens / requests at approval') }}: {{ remainingLabel(approvedProposal.financialSource.sharedRemainingTokens) }} / {{ remainingLabel(approvedProposal.financialSource.sharedRemainingRequests) }}</p>
+        <ul><li v-for="(amount, index) in approvedProposal.financialSource.remaining" :key="index">{{ tr(dimensionLabels[index][0], dimensionLabels[index][1]) }}: {{ remainingLabel(amount) }}</li></ul>
+        <p v-if="approving">{{ tr('正在核验独立批准…', 'Verifying independent approval…') }}</p>
+        <p v-if="issuanceError" role="alert">{{ issuanceError }}</p>
+        <template v-if="issuance">
+          <p>{{ tr('批准回执 / 新 Root', 'Approval receipt / new Root') }}: <code>{{ issuance.approvalId }}</code> / <code>{{ issuance.newRootRunId }}</code></p>
+          <p v-if="issuance.status === 'issued'">{{ tr('已发行新 Root；评估发布尚未证实。', 'Fresh Root issued; assessment publication remains unconfirmed.') }}</p>
+          <p v-if="issuance.assessmentCompleted">{{ tr('新评估已实际发布；整个 Web 目标尚未完成，未执行剩余目标工作。', 'Fresh assessment actually published; the Web target remains incomplete and remaining target work was not executed.') }}</p>
+          <p v-if="issuance.assessmentCompleted && !issuance.attemptClosed">{{ tr('发布已核验，尝试收口尚未完成。', 'Publication verified; attempt closure remains pending.') }}</p>
+          <p v-if="issuance.attemptClosed">{{ tr('新评估尝试已核验收口；扫描保留 partial。', 'Assessment attempt closure verified; scan remains partial.') }}</p>
+          <p v-if="issuance.status === 'review_required'">{{ tr('新工作需人工复核，原费用与回执保留；不会自动重试。', 'New work requires review; original costs and receipts remain, without automatic retries.') }}</p>
+        </template>
+        <label v-if="recoveredOperation && issuance?.workerStartAllowed && !issuance.attemptClosed && issuance.status !== 'review_required'"><input v-model="approvalChecked" type="checkbox">{{ tr('我重新确认上述原冻结评估、剩余预算和截止时间，仅继续同一已批准评估或收口；旧请求不重放。', 'I reconfirm the frozen assessment, original remaining budgets and deadline, only to continue the same approved assessment or closure; old requests are not replayed.') }}</label>
+        <button type="button" class="button small" :disabled="approving || statusLoading || discoveryLoading" @click="readContinuationStatus">{{ tr('只读查询同一批准状态', 'Read the same approval status') }}</button>
+        <button v-if="!issuance || issuance.workerStartAllowed && !issuance.attemptClosed && issuance.status !== 'review_required'" type="button" class="button small" :disabled="approving || statusLoading || discoveryLoading || !approvalChecked" @click="approveContinuation">{{ tr('显式重试同一批准', 'Explicitly retry the same approval') }}</button>
       </section>
-    </template>
-    <section v-if="approveAttempted && approvedProposal" class="root-continuation-issuance" role="status">
-      <strong>{{ tr('独立批准与新评估状态', 'Independent approval and fresh assessment status') }}</strong>
-      <p>{{ approvedProposal.scanId }} · {{ tr('原尝试 / 新尝试', 'Source / new attempt') }} {{ approvedProposal.attemptNumber }} / {{ approvedProposal.proposedAttemptNumber }} · <code>{{ approvedProposal.proposalHash }}</code></p>
-      <p>{{ tr('用原冻结 Web 证据开始一次新的 Root 评估，沿用剩余预算与原截止时间；旧请求不重放。', 'Fresh Root assessment of original frozen Web evidence with remaining original budgets and deadline; old requests are not replayed.') }}</p>
-      <p>{{ approvedProposal.taskDescription.targetKey }} · {{ tr('原 Root / 费用回执', 'Source Root / cost receipt') }} <code>{{ approvedProposal.rootRunId }}</code> / <code>{{ approvedProposal.receiptId }}</code></p>
-      <template v-if="recoveredReceipt">
-        <p>{{ tr('原调用 / 账单哈希', 'Original call / invoice hash') }}: <code>{{ recoveredReceipt.callId }}</code> / <code>{{ recoveredReceipt.invoiceHash }}</code></p>
-        <p>{{ tr('原实际输入 / 缓存 / 输出 / 请求', 'Original actual input / cached / output / requests') }}: {{ recoveredReceipt.usage.inputTokens }} / {{ recoveredReceipt.usage.cachedInputTokens }} / {{ recoveredReceipt.usage.outputTokens }} / {{ recoveredReceipt.usage.modelRequests }}</p>
-      </template>
-      <p>{{ tr('原冻结计划哈希', 'Original frozen plan hash') }}: <code>{{ approvedProposal.taskDescription.originalPlanHash }}</code></p>
-      <p>{{ tr('原截止时点', 'Original deadline') }}: {{ approvedProposal.financialSource.originalDeadline }}</p>
-      <p>{{ tr('批准时原模型共享剩余 tokens / 请求', 'Original shared remaining model tokens / requests at approval') }}: {{ remainingLabel(approvedProposal.financialSource.sharedRemainingTokens) }} / {{ remainingLabel(approvedProposal.financialSource.sharedRemainingRequests) }}</p>
-      <ul><li v-for="(amount, index) in approvedProposal.financialSource.remaining" :key="index">{{ tr(dimensionLabels[index][0], dimensionLabels[index][1]) }}: {{ remainingLabel(amount) }}</li></ul>
-      <p v-if="approving">{{ tr('正在核验独立批准…', 'Verifying independent approval…') }}</p>
-      <p v-if="issuanceError" role="alert">{{ issuanceError }}</p>
-      <template v-if="issuance">
-        <p>{{ tr('批准回执 / 新 Root', 'Approval receipt / new Root') }}: <code>{{ issuance.approvalId }}</code> / <code>{{ issuance.newRootRunId }}</code></p>
-        <p v-if="issuance.status === 'issued'">{{ tr('已发行新 Root；评估发布尚未证实。', 'Fresh Root issued; assessment publication remains unconfirmed.') }}</p>
-        <p v-if="issuance.assessmentCompleted">{{ tr('新评估已实际发布；整个 Web 目标尚未完成，未执行剩余目标工作。', 'Fresh assessment actually published; the Web target remains incomplete and remaining target work was not executed.') }}</p>
-        <p v-if="issuance.assessmentCompleted && !issuance.attemptClosed">{{ tr('发布已核验，尝试收口尚未完成。', 'Publication verified; attempt closure remains pending.') }}</p>
-        <p v-if="issuance.attemptClosed">{{ tr('新评估尝试已核验收口；扫描保留 partial。', 'Assessment attempt closure verified; scan remains partial.') }}</p>
-        <p v-if="issuance.status === 'review_required'">{{ tr('新工作需人工复核，原费用与回执保留；不会自动重试。', 'New work requires review; original costs and receipts remain, without automatic retries.') }}</p>
-      </template>
-      <label v-if="recoveredOperation && issuance?.workerStartAllowed && !issuance.attemptClosed && issuance.status !== 'review_required'"><input v-model="approvalChecked" type="checkbox">{{ tr('我重新确认上述原冻结评估、剩余预算和截止时间，仅继续同一已批准评估或收口；旧请求不重放。', 'I reconfirm the frozen assessment, original remaining budgets and deadline, only to continue the same approved assessment or closure; old requests are not replayed.') }}</label>
-      <button type="button" class="button small" :disabled="approving || statusLoading || discoveryLoading" @click="readContinuationStatus">{{ tr('只读查询同一批准状态', 'Read the same approval status') }}</button>
-      <button v-if="!issuance || issuance.workerStartAllowed && !issuance.attemptClosed && issuance.status !== 'review_required'" type="button" class="button small" :disabled="approving || statusLoading || discoveryLoading || !approvalChecked" @click="approveContinuation">{{ tr('显式重试同一批准', 'Explicitly retry the same approval') }}</button>
-    </section>
+    </div>
   </details>
 </template>
 
+<style scoped src="./nativeSurface.css"></style>
 <style scoped>
-.native-root-reconciliation { margin: 12px 0; padding: 12px; border: 1px solid var(--line, #e3e5e9); border-radius: 9px; font-size: 12px; overflow-wrap: anywhere; }
-.native-root-reconciliation article, .root-cost-confirmation, .root-continuation-preview { margin-top: 10px; padding: 10px 0; border-top: 1px solid var(--line, #e3e5e9); }
-.native-root-reconciliation p { margin: 6px 0; line-height: 1.55; }
-.native-root-reconciliation summary { cursor: pointer; }
-.native-root-reconciliation button { margin-right: 8px; }
+.root-cost-blocked { box-shadow: inset 3px 0 0 var(--amber, #be8c40); }
+.root-cost-receipt { box-shadow: inset 3px 0 0 var(--green, #298963); }
+.root-cost-confirmation,
+.root-continuation-preview,
+.root-continuation-issuance { border-color: color-mix(in srgb, var(--native-accent) 30%, var(--native-line)); }
 </style>

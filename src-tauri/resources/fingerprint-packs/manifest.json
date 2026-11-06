@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "packs": [
+    {
+      "file": "default.fingerprints.json",
+      "sha256": "e0b55405548d7414a26fd4de2ed28852547b8088ec187d885afb1ccd52615726",
+      "count": 798,
+      "ruleSha256": "cc6954e907010e5b8fc62dd5b51d494bf844afa0a79c9754c70fb8247d8ff6a5"
+    },
+    {
+      "file": "enterprise.fingerprints.json",
+      "sha256": "81e293df57ae0bfdc66db87dc974da9f172fad824a03d01668cbf08a646c89b5",
+      "count": 23,
+      "ruleSha256": "b4a5e8e8b6463c61a67383747b4ab0280de810ed8a878fa78bd1c98ca6cf3d23"
+    },
+    {
+      "file": "frameworks.fingerprints.json",
+      "sha256": "ad4bed85e3c6376debbdd093683d2484bd0903cedb0b82f5d2c358595026a062",
+      "count": 11,
+      "ruleSha256": "1327f86279449fad48a54713c65751825d6cc588e2b039ef82b427ad136cbede"
+    }
+  ]
+}

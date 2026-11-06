@@ -7,7 +7,7 @@ const SHARED_VIEWS: readonly ViewKey[] = ["projects", "settings", "logs"];
 export const DEFAULT_ROUTE: ShellRoute = { module: "chat", view: "chat" };
 
 export function normalizeRoute(module: unknown, view: unknown): ShellRoute {
-  if (view === "skills") return { module: "chat", view: "skills" };
+  if (view === "skills" || view === "library") return { module: "chat", view };
   const owner = moduleForView(view);
   if (owner) return { module: owner, view: view as ViewKey };
   const selected = isModuleKey(module) ? module : "chat";

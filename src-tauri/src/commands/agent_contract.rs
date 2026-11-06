@@ -29,7 +29,7 @@ const AGENT_STOP_UNSUPPORTED: &str = terminal_code::UNSUPPORTED_CAPABILITY;
 const AGENT_STOP_RESUME_INCOMPATIBLE: &str = terminal_code::RESUME_INCOMPATIBLE;
 const AGENT_STOP_PERSISTENCE: &str = terminal_code::PERSISTENCE_FAILURE;
 
-const AGENT_COVERAGE_FAMILIES: [&str; 7] = COVERAGE_FAMILIES;
+const AGENT_COVERAGE_FAMILIES: [&str; 12] = COVERAGE_FAMILIES;
 
 fn agent_not_applicable_is_real(reason: &str) -> bool {
     let text = reason.trim();
@@ -73,6 +73,29 @@ fn agent_coverage_family_label(family: &str) -> String {
 /// its own WAF, budget or no-progress vocabulary.
 fn agent_stop_code(reason: &str) -> &'static str {
     let text = reason.to_ascii_lowercase();
+    // Recoverable/degraded sub-step outcomes are NOT crashes and must not be
+    // classified as a hard failure. This check runs FIRST, before the keyword
+    // heuristics below, because those match on substrings of the reason text:
+    //   - review_gate_insufficient_evidence carries the rejected candidate's own
+    //     description, so a CORS/scope/config finding ("…CORS 配置过于宽松…")
+    //     made `contains("配置")`/`contains("scope")` fire and mislabel the whole
+    //     scan as a `configuration` failure — the scan actually ran and found a
+    //     candidate, it just could not prove it.
+    //   - a bootstrap that only exhausted its controlled-executor rounds, and a
+    //     brittle gap-proposal schema wobble, matched no keyword and fell through
+    //     to the `tool_failure` default.
+    // Finalize all of these as the graceful coverage-ledger-complete state (the
+    // outcome is still Incomplete/paused, so this only changes the terminal label,
+    // never completion/settlement), so findings and candidates are kept and shown
+    // instead of surfacing as a red failure.
+    if text.contains("review_gate_insufficient_evidence")
+        || text.contains("multi_agent_bootstrap_degraded")
+        || text.contains("multi_agent_bootstrap_contention_retryable")
+        || text.contains("review_gap_investigation_failed")
+        || text.contains("gap_proposal_invalid_schema")
+    {
+        return terminal_code::LEDGER_COMPLETE;
+    }
     if text.contains(AGENT_STOP_UNSUPPORTED) {
         return AGENT_STOP_UNSUPPORTED;
     }
@@ -163,25 +186,7 @@ struct AgentCompletion {
 }
 
 impl AgentCompletion {
-    #[cfg(test)]
-    fn without_ledger(summary: impl Into<String>, terminal_code: &'static str) -> Self {
-        Self {
-            summary: summary.into(),
-            terminal_code,
-            ledger_reported: false,
-            model_requests: 0,
-            total_tokens: 0,
-            verified_tool_results: 0,
-            covered_families: Vec::new(),
-            uncovered_families: Vec::new(),
-            confirmed_findings: 0,
-        }
-    }
 
-    #[cfg(test)]
-    fn bounded(summary: impl Into<String>) -> Self {
-        Self::without_ledger(summary, AGENT_STOP_DERIVED)
-    }
 
 }
 
@@ -294,10 +299,6 @@ impl AgentTargetOutcome {
         })
     }
 
-    #[cfg(test)]
-    fn bounded_completed(summary: impl Into<String>) -> Self {
-        Self::BoundedCompleted(AgentCompletion::bounded(summary))
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -355,8 +356,6 @@ struct AgentRunContext {
     target_url: String,
     target_dir: PathBuf,
     db_path: PathBuf,
-    #[cfg(test)]
-    route: FrontendRoute,
     execution_plan: AgentExecutionPlan,
     evidence: JsonValue,
     /// The SRC capability manifest staged for this target, shown to the model.
@@ -378,6 +377,9 @@ struct AgentRunContext {
     /// Starting values come from the inherited checkpoint so a resumed child is
     /// charged only for work performed by its own assignment.
     run_budget: Option<AgentRunBudgetWindow>,
+    /// Holder of the continuation that built this context. A later charge uses it
+    /// even after the work moves to another thread.
+    continuation_holder: Option<String>,
     /// Set when a continuation cannot inherit the parent's frozen plan. The loop
     /// must turn this into `resume_incompatible` instead of running (§3.6).
     plan_rejection: Option<NativeStateRejection>,
@@ -1078,6 +1080,14 @@ fn agent_attempt_lineage(
         .optional()
         .ok()
         .flatten();
+    let stored_parent: Option<i64> = connection
+        .query_row(
+            "SELECT parent_attempt_number FROM sentinel_scan_attempts WHERE scan_id=?1 AND attempt_number=?2",
+            params![scan_id, attempt_number],
+            |row| row.get::<_, Option<i64>>(0),
+        )
+        .ok()
+        .flatten();
     let parent: Option<i64> = connection
         .query_row(
             "SELECT MAX(attempt_number) FROM sentinel_scan_attempts WHERE scan_id=?1 AND attempt_number<?2",
@@ -1089,9 +1099,8 @@ fn agent_attempt_lineage(
     match AgentResumeKind::parse(mode.as_deref().unwrap_or("initial")) {
         AgentResumeKind::ContinueIncomplete => AgentAttemptLineage {
             resume_kind: AgentResumeKind::ContinueIncomplete,
-            // Attempts are contiguous, so the previous row is the parent even if
-            // the attempts table was pruned.
-            parent_attempt_number: Some(parent.unwrap_or_else(|| (attempt_number - 1).max(1))),
+            // A resume row records its parent. Older rows fall back to the previous attempt.
+            parent_attempt_number: stored_parent.or(parent).or_else(|| Some((attempt_number - 1).max(1))),
         },
         other => AgentAttemptLineage {
             resume_kind: other,

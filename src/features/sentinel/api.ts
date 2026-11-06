@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { rootCostReconciliationApi } from "./reconciliation/api";
 import type { NativeSdkLogPage } from "./execution/nativeSdkLogContract";
 import type { NativeProcessLogPage } from "./execution/nativeProcessLogContract";
-import type { HumanDirectiveReviewResult, AgentDialogView, AgentDialogViewInput, AgentDialogSelection, AdministrativeClosureReceipt, AdministrativeClosurePreview, ClosureHandoffPreview, ClosureHandoffInput, ClosureHandoffReceipt, GapFollowupPreview, GapFollowupDraftInput, GapFollowupSubmission, AppSecScanResult, BrowserAuthSession, ScanIdentityMaterial, InvestigationGraph, InvestigationHypothesis, InvestigationValidation, InvestigationOverview, AgentTargetExecution, AgentRequestReview, AgentRequestReviewPage, AgentRequestReviewInput, AgentTimelineItem, AgentTimelinePage, HumanDirectiveDraft, NativeScanStatus, NativeBudgetDiagnostics, NativeSourceFindingsPage, AgentAttemptMailboxPage, AgentAttemptToolPage, PostScanDirectiveResult, SentinelCheckpoint, SentinelFinding, HistoricalImportPreview, HistoricalImportRun, SentinelFuseEntry, SentinelOpportunity, SentinelOverviewStats, SentinelRunnerLogView, SentinelScan, SentinelScanAttempt, SentinelTarget, SentinelValidation, SentinelValidationWorkItem, AgentTraceDetail, AgentTraceSummary, WorkbenchScanInput, CapabilityBundle, RoleConfigDraft } from "./types";
+import type { AgentStageDecision, HumanDirectiveReviewResult, AgentDialogView, AgentDialogViewInput, AgentDialogSelection, AdministrativeClosureReceipt, AdministrativeClosurePreview, ClosureHandoffPreview, ClosureHandoffInput, ClosureHandoffReceipt, GapFollowupPreview, GapFollowupDraftInput, GapFollowupSubmission, AppSecScanResult, BrowserAuthSession, ScanIdentityMaterial, InvestigationGraph, InvestigationHypothesis, InvestigationValidation, InvestigationOverview, AgentTargetExecution, AgentRequestReview, AgentRequestReviewPage, AgentRequestReviewInput, AgentTimelineItem, AgentTimelinePage, HumanDirectiveDraft, NativeScanStatus, NativeBudgetDiagnostics, NativeSourceFindingsPage, AgentAttemptMailboxPage, AgentAttemptToolPage, AgentAttemptToolCounts, ScanAgentStats, FindingExploit, PostScanDirectiveResult, SentinelCheckpoint, SentinelFinding, HistoricalImportPreview, HistoricalImportRun, SentinelFuseEntry, SentinelOpportunity, SentinelOverviewStats, SentinelRunnerLogView, SentinelScan, SentinelScanAttempt, SentinelTarget, SentinelValidation, SentinelValidationWorkItem, AgentTraceDetail, AgentTraceSummary, WorkbenchScanInput, CapabilityBundle, RoleConfigDraft, SourceAuditReport } from "./types";
 import type { AgentKnowledgeEntry } from "../skills/knowledgeTypes";
 import { skillCatalogApi } from "../skills/catalogApi";
 import { scanningLearningApi } from "./learningApi";
@@ -71,6 +71,8 @@ export const sentinelApi = {
     invoke<AgentAttemptToolPage>("get_native_attempt_execution_history", {
       scanId, attemptNumber, before, limit: 50,
     }),
+  getNativeAttemptToolCounts: (scanId: string, attemptNumber: number) =>
+    invoke<AgentAttemptToolCounts>("get_native_attempt_tool_counts", { scanId, attemptNumber }),
   draftScanDirective: (scanId: string, text: string, threadKey = "team") => invoke<HumanDirectiveDraft>("draft_scan_directive", { scanId, text, threadKey }),
   confirmScanDirective: (scanId: string, draftId: string, revision: number, draftHash: string) =>
     invoke<PostScanDirectiveResult>("confirm_scan_directive", { scanId, draftId, revision, draftHash }),
@@ -135,6 +137,17 @@ export const sentinelApi = {
     projectId, taskName, urls, scanMode, maxBudgetUsd, authSessionId, authSessionIds,
     authSessionScopeId, skillIds, instruction, closure, execution, approvedIds,
   }),
+  // OSS source-audit: per-scan fetch consent + web→source→greybox orchestration.
+  authorizeScanSourceFetch: (scanId: string) =>
+    invoke<void>("authorize_scan_source_fetch", { scanId }),
+  revokeScanSourceFetch: (scanId: string) =>
+    invoke<void>("revoke_scan_source_fetch", { scanId }),
+  scanSourceFetchAllowed: (scanId: string) =>
+    invoke<boolean>("scan_source_fetch_allowed", { scanId }),
+  sourceAuditReport: (scanId: string) =>
+    invoke<SourceAuditReport>("source_audit_report", { scanId }),
+  orchestrateSourceAudit: (scanId: string) =>
+    invoke<SourceAuditReport>("orchestrate_source_audit", { scanId }),
   previewAgentGapFollowup: (scanId: string, assessmentMessageId: string) =>
     invoke<GapFollowupPreview>("preview_agent_gap_followup", { scanId, assessmentMessageId }),
   createAgentGapFollowup: (input: GapFollowupDraftInput) =>
@@ -171,6 +184,117 @@ export const sentinelApi = {
   resumeSentinelScan: (scanId: string) => invoke<SentinelScan>("resume_sentinel_scan", { scanId }),
   cancelSentinelScan: (scanId: string) => invoke<void>("cancel_sentinel_scan", { scanId }),
   deleteSentinelScan: (scanId: string) => invoke<void>("delete_sentinel_scan", { scanId }),
+  // Operator hard-override for a crashed, dead scan whose normal deletion is
+  // refused because the crash orphaned budget reservations. Gated behind a
+  // second explicit confirmation in the UI; still refuses if a process is live.
+  forceDeleteSentinelScan: (scanId: string) => invoke<void>("force_delete_sentinel_scan", { scanId }),
+  // Operator opt-in: authorize high-risk capability classes for a scan, with an
+  // explicit legal-authorization attestation. Immutable once set per scan.
+  // authorizedClasses ⊆ code_exec/target_write/egress/persistence/exfil/waf_evasion.
+  getScanCapabilityAuthorization: (scanId: string) =>
+    invoke<{ attested: boolean; classes: string[] }>("get_scan_capability_authorization", { scanId }),
+  setScanCapabilityAuthorization: (
+    scanId: string,
+    legalAttestation: boolean,
+    authorizedClasses: string[],
+  ) => invoke<void>("set_scan_capability_authorization", {
+    scanId,
+    attemptNumber: undefined,
+    legalAttestation,
+    authorizedClasses,
+    attestedBy: undefined,
+  }),
+  // Operator inbox for the third gate: list / approve / reject single high-risk
+  // actions the agent is waiting on. Approval is single-use, bound to the action.
+  listPendingHighRiskActions: (scanId: string) =>
+    invoke<Array<{ requestId: string; attemptNumber: number; capabilityClass: string; actionSummary: string; target: string; reversible: boolean; createdAt: string }>>(
+      "list_pending_high_risk_actions", { scanId }),
+  approveHighRiskAction: (requestId: string) =>
+    invoke<void>("approve_high_risk_action", { requestId, decidedBy: undefined }),
+  rejectHighRiskAction: (requestId: string) =>
+    invoke<void>("reject_high_risk_action", { requestId, decidedBy: undefined }),
+  listPendingOperatorQuestions: (scanId: string) =>
+    invoke<Array<{ questionId: string; attemptNumber: number; question: string; options: string[]; context: string; createdAt: string }>>(
+      "list_pending_operator_questions", { scanId }),
+  answerOperatorQuestion: (questionId: string, answer: string, selectedOption?: string) =>
+    invoke<void>("answer_operator_question", { questionId, answer, selectedOption }),
+  dismissOperatorQuestion: (questionId: string) =>
+    invoke<void>("dismiss_operator_question", { questionId }),
+  getAgentToolPermissionRules: () =>
+    invoke<Array<{ pattern: string; decision: string }>>("get_agent_tool_permission_rules"),
+  setAgentToolPermissionRules: (rules: Array<{ pattern: string; decision: string }>) =>
+    invoke<void>("set_agent_tool_permission_rules", { rules }),
+  getScanPostWriteEnabled: (scanId: string) => invoke<boolean>("get_scan_post_write_enabled", { scanId }),
+  setScanPostWriteEnabled: (scanId: string, enabled: boolean) => invoke<void>("set_scan_post_write_enabled", { scanId, enabled }),
+  listScanWriteConfirmations: (scanId: string) => invoke<Array<{
+    id: number; method: string; endpoint: string; contractKey: string; cleanup: string; recovery: string; status: string; expiresAt: string; createdAt: string;
+  }>>("list_scan_write_confirmations", { scanId }),
+  decideScanWriteConfirmation: (confirmationId: number, approved: boolean) =>
+    invoke<void>("decide_scan_write_confirmation", { confirmationId, approved }),
+  getAgentSsrfCallbackUrl: () => invoke<string>("get_agent_ssrf_callback_url"),
+  setAgentSsrfCallbackUrl: (url: string) => invoke<void>("set_agent_ssrf_callback_url", { url }),
+  listAgentMcpServers: () =>
+    invoke<Array<Record<string, unknown>>>("list_agent_mcp_servers"),
+  upsertAgentMcpServer: (payload: {
+    serverId: string; label: string; command: string; args: string[]; env: unknown[]; enabled: boolean;
+    transport?: "stdio" | "http" | "sse";
+  }) => invoke<void>("upsert_agent_mcp_server", payload),
+  deleteAgentMcpServer: (serverId: string) =>
+    invoke<void>("delete_agent_mcp_server", { serverId }),
+  getAgentMcpToolAllowlist: () =>
+    invoke<Array<{ pattern: string; decision: string }>>("get_agent_mcp_tool_allowlist"),
+  setAgentMcpToolAllowlist: (rules: Array<{ pattern: string; decision: string }>) =>
+    invoke<void>("set_agent_mcp_tool_allowlist", { rules }),
+  listAgentMcpServerTools: (serverId: string) =>
+    invoke<Array<Record<string, unknown>>>("list_agent_mcp_server_tools", { serverId }),
+  listAgentMcpServerCatalog: (serverId: string) =>
+    invoke<{ tools: unknown[]; resources: unknown[]; prompts: unknown[]; sampling: string }>("list_agent_mcp_server_catalog", { serverId }),
+  listScanRequestLog: (scanId: string) =>
+    invoke<Array<{ tool: string; method: string; url: string; param: string; status: string; errorClass: string; startedAt: string; diff: string }>>("list_scan_request_log", { scanId }),
+  getScanAgentStats: (scanId: string, attemptNumber?: number) =>
+    invoke<ScanAgentStats>("get_scan_agent_stats", { scanId, attemptNumber }),
+  exportScanAgentStats: (scanId: string) =>
+    invoke<string>("export_scan_agent_stats", { scanId }),
+  getScanHeadlessSnapshot: (scanId: string) =>
+    invoke<Record<string, unknown>>("get_scan_headless_snapshot", { scanId }),
+  getHeadlessWaitJob: (jobId: string) =>
+    invoke<Record<string, unknown>>("get_headless_wait_job", { jobId }),
+  exportProjectAgentStats: (projectId: number, limit?: number) =>
+    invoke<string>("export_project_agent_stats", { projectId, limit }),
+  runHeadlessUrlScan: (input: {
+    projectId: number;
+    taskName: string;
+    urls: string[];
+    scanMode?: string;
+    wait?: boolean;
+    maxWaitSecs?: number;
+  }) =>
+    invoke<Record<string, unknown>>("run_headless_url_scan", {
+      projectId: input.projectId,
+      taskName: input.taskName,
+      urls: input.urls,
+      scanMode: input.scanMode,
+      wait: input.wait,
+      maxWaitSecs: input.maxWaitSecs,
+    }),
+  // Operator capability commands (off the agent budget). Each needs a scan to
+  // attribute findings to; the dangerous tiers additionally require the scan to
+  // have authorized the matching high-risk class (the mandatory switch).
+  analyzeDecompiledArtifact: (scanId: string, artifactDir: string) =>
+    invoke<number>("analyze_decompiled_artifact", { scanId, artifactDir }),
+  probeExposedEndpoints: (scanId: string, baseUrl: string) =>
+    invoke<number>("probe_exposed_endpoints", { scanId, baseUrl }),
+  probeCloudBucket: (scanId: string, bucketUrl: string, canary: boolean) =>
+    invoke<{ host: string; provider: string; publicListing: boolean; canary: unknown; findings: number }>(
+      "probe_cloud_bucket", { scanId, bucketUrl, canary }),
+  runAttackSweep: (scanId: string, baseUrl: string) =>
+    invoke<{ probed: number; pointsDiscovered?: number; injectable: number; accessFindings?: number; endpointsChecked?: number; injectable_total?: number; hint?: string; note?: string }>(
+      "run_attack_sweep", { scanId, baseUrl }),
+  analyzeJwt: (scanId: string, token: string, candidateSecrets: string[], claimsOverride?: Record<string, unknown>) =>
+    invoke<{
+      header: unknown; payload: unknown; alg: string; algNone: boolean; symmetric: boolean;
+      crackedSecretIndex: number | null; weaknesses: string[]; forgedTokens: Record<string, string>; sendHint: string;
+    }>("analyze_jwt", { scanId, token, candidateSecrets, claimsOverride }),
   listSentinelScans: (projectId?: number, limit = 300, before?: Pick<SentinelScan, "updatedAt" | "id">) =>
     invoke<SentinelScan[]>("list_sentinel_scans", { projectId, limit, beforeUpdatedAt: before?.updatedAt, beforeId: before?.id }),
   searchSentinelScanPage: (projectId: number | undefined, search: string, view: "attention" | "history" | "all", limit = 100, before?: Pick<SentinelScan, "updatedAt" | "id">) =>
@@ -181,6 +305,9 @@ export const sentinelApi = {
     invoke<SentinelScanAttempt[]>("list_sentinel_scan_attempts", { scanId }),
   listSentinelVulnerabilityScanIds: (projectId?: number) =>
     invoke<string[]>("list_sentinel_vulnerability_scan_ids", { projectId }),
+  // Per-task published vulnerability counts (same visibility rule as the ID list).
+  listSentinelVulnerabilityCounts: (projectId?: number) =>
+    invoke<{ scanId: string; count: number }[]>("list_sentinel_vulnerability_counts", { projectId }),
   getSentinelRunnerLog: (scanId: string, limit = 300) =>
     invoke<string[]>("get_sentinel_runner_log", { scanId, limit }),
   readNativeProcessLog: (scanId: string, attempt: number, cursorAttempt?: number, afterSequence = 0, limit = 300) =>
@@ -204,6 +331,10 @@ export const sentinelApi = {
     invoke<SentinelCheckpoint[]>("list_sentinel_checkpoints", { scanId }),
   listSentinelFindings: (scanId: string, kind?: string) =>
     invoke<SentinelFinding[]>("list_sentinel_findings", { scanId, kind }),
+  listScanFindingExploits: (scanId: string) =>
+    invoke<FindingExploit[]>("list_scan_finding_exploits", { scanId }),
+  runFindingDeepDive: (scanId: string, baseUrl: string, findingId?: number) =>
+    invoke<Record<string, unknown>>("run_finding_deep_dive", { scanId, baseUrl, findingId }),
   listHistoricalImportPreviews: (scanId: string) =>
     invoke<HistoricalImportPreview[]>("list_historical_import_previews", { scanId }),
   listHistoricalImportRuns: (beforeId?: number) =>
@@ -260,6 +391,8 @@ export const sentinelApi = {
   }) => invoke<void>("save_sentinel_validation", { input }),
   agentTargetExecution: (scanId: string, url: string) =>
     invoke<AgentTargetExecution>("get_agent_target_execution", { scanId, url }),
+  listAgentStageDecisions: (scanId: string) =>
+    invoke<AgentStageDecision[]>("list_agent_stage_decisions", { scanId }),
   exportSentinelResults: (scanId: string) => invoke<string>("export_sentinel_results", { scanId }),
   importSentinelResults: (content: string) => invoke<number>("import_sentinel_results", { content }),
   exportSentinelProject: (projectId: number) => invoke<string>("export_sentinel_project", { projectId }),

@@ -15,6 +15,7 @@ import {
   type SourceCapability,
 } from "./contracts";
 import type { ExposureSettingsView, ExposureSettingVersionPage } from "./api";
+import { useI18n } from "../uiPorts";
 
 export interface ExposureSettingsApi {
   getExposureSettings?: (projectId: number) => Promise<unknown>;
@@ -50,6 +51,7 @@ const EDITABLE: readonly SettingsNumberKey[] = [
 ] as const;
 
 export function useExposureSettings(deps: ExposureSettingsDeps) {
+  const { tr } = useI18n();
   const current = ref<ExposureSettingsView | null>(null);
   const draft = ref<JsonLike>({});
   const history = ref<ExposureSettingVersionPage | null>(null);
@@ -69,9 +71,9 @@ export function useExposureSettings(deps: ExposureSettingsDeps) {
   const versionLabel = computed(() =>
     current.value
       ? isDefault.value
-        ? `默认配置（未保存，服务器版本 v${current.value.storedVersion}）`
-        : `已保存 v${current.value.version}`
-      : "尚未读取配置",
+        ? tr(`默认配置（未保存，服务器版本 v${current.value.storedVersion}）`, `Default settings (not saved, server version v${current.value.storedVersion})`)
+        : tr(`已保存 v${current.value.version}`, `Saved v${current.value.version}`)
+      : tr("尚未读取配置", "Settings not loaded yet"),
   );
   const sources = computed<string[]>(() => current.value?.exposureSources ?? []);
   const allowedSources = computed<string[]>(
@@ -92,12 +94,12 @@ export function useExposureSettings(deps: ExposureSettingsDeps) {
   }
 
   function readSettings(value: unknown): ExposureSettingsView {
-    if (typeof value !== "object" || value === null) throw new Error("配置返回结构无效");
+    if (typeof value !== "object" || value === null) throw new Error(tr("配置返回结构无效", "The settings response has an invalid structure"));
     const row = value as Record<string, unknown>;
     if (typeof row.exposureMaxRequests !== "number" || !Array.isArray(row.exposureSources)) {
-      throw new Error("配置缺少预算或来源字段");
+      throw new Error(tr("配置缺少预算或来源字段", "The settings are missing budget or source fields"));
     }
-    if (typeof row.version !== "number") throw new Error("配置缺少版本号");
+    if (typeof row.version !== "number") throw new Error(tr("配置缺少版本号", "The settings are missing a version number"));
     return value as ExposureSettingsView;
   }
 
@@ -201,19 +203,19 @@ export function useExposureSettings(deps: ExposureSettingsDeps) {
     const view = current.value;
     if (!projectId || !view || saving.value) return false;
     if (loading.value || draftProject.value !== projectId) {
-      error.value = "配置仍在读取，或草稿不属于当前项目；未保存，请等读取完成后再编辑保存";
+      error.value = tr("配置仍在读取，或草稿不属于当前项目；未保存，请等读取完成后再编辑保存", "Settings are still loading, or the draft is not for the current workspace; not saved. Wait for loading to finish, then edit and save.");
       return false;
     }
     if (ownerInvalid.value.length) {
-      error.value = `正式开源账号格式不合规：${ownerInvalid.value.join("、")}，未保存`;
+      error.value = tr(`正式开源账号格式不合规：${ownerInvalid.value.join("、")}，未保存`, `Invalid official open-source account format: ${ownerInvalid.value.join(", ")}; not saved`);
       return false;
     }
     if (documentInvalid.value.length) {
-      error.value = `文档 URL 不合规：${documentInvalid.value.join("、")}，未保存`;
+      error.value = tr(`文档 URL 不合规：${documentInvalid.value.join("、")}，未保存`, `Invalid document URLs: ${documentInvalid.value.join(", ")}; not saved`);
       return false;
     }
     if (!deps.api.saveExposureSettings) {
-      error.value = "配置保存接口尚未注册，未做任何修改";
+      error.value = tr("配置保存接口尚未注册，未做任何修改", "The settings save endpoint is not registered yet; nothing was changed");
       return false;
     }
     saving.value = true;
@@ -226,7 +228,7 @@ export function useExposureSettings(deps: ExposureSettingsDeps) {
       if (deps.projectId() !== projectId) return false;
       conflict.value = false;
       error.value = "";
-      deps.notify("success", `采集配置已保存为 v${next}，只对之后新建的轮次生效`);
+      deps.notify("success", tr(`采集配置已保存为 v${next}，只对之后新建的轮次生效`, `Collection settings saved as v${next}; they apply only to rounds created from now on`));
       await load();
       return true;
     } catch (reason) {
@@ -235,9 +237,9 @@ export function useExposureSettings(deps: ExposureSettingsDeps) {
       // A version clash is not a validation failure: keep the editor content and say why.
       conflict.value = reason instanceof Error && reason.message.includes("exposure_setting_conflict");
       error.value = conflict.value
-        ? "配置已被别处改动，本次未保存。请重新读取后再编辑。"
-        : text || "配置校验未通过，未保存";
-      deps.notify("error", conflict.value ? "配置版本冲突，未保存" : "配置保存失败，未做任何修改");
+        ? tr("配置已被别处改动，本次未保存。请重新读取后再编辑。", "The settings were changed elsewhere, so this save did not go through. Reload them and edit again.")
+        : text || tr("配置校验未通过，未保存", "The settings failed validation; not saved");
+      deps.notify("error", conflict.value ? tr("配置版本冲突，未保存", "Settings version conflict; not saved") : tr("配置保存失败，未做任何修改", "Failed to save the settings; nothing was changed"));
       return false;
     } finally {
       saving.value = false;
@@ -250,7 +252,7 @@ export function useExposureSettings(deps: ExposureSettingsDeps) {
     try {
       const raw = await deps.api.listExposureSettingVersions(projectId, 20);
       if (typeof raw !== "object" || raw === null || !Array.isArray((raw as JsonLike).items)) {
-        throw new Error("配置历史返回结构无效");
+        throw new Error(tr("配置历史返回结构无效", "The settings history response has an invalid structure"));
       }
       history.value = raw as unknown as ExposureSettingVersionPage;
     } catch (reason) {
@@ -261,17 +263,20 @@ export function useExposureSettings(deps: ExposureSettingsDeps) {
   /// G1-0 the executor is serial: the saved concurrency is kept but has no effect.
   const concurrencyNotice = computed(() => {
     const effective = current.value?.effective as Record<string, unknown> | undefined;
-    if (!effective) return "并行度：后端未报告实际执行方式";
-    return `并行度已从采集合同移除，执行器串行（${String(effective.concurrencyNote ?? "同一时刻只处理一个工作项")}）`;
+    if (!effective) return tr("并行度：后端未报告实际执行方式", "Concurrency: the backend did not report how work actually runs");
+    return tr(
+      `并行度已从采集合同移除，执行器串行（${String(effective.concurrencyNote ?? "同一时刻只处理一个工作项")}）`,
+      `Concurrency has been removed from the collection contract; the executor runs serially (${String(effective.concurrencyNote ?? "one work item at a time")})`,
+    );
   });
 
   const notice = computed(() => {
-    if (!deps.projectId()) return "请先选择工作空间";
-    if (!available.value) return "配置接口尚未注册，页面显示的不是可保存的真实值";
+    if (!deps.projectId()) return tr("请先选择工作空间", "Select a workspace first");
+    if (!available.value) return tr("配置接口尚未注册，页面显示的不是可保存的真实值", "The settings endpoint is not registered yet; the values shown are not real, saveable values");
     if (error.value) return error.value;
     return isDefault.value
-      ? "当前是代码默认值；保存后才会成为该工作空间的设定，且只影响之后新建的轮次"
-      : "改动只会冻结到之后新建的轮次，进行中和已中断的轮次仍按各自冻结配置执行";
+      ? tr("当前是代码默认值；保存后才会成为该工作空间的设定，且只影响之后新建的轮次", "These are the built-in defaults; they become this workspace's settings only once saved, and only affect rounds created after that")
+      : tr("改动只会冻结到之后新建的轮次，进行中和已中断的轮次仍按各自冻结配置执行", "Changes are frozen into rounds created from now on; running and interrupted rounds keep their own frozen settings");
   });
 
   return {

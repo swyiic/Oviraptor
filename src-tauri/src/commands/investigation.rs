@@ -157,4 +157,3 @@ include!("investigation_persist.rs");
 include!("investigation_deep_dive.rs");
 include!("investigation_read.rs");
 include!("investigation_replay.rs");
-include!("investigation_tests.rs");

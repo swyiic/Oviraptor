@@ -27,7 +27,6 @@ const { tr } = useI18n();
 <template>
   <div class="trace-toolbar">
     <div>
-      <span class="eyebrow">MODEL ANALYSIS</span>
       <h2>{{ tr("模型分析", "Model analysis") }}</h2>
       <p>{{ tr(
         "按扫描任务查看最终模型请求、Agent、工具与 Token；可将单任务轨迹沉淀为知识，再聚合同类任务并生成可复用 Skill。",

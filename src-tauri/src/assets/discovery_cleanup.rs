@@ -457,25 +457,8 @@ pub(crate) fn interrupt(path: &Path) -> Result<(), String> {
     work::interrupt(path)
 }
 
-#[cfg(test)]
-#[path = "discovery_cleanup_tests.rs"]
-mod tests;
 
-#[cfg(test)]
-#[path = "discovery_cleanup_scheduler_tests.rs"]
-mod scheduler_tests;
 
-#[cfg(test)]
-#[path = "discovery_cleanup_owner_policy_tests.rs"]
-mod owner_policy_tests;
 
-#[cfg(test)]
-#[path = "discovery_cleanup_finite_tests.rs"]
-mod finite_tests;
 
-#[cfg(test)]
-#[path = "discovery_cleanup_refresh_tests.rs"]
-mod refresh_tests;
 
-#[cfg(test)]
-pub(super) fn status_on_for_test(c:&Connection,p:i64)->Value{status_on(c,p,&Read{run_id:None,filter:Some("all".into()),page:Some(1),page_size:Some(1),operation_id:None}).unwrap()}

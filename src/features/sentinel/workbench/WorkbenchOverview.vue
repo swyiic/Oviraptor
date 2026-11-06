@@ -40,7 +40,7 @@ function deploymentLabel(scan: SentinelScan) {
 <template>
   <aside class="workbench-side overview-side">
     <section class="panel token-by-feature">
-      <div class="panel-heading compact"><div><span class="eyebrow">TOKEN USAGE</span><h3>{{ tr("按功能消耗", "Usage by feature") }}</h3></div></div>
+      <div class="panel-heading compact"><div><h3>{{ tr("按功能消耗", "Usage by feature") }}</h3></div></div>
       <p class="overview-caption">{{ tr("当前已加载任务的累计 Token", "Cumulative tokens for currently loaded tasks") }}</p>
       <div v-for="item in usage" :key="item.key" class="token-feature-row">
         <header><span>{{ modeLabel(item.key) }}</span><strong>{{ format(item.total) }}</strong></header>
@@ -51,7 +51,7 @@ function deploymentLabel(scan: SentinelScan) {
       </div>
     </section>
     <section class="panel recent-workbench">
-      <div class="panel-heading compact"><div><span class="eyebrow">RECENT</span><h3>{{ tr("最近任务", "Recent tasks") }}</h3></div></div>
+      <div class="panel-heading compact"><div><h3>{{ tr("最近任务", "Recent tasks") }}</h3></div></div>
       <button v-for="scan in recentScans" :key="scan.id" type="button" @click="emit('openScan', scan)">
         <span class="overview-task-heading">
           <span class="overview-task-title">{{ scan.taskName || scan.projectName || tr("未命名任务", "Untitled task") }}</span>

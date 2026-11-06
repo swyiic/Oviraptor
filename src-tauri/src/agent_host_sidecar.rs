@@ -3,7 +3,7 @@
 
 use serde::Serialize;
 use std::{
-    io::{BufRead, BufReader},
+    io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{mpsc, Mutex},
@@ -41,6 +41,25 @@ pub struct AgentHostEndpoint {
     pub source: String,
 }
 
+// Ephemeral process-owned endpoint, never persisted in a model/task snapshot or
+// exported to spawned workers. OAuth credentials remain exclusively in Host.
+static MODEL_HOST_ENDPOINT: Mutex<Option<AgentHostEndpoint>> = Mutex::new(None);
+
+pub(crate) fn model_bridge_endpoint() -> Result<AgentHostEndpoint, String> {
+    MODEL_HOST_ENDPOINT.lock().ok().and_then(|value| value.clone())
+        .ok_or_else(|| "Grok OAuth 模型连接不可用：本机 Agent Host 未启动，请重新打开应用；未回退到其他模型".into())
+}
+
+pub(crate) fn is_model_bridge_endpoint(endpoint: &str) -> bool {
+    let Ok(host) = model_bridge_endpoint() else { return false };
+    endpoint == format!("{}/api/model/oauth/chat/completions", host.origin)
+        || endpoint == format!("{}/api/model/oauth/models", host.origin)
+}
+
+fn register_model_host(endpoint: &AgentHostEndpoint) {
+    if let Ok(mut registered) = MODEL_HOST_ENDPOINT.lock() { *registered = Some(endpoint.clone()); }
+}
+
 pub struct AgentHostSidecar {
     child: Mutex<Option<OwnedHostProcess>>,
     endpoint: Mutex<Option<AgentHostEndpoint>>,
@@ -68,7 +87,11 @@ impl AgentHostSidecar {
             }
         }
         if let Ok(mut endpoint) = self.endpoint.lock() {
-            endpoint.take();
+            if let Some(stopped) = endpoint.take() {
+                if let Ok(mut registered) = MODEL_HOST_ENDPOINT.lock() {
+                    if registered.as_ref().is_some_and(|current| current.session == stopped.session) { *registered = None; }
+                }
+            }
         }
     }
 }
@@ -111,6 +134,26 @@ pub fn install_exit_signals(app: &AppHandle) -> Result<DesktopExitSignals, Strin
     }
 }
 
+/// A loopback origin with an explicit port and nothing else. A prefix match
+/// let `http://localhost:1@evil.example/` through, so parse and check the real
+/// authority: scheme http, host 127.0.0.1/localhost, a port, no userinfo, and
+/// an empty path/query/fragment.
+fn valid_host_origin(origin: &str) -> bool {
+    match reqwest::Url::parse(origin) {
+        Ok(url) => {
+            url.scheme() == "http"
+                && matches!(url.host_str(), Some("127.0.0.1") | Some("localhost"))
+                && url.port().is_some()
+                && url.username().is_empty()
+                && url.password().is_none()
+                && matches!(url.path(), "" | "/")
+                && url.query().is_none()
+                && url.fragment().is_none()
+        }
+        Err(_) => false,
+    }
+}
+
 fn env_endpoint() -> Option<AgentHostEndpoint> {
     let origin = std::env::var("OVIRAPTOR_HOST_ORIGIN")
         .ok()?
@@ -123,7 +166,7 @@ fn env_endpoint() -> Option<AgentHostEndpoint> {
     if origin.is_empty() || session.is_empty() {
         return None;
     }
-    if !(origin.starts_with("http://127.0.0.1:") || origin.starts_with("http://localhost:")) {
+    if !valid_host_origin(&origin) {
         return None;
     }
     if !session.chars().all(|c| c.is_ascii_hexdigit()) || !(32..=128).contains(&session.len()) {
@@ -325,16 +368,26 @@ fn spawn_sidecar(app: &AppHandle, data_dir: &Path) -> Result<(OwnedHostProcess, 
         .arg(&cli)
         .arg("--data-dir")
         .arg(&host_data)
-        .arg("--session-token")
-        .arg(&session)
+        // The token goes over stdin: argv is readable by every local user
+        // through `ps` and /proc/<pid>/cmdline.
+        .arg("--session-token-stdin")
         .arg("--port")
         .arg("0")
         // No --runtime override: the host restores the saved runtime (xai-api after Grok OAuth).
         .env("OVIRAPTOR_BUNDLED_APPS_ROOT", &bundled_root)
+        // D4: let the host read operator-approved technique cards (advisory only) read-only.
+        .env("OVIRAPTOR_APP_DB", data_dir.join("oviraptor.sqlite3"))
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
-        .stdin(Stdio::null()))
+        .stdin(Stdio::piped()))
         .map_err(|error| format!("failed to spawn agent-host sidecar: {error}"))?;
+    {
+        let mut stdin = child
+            .take_stdin()
+            .ok_or_else(|| "agent-host sidecar stdin unavailable".to_string())?;
+        writeln!(stdin, "{session}")
+            .map_err(|error| format!("failed to pass agent-host session: {error}"))?;
+    }
 
     let stdout = child
         .take_stdout()
@@ -386,6 +439,7 @@ fn spawn_sidecar(app: &AppHandle, data_dir: &Path) -> Result<(OwnedHostProcess, 
 pub fn start(app: &AppHandle, data_dir: &Path) -> AgentHostSidecar {
     if let Some(endpoint) = env_endpoint() {
         let _ = inject_env(app, &endpoint);
+        register_model_host(&endpoint);
         return AgentHostSidecar {
             child: Mutex::new(None),
             endpoint: Mutex::new(Some(endpoint)),
@@ -393,9 +447,10 @@ pub fn start(app: &AppHandle, data_dir: &Path) -> AgentHostSidecar {
     }
     match spawn_sidecar(app, data_dir) {
         Ok((child, endpoint)) => {
-            std::env::set_var("OVIRAPTOR_HOST_ORIGIN", &endpoint.origin);
-            std::env::set_var("OVIRAPTOR_HOST_SESSION", &endpoint.session);
+            // Not exported through std::env: every later child process
+            // (analyzers, workers) would inherit the session token.
             let _ = inject_env(app, &endpoint);
+            register_model_host(&endpoint);
             AgentHostSidecar {
                 child: Mutex::new(Some(child)),
                 endpoint: Mutex::new(Some(endpoint)),
@@ -509,157 +564,30 @@ fn parse_scutil_proxy(output: &str) -> (Option<String>, Option<String>) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
+mod host_origin_tests {
+    use super::valid_host_origin;
 
-    fn test_tree() -> PathBuf {
-        let root = std::env::temp_dir().join(format!("oviraptor-sidecar-{}", Uuid::new_v4()));
-        std::fs::create_dir_all(&root).unwrap();
-        root
+    #[test]
+    fn only_a_bare_loopback_origin_with_a_port_is_accepted() {
+        assert!(valid_host_origin("http://127.0.0.1:57531"));
+        assert!(valid_host_origin("http://localhost:1420/"));
     }
 
-    fn fixture_distribution(root: &Path) {
-        for path in PACKAGED_HOST_FILES {
-            let file = root.join(path);
-            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-            std::fs::write(file, "synthetic fixture").unwrap();
+    #[test]
+    fn userinfo_wrong_host_or_missing_port_is_rejected() {
+        for origin in [
+            "http://localhost:1@evil.example/",   // userinfo bypass the prefix match allowed
+            "http://127.0.0.1@evil.example:80/",
+            "http://localhost",                    // no port
+            "http://evil.example:80/",
+            "https://127.0.0.1:443/",              // not http
+            "http://127.0.0.1:80/api",             // non-empty path
+            "http://127.0.0.1:80/?x=1",
+            "http://127.0.0.1:80/#f",
+            "not a url",
+        ] {
+            assert!(!valid_host_origin(origin), "must reject {origin}");
         }
-        std::fs::write(
-            root.join("desktop-distribution.json"),
-            serde_json::json!({
-                "schemaVersion": 1, "applicationVersion": env!("CARGO_PKG_VERSION"),
-                "minimumNodeMajor": 24, "nodeRuntimeBundled": false,
-            })
-            .to_string(),
-        )
-        .unwrap();
-        std::fs::write(
-            root.join("packages/agent-host/bundled-apps.json"),
-            serde_json::json!({
-                "schemaVersion": 1, "apps": [{"id": "fixture", "package": "apps/fixture-1.0.0"}],
-            })
-            .to_string(),
-        )
-        .unwrap();
-        std::fs::create_dir_all(root.join("apps/fixture-1.0.0")).unwrap();
-        std::fs::write(root.join("apps/fixture-1.0.0/manifest.json"), "{}").unwrap();
-    }
-
-    #[test]
-    fn packaged_distribution_wins_over_debug_source_and_override() {
-        let root = test_tree();
-        let resources = root.join("resources");
-        let packaged = resources.join(PACKAGED_HOST_ROOT);
-        fixture_distribution(&packaged);
-        let checkout = root.join("checkout");
-        let source = checkout.join(PACKAGED_HOST_CLI);
-        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
-        std::fs::write(&source, "debug fixture").unwrap();
-        assert_eq!(
-            resolve_cli_in(Some(&resources), Some(&checkout), Some(&source)).unwrap(),
-            packaged.join(PACKAGED_HOST_CLI)
-        );
-        std::fs::remove_file(packaged.join("apps/fixture-1.0.0/manifest.json")).unwrap();
-        assert!(resolve_cli_in(Some(&resources), Some(&checkout), Some(&source)).is_err());
-        fixture_distribution(&packaged);
-        std::fs::remove_file(packaged.join("packages/runtime-acp/index.mjs")).unwrap();
-        assert!(
-            resolve_cli_in(Some(&resources), Some(&checkout), Some(&source)).is_err(),
-            "a partial package must not silently load the checkout"
-        );
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn release_resolution_never_falls_back_to_a_checkout_or_cli_override() {
-        let root = test_tree();
-        let source = root.join(PACKAGED_HOST_CLI);
-        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
-        std::fs::write(&source, "debug fixture").unwrap();
-        assert!(resolve_cli_in(None, None, Some(&source)).is_err());
-        assert_eq!(resolve_cli_in(None, Some(&root), None).unwrap(), source);
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn node20_is_not_an_acceptable_sidecar_runtime() {
-        assert_eq!(node_major("v24.12.0\n"), Some(24));
-        assert!(select_node24(vec![(20, PathBuf::from("old-node"))]).is_err());
-        assert_eq!(
-            select_node24(vec![
-                (20, PathBuf::from("old-node")),
-                (24, PathBuf::from("new-node"))
-            ])
-            .unwrap(),
-            PathBuf::from("new-node")
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn an_explicit_node_executable_is_version_checked_too() {
-        use std::os::unix::fs::PermissionsExt;
-        let root = test_tree();
-        let executable = root.join("node");
-        std::fs::write(&executable, "#!/bin/sh\nprintf 'v20.1.0\\n'\n").unwrap();
-        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
-        assert!(require_node24(executable.clone()).is_err());
-        std::fs::write(&executable, "#!/bin/sh\nprintf 'v24.1.0\\n'\n").unwrap();
-        assert_eq!(require_node24(executable.clone()).unwrap(), executable);
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn parses_host_ready_lines() {
-        let mut origin = None;
-        let mut session = None;
-        parse_ready_line(
-            "Oviraptor host: http://127.0.0.1:43123",
-            &mut origin,
-            &mut session,
-        );
-        parse_ready_line(
-            "Session: abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
-            &mut origin,
-            &mut session,
-        );
-        assert_eq!(origin.as_deref(), Some("http://127.0.0.1:43123"));
-        assert_eq!(
-            session.as_deref(),
-            Some("abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789")
-        );
-    }
-
-    #[test]
-    fn parses_scutil_proxy_and_injects_env() {
-        let out = "<dictionary> {\n  HTTPEnable : 1\n  HTTPPort : 7890\n  HTTPProxy : 127.0.0.1\n  HTTPSEnable : 1\n  HTTPSPort : 7890\n  HTTPSProxy : 127.0.0.1\n  SOCKSEnable : 1\n  SOCKSPort : 7890\n  SOCKSProxy : 127.0.0.1\n}\n";
-        assert_eq!(
-            parse_scutil_proxy(out),
-            (
-                Some("http://127.0.0.1:7890".into()),
-                Some("http://127.0.0.1:7890".into())
-            )
-        );
-        let env = sidecar_proxy_env(|_| None, || Some(out.to_string()));
-        assert!(env.contains(&("HTTPS_PROXY".into(), "http://127.0.0.1:7890".into())));
-        assert!(env.contains(&("HTTP_PROXY".into(), "http://127.0.0.1:7890".into())));
-        assert!(env.contains(&("NO_PROXY".into(), "127.0.0.1,localhost,::1".into())));
-    }
-
-    #[test]
-    fn parent_proxy_env_wins_and_disabled_system_proxy_is_ignored() {
-        let env = sidecar_proxy_env(
-            |k| (k == "HTTPS_PROXY").then(|| "http://corp:8080".to_string()),
-            || panic!("must not read system proxy"),
-        );
-        assert_eq!(
-            env,
-            vec![(
-                "NO_PROXY".to_string(),
-                "127.0.0.1,localhost,::1".to_string()
-            )]
-        );
-        let off = "  HTTPSEnable : 0\n  HTTPSProxy : 1.2.3.4\n  HTTPSPort : 1\n";
-        assert!(sidecar_proxy_env(|_| None, || Some(off.to_string())).is_empty());
     }
 }
+

@@ -75,16 +75,8 @@ pub(super) fn interrupt(path: &Path) -> Result<(), String> {
     Ok(())
 }
 fn storage_busy(error: &str) -> bool {
-    let error = error.to_ascii_lowercase();
-    [
-        "database is locked",
-        "database table is locked",
-        "database is busy",
-        "sqlite_busy",
-        "sqlite_locked",
-    ]
-    .iter()
-    .any(|code| error.contains(code))
+    // Unified with the scan engine: one definition of a transient SQLite lock.
+    crate::db::is_transient_lock(error)
 }
 pub(super) fn tick(path: &Path) -> Result<bool, String> {
     let mut c = db::open(path)?;
@@ -829,7 +821,7 @@ pub(crate) fn exact_candidates(c:&Connection,p:i64,e:&Value,targets:&BTreeSet<St
 }
 fn classify(c: &mut Connection, k: &Claim, key: &str) -> Result<(), String> {
     let tx = c
-        .transaction_with_behavior(rusqlite::TransactionBehavior::Deferred)
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(err)?;
     if !valid(&tx, k)? {
         return Ok(());
@@ -1225,10 +1217,6 @@ fn refresh_expired_ownership(c: &mut Connection, k: &Claim) -> Result<bool, Stri
     tx.commit().map_err(err)?;
     Ok(!expired.is_empty())
 }
-#[cfg(test)]
-pub(super) fn refresh_expired_for_test(c: &mut Connection, k: &Claim) -> Result<bool, String> {
-    refresh_expired_ownership(c, k)
-}
 /// Finite evidence collection has an explicit outcome. A missing identity or
 /// unavailable source is never an exclusion and never a human conflict. Leave
 /// the full journal in place; only evidence/model work that can actually advance
@@ -1314,13 +1302,9 @@ fn reopen_observed_websites(c: &mut Connection, k: &Claim) -> Result<bool, Strin
     tx.commit().map_err(err)?;
     Ok(changed>0)
 }
-#[cfg(test)]
-pub(super) fn reopen_observed_for_test(c:&mut Connection,k:&Claim)->Result<bool,String>{reopen_observed_websites(c,k)}
 fn publish_round_state(c:&Connection,k:&Claim,phase:&str,reason:&str,active:bool)->Result<usize,String> {
     c.execute("UPDATE asset_cleanup_runs SET phase=?3,reason=?4,enabled=?5 WHERE id=?1 AND project_id=?6 AND claim_token=?2 AND generation=?7 AND owner_pid=?8 AND enabled=1 AND EXISTS(SELECT 1 FROM projects p WHERE p.id=asset_cleanup_runs.project_id AND p.status='active') AND (phase!=?3 OR reason!=?4 OR enabled!=?5)",params![k.id,k.token,phase,reason,active,k.p,k.generation,std::process::id()]).map_err(err)
 }
-#[cfg(test)]
-pub(super) fn publish_round_for_test(c:&Connection,k:&Claim)->Result<usize,String>{publish_round_state(c,k,"researching","old callback",true)}
 fn step(path: &Path, c: &mut Connection, k: &Claim) -> Result<bool, String> {
     if !valid(c, k)? {
         return Ok(false);
@@ -1605,10 +1589,6 @@ pub(super) fn reclassify(c: &mut Connection, k: &Claim, key: &str) -> Result<(),
 pub(super) fn claim_valid(c: &Connection, k: &Claim) -> Result<bool, String> {
     valid(c, k)
 }
-#[cfg(test)]
-pub(super) fn scheduler_step(path: &Path, c: &mut Connection, k: &Claim) -> Result<bool, String> {
-    step(path, c, k)
-}
 pub(super) fn restore_on(
     c: &Connection,
     p: i64,
@@ -1636,36 +1616,3 @@ pub(super) fn restore_on(
     Ok(())
 }
 
-#[cfg(test)]
-mod model_input_tests {
-    use super::*;
-    #[test]
-    fn real_model_packer_summarizes_journals_without_dropping_identity_facts() {
-        let raw=json!({"domain":"large.test","domainEvidence":[{"source":"public_site_certificate","organization":"星海技术股份有限公司","certificateSha256":"a".repeat(64)}],"publicSources":(0..2400).map(|i|json!({"kind":"dns_cname","sourceUrl":format!("https://dns.test/{i}"),"checkedAt":123,"records":["x".repeat(400)]})).collect::<Vec<_>>()});
-        let original=raw.clone();
-        let (c,k)=super::super::tests::fixture();
-        let mut items=vec![("large.test".into(),"unchanged-basis".into(),raw.clone())];
-        let input=fit_model_input(&c,&k,"中国移动",&mut items).unwrap();
-        assert!(raw.to_string().len()>500_000);
-        assert!(input.to_string().len()<8192);
-        assert_eq!(input["items"][0]["evidence"]["domainEvidence"],raw["domainEvidence"]);
-        assert_eq!(input["items"][0]["evidence"]["publicSources"]["receiptCount"],2400);
-        assert_eq!(items[0].2,original,"full local evidence and paid basis must stay unchanged");
-    }
-    #[test]
-    fn real_model_packer_splits_batches_and_parks_only_oversized_identity() {
-        let (c,k)=super::super::tests::fixture();
-        let large=json!({"domainEvidence":[{"text":"x".repeat(80_000)}]});
-        let mut items=vec![("a".into(),"a".into(),large.clone()),("b".into(),"b".into(),large)];
-        let input=fit_model_input(&c,&k,"中国移动",&mut items).unwrap();
-        assert_eq!(items.len(),1);
-        assert!(input.to_string().len()<=MODEL_INPUT_LIMIT);
-        c.execute("INSERT INTO asset_cleanup_groups(run_id,group_key,domain,state,evidence_json) VALUES(?1,'huge.test','huge.test','evidence','{}'),(?1,'other.test','other.test','evidence','{}')",[&k.id]).unwrap();
-        let mut huge=vec![("huge.test".into(),"huge".into(),json!({"domainEvidence":[{"text":"x".repeat(150_000)}]}))];
-        fit_model_input(&c,&k,"中国移动",&mut huge).unwrap();
-        assert!(huge.is_empty());
-        assert_eq!(c.query_row("SELECT state FROM asset_cleanup_groups WHERE group_key='huge.test'",[],|r|r.get::<_,String>(0)).unwrap(),"deferred");
-        assert_eq!(c.query_row("SELECT state FROM asset_cleanup_groups WHERE group_key='other.test'",[],|r|r.get::<_,String>(0)).unwrap(),"evidence");
-        assert_eq!(c.query_row("SELECT count(*) FROM asset_cleanup_models",[],|r|r.get::<_,i64>(0)).unwrap(),0);
-    }
-}

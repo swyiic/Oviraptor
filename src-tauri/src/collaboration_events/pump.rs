@@ -175,6 +175,3 @@ fn wait_for_work(commits: &CommitWake, observed: u64, stopped: &AtomicBool) {
     }
 }
 
-#[cfg(test)]
-#[path = "pump_tests.rs"]
-mod tests;

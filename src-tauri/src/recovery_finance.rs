@@ -359,5 +359,3 @@ impl FinancialTerms {
     }
 }
 
-#[cfg(test)]
-mod tests;

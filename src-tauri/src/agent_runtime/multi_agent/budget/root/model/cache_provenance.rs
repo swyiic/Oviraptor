@@ -20,10 +20,6 @@ fn capture_message(call: &RootModelCall, invoice: &Value, cached: bool, mode: &M
 }
 
 impl RootModelCall {
-    #[cfg(test)]
-    pub(crate) fn verify_original_cache_for_test(&self, db: &Connection, response: &ModelResponse) -> Result<bool, String> {
-        self.read_cache_provenance(db, &Self::received_fact(response))
-    }
 
     pub(super) fn read_cache_provenance(&self, db: &Connection, invoice: &Value) -> Result<bool, String> {
         if db.is_autocommit() {

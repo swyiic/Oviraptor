@@ -110,10 +110,6 @@ pub(in crate::asset_discovery) fn ownership_observations(v: &Value, endpoint: &s
     result.into_iter().collect()
 }
 
-pub(super) fn observations_for_names(v: &Value, endpoint: &str, names: &BTreeSet<String>) -> Vec<OwnershipObservation> {
-    ownership_observations(v, endpoint).into_iter()
-        .filter(|observation| observation_matches(observation, names)).collect()
-}
 
 fn observation_matches(observation: &OwnershipObservation, names: &BTreeSet<String>) -> bool {
     names.contains(&observation.host)

@@ -1,5 +1,7 @@
 import type { AgentHostConversation } from './chatClient';
 
+const YESTERDAY: [string, string] = ['昨天', 'Yesterday'];
+
 export function conversationActivityAt(item: Pick<AgentHostConversation, 'createdAt' | 'lastActivityAt' | 'updatedAt'>): string | undefined {
   const value = item.lastActivityAt || item.updatedAt || item.createdAt;
   return value && Number.isFinite(Date.parse(value)) ? value : undefined;
@@ -23,7 +25,7 @@ export function conversationHistoryTime(value: string | undefined, language = 'z
   const yesterday = new Date(day); yesterday.setDate(day.getDate() - 1);
   const time = date.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit', hour12: false });
   const short = date >= day && date <= now ? time
-    : date >= yesterday && date < day ? `${language === 'en' ? 'Yesterday' : '昨天'} ${time}`
+    : date >= yesterday && date < day ? `${YESTERDAY[language === 'en' ? 1 : 0]} ${time}`
       : date.toLocaleDateString(locale, { ...(date.getFullYear() !== now.getFullYear() ? { year: 'numeric' as const } : {}), month: '2-digit', day: '2-digit' });
   return { short, full };
 }

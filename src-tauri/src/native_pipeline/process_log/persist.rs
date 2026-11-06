@@ -61,7 +61,7 @@ pub(super) fn append(
     terminal: Option<&str>,
 ) -> Result<Hint, String> {
     let tx = connection
-        .transaction()
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(|_| "native_process_log_commit_failed")?;
     let hint = guard::protect(&tx, guard::Mode::Append, || {
         // A begun process can finish its cancellation/EOF diagnostics under

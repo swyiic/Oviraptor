@@ -170,25 +170,6 @@ fn heartbeat_source_specialist(
     Ok(())
 }
 
-#[cfg(test)]
-fn source_model_remaining_seconds(
-    connection: &rusqlite::Connection,
-    root_id: &str,
-    timeout: u64,
-) -> Result<u64, String> {
-    let elapsed: i64 = connection
-        .query_row(
-            "SELECT CASE
-        WHEN started_at='' AND status='prepared' THEN 0
-        WHEN started_at<>'' AND julianday(started_at)<=julianday('now','localtime')
-          THEN CAST((julianday('now','localtime')-julianday(started_at))*86400 AS INTEGER)
-        ELSE NULL END FROM agent_runs WHERE id=?1",
-            [root_id],
-            |r| r.get(0),
-        )
-        .map_err(|_| "source_model_start_time_invalid")?;
-    Ok(timeout.saturating_sub(elapsed.max(0) as u64))
-}
 
 /// Own the source-model invocation independently of reusable capability leases.
 /// Initial assessments produce mailbox evidence, NOT independent review/CI pass.

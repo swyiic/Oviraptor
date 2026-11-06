@@ -14,10 +14,6 @@ fn failed_outcome(
             .unwrap_or_default(),
         status,
         records,
-        #[cfg(test)]
-        revisions: 0,
-        #[cfg(test)]
-        revoked: 0,
         diagnostics: sorted(diagnostics),
         committed_records: None,
     }
@@ -59,10 +55,6 @@ pub(super) fn import_bundle(
             bundle_id: manifest.bundle_id.clone(),
             status: BundleStatus::Unchanged,
             records: 0,
-            #[cfg(test)]
-            revisions: 0,
-            #[cfg(test)]
-            revoked: 0,
             diagnostics: vec![Diagnostic::info(
                 "bundle_unchanged",
                 bundle.source_dir.display().to_string(),
@@ -182,10 +174,6 @@ pub(super) fn import_bundle(
                 bundle_id: manifest.bundle_id.clone(),
                 status: status_of(&[], &diagnostics, revisions, revoked),
                 records: record_count,
-                #[cfg(test)]
-                revisions,
-                #[cfg(test)]
-                revoked,
                 diagnostics: sorted(diagnostics),
                 committed_records,
             }

@@ -84,7 +84,7 @@ fn native_root_transport_original(
         )
         .map_err(|e| e.to_string())?
         .len();
-        if bytes > 96 * 1024 {
+        if bytes > root_local_context_byte_ceiling(prepared.client.profile()) {
             return Err("root_local_context_limit".into());
         }
         let output = prepared
@@ -92,7 +92,19 @@ fn native_root_transport_original(
             .profile()
             .max_output_tokens
             .ok_or("root_tick_output_invalid")?;
-        prepared.estimate = i64::try_from(bytes)
+        // `bytes` is the serialized request size, not a token count. Reserving
+        // it 1:1 as input tokens over-reserved the input dimension ~15-18× (Root
+        // ticks here consume ≈1 token per 18 request bytes), so held reservations
+        // stacked until a mid-investigation tick tripped `budget_hard_limit_exceeded`
+        // against the per-scan cap and the whole scan was failed at near-zero real
+        // spend. Reserve a realistic input-token estimate instead (bytes/3 keeps a
+        // ~6× margin over observed usage, ample even for CJK-dense prompts) plus the
+        // real output ceiling. Under-reservation is safe: tick settlement tops the
+        // reservation up to the actual cost (`held = reserve.max(actual)` in
+        // budget/root/model/tick/cost.rs) before consuming, so a small estimate can
+        // never make consume exceed reserve — only a genuine cap exhaustion fails.
+        let input_estimate = bytes / 3 + 1;
+        prepared.estimate = i64::try_from(input_estimate)
             .ok()
             .and_then(|n| n.checked_add(i64::try_from(output).ok()?))
             .filter(|n| *n > 0)
@@ -167,12 +179,6 @@ fn native_root_transport_original(
                 Ok(response) => {
                     let db = db::open(&context.db_path)?;
                     tick.persist_received_invoice(&db, &response)?;
-                    #[cfg(test)]
-                    native_financial_continuation_received_test_checkpoint(context, actor);
-                    #[cfg(test)]
-                    crate::scanning::agent_tests::native_root_controlled_post_original_invoice_checkpoint(context, actor, round);
-                    #[cfg(test)]
-                    crate::scanning::agent_tests::native_mapper_source_drift_post_original_invoice_checkpoint(context, actor, round);
                     NativeRootOriginalResponse::Fresh { tick, response }
                 }
                 Err(error) => {
@@ -305,8 +311,6 @@ fn native_root_complete_original_on(
                 log.cost_saved();
             }
             tick.persist_terminal_capture(&db, received.terminal)?;
-            #[cfg(test)]
-            native_coordinator_tick_paid_checkpoint();
             if received.unknown {
                 return Err("budget_indeterminate_requires_reconciliation".into());
             }

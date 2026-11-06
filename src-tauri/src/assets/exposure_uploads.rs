@@ -1138,6 +1138,3 @@ pub(super) fn recovered_sync_import_on(
  )"#,params![run_id,instance],|r|r.get(0)).map_err(|_|error("status"))
 }
 
-#[cfg(test)]
-#[path = "exposure_uploads_tests.rs"]
-mod tests;

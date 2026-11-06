@@ -39,12 +39,6 @@ pub enum OneShotFailure {
 }
 
 impl OneShotFailure {
-    #[cfg(test)]
-    pub fn into_error(self) -> ModelError {
-        match self {
-            Self::BeforeTransport(error) | Self::TransportOutcomeUnknown(error) => error,
-        }
-    }
 }
 
 pub struct OpenAiCompatibleGateway {
@@ -56,17 +50,6 @@ pub struct OpenAiCompatibleGateway {
 }
 
 impl OpenAiCompatibleGateway {
-    /// One reserved provider request. Durable child dispatchers own retries;
-    /// they must not inherit the general gateway's implicit cloud retry.
-    #[cfg(test)]
-    pub fn complete_once(
-        &self,
-        request: &ModelRequest,
-        cancel: &CancelToken,
-    ) -> Result<ModelResponse, ModelError> {
-        self.complete_once_observed(request, cancel)
-            .map_err(OneShotFailure::into_error)
-    }
 
     pub fn complete_once_observed(
         &self,
@@ -112,8 +95,13 @@ impl OpenAiCompatibleGateway {
         let alias=|name:&str|request.tools.iter().find(|spec|spec.name==name).map(ToolSchema::wire_name);
         for message in &mut messages {
             if message["role"]=="assistant" {
-                if let Some(calls)=message.get_mut("tool_calls").and_then(JsonValue::as_array_mut) {
-                    for call in calls {if let Some(name)=call.pointer("/function/name").and_then(JsonValue::as_str).and_then(alias){call["function"]["name"]=name.into();}}
+                // An assistant turn that made no tool calls must NOT be replayed
+                // with `tool_calls: []`; strip it first (see fn docs), then alias
+                // only a non-empty array.
+                if !strip_empty_assistant_tool_calls(message) {
+                    if let Some(calls)=message.get_mut("tool_calls").and_then(JsonValue::as_array_mut) {
+                        for call in calls {if let Some(name)=call.pointer("/function/name").and_then(JsonValue::as_str).and_then(alias){call["function"]["name"]=name.into();}}
+                    }
                 }
             } else if message["role"]=="tool" {
                 if let Some(name)=message.get("name").and_then(JsonValue::as_str).and_then(alias){message["name"]=name.into();}
@@ -457,4 +445,68 @@ fn validate_strict_tool_calls(body: &JsonValue) -> Result<(), ModelError> {
         }
     }
     Ok(())
+}
+
+/// Drop an EMPTY `tool_calls` array from an assistant message before it is sent.
+/// OpenAI/DeepSeek-compatible providers reject `tool_calls: []` — the field must
+/// be absent or carry at least one call — returning HTTP 400
+/// ("'messages[N].tool_calls': empty array") and discarding the whole paid round
+/// mid-scan. A replayed assistant turn that made no tool calls must therefore
+/// drop the array and keep (at least empty) `content`. Returns true when it
+/// stripped one; leaves non-assistant messages and non-empty arrays untouched.
+fn strip_empty_assistant_tool_calls(message: &mut JsonValue) -> bool {
+    let empty = message["role"] == "assistant"
+        && message
+            .get("tool_calls")
+            .and_then(JsonValue::as_array)
+            .is_some_and(|calls| calls.is_empty());
+    if empty {
+        if let Some(object) = message.as_object_mut() {
+            object.remove("tool_calls");
+            object
+                .entry("content")
+                .or_insert_with(|| JsonValue::String(String::new()));
+        }
+    }
+    empty
+}
+
+#[cfg(test)]
+mod empty_tool_calls_tests {
+    use super::strip_empty_assistant_tool_calls;
+    use serde_json::json;
+
+    #[test]
+    fn strips_empty_assistant_tool_calls_and_ensures_content() {
+        let mut message = json!({"role": "assistant", "tool_calls": []});
+        assert!(strip_empty_assistant_tool_calls(&mut message));
+        assert!(message.get("tool_calls").is_none(), "empty tool_calls must be removed");
+        assert_eq!(message["content"], "", "content must exist so the provider accepts it");
+    }
+
+    #[test]
+    fn keeps_existing_content_when_stripping() {
+        let mut message = json!({"role": "assistant", "content": "分析完成", "tool_calls": []});
+        assert!(strip_empty_assistant_tool_calls(&mut message));
+        assert!(message.get("tool_calls").is_none());
+        assert_eq!(message["content"], "分析完成");
+    }
+
+    #[test]
+    fn leaves_a_nonempty_tool_calls_array_untouched() {
+        let mut message = json!({
+            "role": "assistant",
+            "tool_calls": [{"id": "1", "type": "function", "function": {"name": "x", "arguments": "{}"}}]
+        });
+        assert!(!strip_empty_assistant_tool_calls(&mut message));
+        assert_eq!(message["tool_calls"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn ignores_non_assistant_messages() {
+        let mut tool = json!({"role": "tool", "tool_calls": []});
+        assert!(!strip_empty_assistant_tool_calls(&mut tool));
+        let mut user = json!({"role": "user", "content": "hi"});
+        assert!(!strip_empty_assistant_tool_calls(&mut user));
+    }
 }

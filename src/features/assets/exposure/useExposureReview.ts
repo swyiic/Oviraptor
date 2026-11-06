@@ -6,6 +6,9 @@
 import { computed, ref, watch, onUnmounted } from "vue";
 import { exposureErrorText, isUnregisteredCommand, remediationBlockedReason, type ExposureEvidence } from "./contracts";
 import type { ExposureRemediation, ExposureRetestOutcome, ExposureTaxonomyRow } from "./api";
+import { useI18n } from "../uiPorts";
+
+const { tr } = useI18n();
 
 export interface ExposureReviewApi {
   readExposureEvidence?: (findingId: number, expectedProjectId: number) => Promise<unknown>;
@@ -61,14 +64,14 @@ interface ReviewTrailRow {
   eventId?: number;
 }
 
-const OUTCOME_LABELS: Record<string, string> = {
-  no_retest_round: "还没有复测轮次",
-  retest_content_changed: "复测取回不同字节",
-  retest_content_identical: "复测字节与原结论一致",
-  retest_not_seen: "复测轮没再看到这条 URL",
-  retest_unreachable: "复测没能取到该资源",
-  retest_round_incomplete: "复测轮本身没收口",
-  retest_without_baseline: "原观察已不可读",
+const OUTCOME_LABELS: Record<string, readonly [string, string]> = {
+  no_retest_round: ["还没有复测轮次", "No re-probe round yet"],
+  retest_content_changed: ["复测取回不同字节", "Re-probe fetched different bytes"],
+  retest_content_identical: ["复测字节与原结论一致", "Re-probe bytes match the original conclusion"],
+  retest_not_seen: ["复测轮没再看到这条 URL", "The re-probe round did not see this URL again"],
+  retest_unreachable: ["复测没能取到该资源", "The re-probe could not fetch the resource"],
+  retest_round_incomplete: ["复测轮本身没收口", "The re-probe round itself did not finish"],
+  retest_without_baseline: ["原观察已不可读", "The original observation is no longer readable"],
 };
 
 export function useExposureReview(deps: ExposureReviewDeps) {
@@ -129,15 +132,17 @@ export function useExposureReview(deps: ExposureReviewDeps) {
   const remediationBlocked = computed(() =>
     remediationBlockedReason(evidence.value?.disposition ?? null, evidence.value?.finding?.status),
   );
-  const outcomeLabel = computed(() =>
-    outcome.value ? OUTCOME_LABELS[outcome.value.basis] ?? outcome.value.basis : "尚未复测",
-  );
+  const outcomeLabel = computed(() => {
+    if (!outcome.value) return tr("尚未复测", "Not re-probed yet");
+    const pair = OUTCOME_LABELS[outcome.value.basis];
+    return pair ? tr(...pair) : outcome.value.basis;
+  });
   const notice = computed(() => {
-    if (!deps.projectId() || !deps.findingId()) return "请先在线索列表里选中一条线索";
-    if (!available.value) return "复核/整改接口尚未注册，页面显示的不是“没有记录”";
-    if (error.value && !loaded.value) return `读取失败：${error.value}`;
-    if (!loaded.value) return "尚未读取该线索的证据与历史";
-    return `队列版本 r${revision.value}；复核会带上这个版本，队列前进就拒绝写入`;
+    if (!deps.projectId() || !deps.findingId()) return tr("请先在线索列表里选中一条线索", "Select a lead in the lead list first");
+    if (!available.value) return tr("复核/整改接口尚未注册，页面显示的不是“没有记录”", "The review/remediation API is not registered yet; this does not mean there are no records");
+    if (error.value && !loaded.value) return tr(`读取失败：${error.value}`, `Read failed: ${error.value}`);
+    if (!loaded.value) return tr("尚未读取该线索的证据与历史", "Evidence and history for this lead not read yet");
+    return tr(`队列版本 r${revision.value}；复核会带上这个版本，队列前进就拒绝写入`, `Queue revision r${revision.value}; a review carries this revision and is refused once the queue moves on`);
   });
 
   /// P1-1 整改列表按项目分页；这里翻页收集属于当前线索的记录（最多 25 页），绝不回退到别的线索。
@@ -155,10 +160,10 @@ export function useExposureReview(deps: ExposureReviewDeps) {
       } | null;
       own.push(...(read?.items ?? []).filter((row) => row.findingId === findingId));
       if (!read?.hasMore) return own;
-      if (!read.nextCursor || read.nextCursor === cursor) throw new Error("整改历史分页未前进，不能判定历史已读取完整");
+      if (!read.nextCursor || read.nextCursor === cursor) throw new Error(tr("整改历史分页未前进，不能判定历史已读取完整", "Remediation history paging did not advance; cannot tell whether the history was read completely"));
       cursor = read.nextCursor;
     }
-    throw new Error("整改历史超过本次读取窗口，不能判定为没有整改记录");
+    throw new Error(tr("整改历史超过本次读取窗口，不能判定为没有整改记录", "Remediation history exceeds this read window; cannot conclude there are no remediation records"));
   }
 
   async function load(): Promise<boolean> {
@@ -179,7 +184,7 @@ export function useExposureReview(deps: ExposureReviewDeps) {
       if (discarded(claimed, projectId) || deps.findingId() !== findingId) return false;
       const view = read as ExposureEvidence;
       if (!view || view.finding?.id !== findingId || !Array.isArray(view.versions)) {
-        throw new Error("证据返回结构无效");
+        throw new Error(tr("证据返回结构无效", "Invalid evidence response shape"));
       }
       evidence.value = view;
       revision.value = topRevision.value;
@@ -189,7 +194,7 @@ export function useExposureReview(deps: ExposureReviewDeps) {
         deps.api.exposureReviewTaxonomy?.(projectId) ?? [],
       ]);
       if (discarded(claimed, projectId) || deps.findingId() !== findingId) return false;
-      if (!Array.isArray(rows) || !Array.isArray(classes)) throw new Error("复核历史或分类返回结构无效");
+      if (!Array.isArray(rows) || !Array.isArray(classes)) throw new Error(tr("复核历史或分类返回结构无效", "Invalid review history or taxonomy response shape"));
       trail.value = rows as ReviewTrailRow[];
       taxonomy.value = classes;
       remediations.value = own;
@@ -226,11 +231,11 @@ export function useExposureReview(deps: ExposureReviewDeps) {
     if (!projectId || !findingId || busy.value || !actionable()) return false;
     const ticket = identity;
     if (!actor.value.trim()) {
-      error.value = "复核必须写明操作者";
+      error.value = tr("复核必须写明操作者", "A review must name the operator");
       return false;
     }
     if (!reason.value.trim()) {
-      error.value = "复核必须写明依据，不能只点一个按钮";
+      error.value = tr("复核必须写明依据，不能只点一个按钮", "A review must state its basis; clicking a button alone is not enough");
       return false;
     }
     busy.value = true;
@@ -248,7 +253,7 @@ export function useExposureReview(deps: ExposureReviewDeps) {
       if (!currentAction(ticket)) return false;
       conflict.value = false;
       error.value = "";
-      deps.notify("success", `已按 r${revision.value} 记录复核结论：${status}`);
+      deps.notify("success", tr(`已按 r${revision.value} 记录复核结论：${status}`, `Review decision recorded against r${revision.value}: ${status}`));
       reason.value = "";
       await load();
       return true;
@@ -258,9 +263,9 @@ export function useExposureReview(deps: ExposureReviewDeps) {
       error.value = text;
       if (/队列已前进|revision|版本/.test(text)) {
         conflict.value = true;
-        deps.notify("error", "队列已经变化，本次复核没有写入；请重新读取后再判断");
+        deps.notify("error", tr("队列已经变化，本次复核没有写入；请重新读取后再判断", "The queue has changed and this review was not written; reload before deciding"));
       } else {
-        deps.notify("error", `复核失败：${text}`);
+        deps.notify("error", tr(`复核失败：${text}`, `Review failed: ${text}`));
       }
       return false;
     } finally {
@@ -278,7 +283,7 @@ export function useExposureReview(deps: ExposureReviewDeps) {
     if (!projectId || !findingId || !deps.api.saveExposureRemediation || busy.value || !actionable()) return false;
     const ticket = identity;
     if (!actor.value.trim() || !remediationNote.value.trim()) {
-      error.value = "整改必须写明操作者与说明";
+      error.value = tr("整改必须写明操作者与说明", "Remediation must name the operator and include a note");
       return false;
     }
     busy.value = true;
@@ -293,14 +298,15 @@ export function useExposureReview(deps: ExposureReviewDeps) {
         "fixing",
       );
       if (!currentAction(ticket)) return false;
-      deps.notify("success", `整改已绑定线索 ${findingId} 与观察 ${latestObservationId.value ?? "无"}`);
+      const observation = latestObservationId.value ?? tr("无", "none");
+      deps.notify("success", tr(`整改已绑定线索 ${findingId} 与观察 ${observation}`, `Remediation bound to lead ${findingId} and observation ${observation}`));
       if (id) await load();
       return true;
     } catch (reason) {
       if (!currentAction(ticket)) return false;
       const text = exposureErrorText(reason);
       error.value = text;
-      deps.notify("error", `整改登记失败：${text}`);
+      deps.notify("error", tr(`整改登记失败：${text}`, `Failed to record remediation: ${text}`));
       return false;
     } finally {
       if (currentAction(ticket)) busy.value = false;
@@ -313,21 +319,21 @@ export function useExposureReview(deps: ExposureReviewDeps) {
     if (!projectId || !target || target.findingId !== deps.findingId() || !deps.api.startExposureRetest || busy.value || !actionable()) return false;
     const ticket = identity;
     if (!available.value) {
-      error.value = "复测接口尚未注册";
+      error.value = tr("复测接口尚未注册", "The re-probe API is not registered yet");
       return false;
     }
     busy.value = true;
     try {
       const runId = await deps.api.startExposureRetest(projectId, target.id);
       if (!currentAction(ticket)) return false;
-      deps.notify("info", `复测另起第 ${runId} 轮，旧观察按原样保留`);
+      deps.notify("info", tr(`复测另起第 ${runId} 轮，旧观察按原样保留`, `Re-probe started as round ${runId}; earlier observations are kept as they are`));
       await load();
       return true;
     } catch (reason) {
       if (!currentAction(ticket)) return false;
       const text = exposureErrorText(reason);
       error.value = text;
-      deps.notify("error", `复测启动被拒绝：${text}`);
+      deps.notify("error", tr(`复测启动被拒绝：${text}`, `Re-probe start refused: ${text}`));
       return false;
     } finally {
       if (currentAction(ticket)) busy.value = false;
@@ -340,7 +346,7 @@ export function useExposureReview(deps: ExposureReviewDeps) {
     if (!projectId || !target || target.findingId !== deps.findingId() || !deps.api.markExposureRemediation || busy.value || !actionable()) return false;
     const ticket = identity;
     if (!actor.value.trim()) {
-      error.value = "变更整改状态必须写明操作者";
+      error.value = tr("变更整改状态必须写明操作者", "Changing the remediation status requires the operator");
       return false;
     }
     busy.value = true;
@@ -354,14 +360,14 @@ export function useExposureReview(deps: ExposureReviewDeps) {
       );
       if (!currentAction(ticket)) return false;
       outcome.value = result as ExposureRetestOutcome;
-      deps.notify("success", status === "closed" ? "整改已按复测依据关闭" : "整改已驳回，理由进入轨迹");
+      deps.notify("success", status === "closed" ? tr("整改已按复测依据关闭", "Remediation closed on the re-probe basis") : tr("整改已驳回，理由进入轨迹", "Remediation rejected; the reason is recorded in the trail"));
       await load();
       return true;
     } catch (reason) {
       if (!currentAction(ticket)) return false;
       const text = exposureErrorText(reason);
       error.value = text;
-      deps.notify("error", `整改状态未改变：${text}`);
+      deps.notify("error", tr(`整改状态未改变：${text}`, `Remediation status unchanged: ${text}`));
       return false;
     } finally {
       if (currentAction(ticket)) busy.value = false;

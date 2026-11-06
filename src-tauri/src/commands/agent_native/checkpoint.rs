@@ -91,6 +91,18 @@ fn note_transport_cancel(context: &AgentRunContext, client: &AgentModelClient) {
 }
 
 fn persistence_stop(context: &AgentRunContext, error: String) -> AgentTargetOutcome {
+    // A transient lock OR a transient budget-reservation collision (no capacity /
+    // stale lease right now) means the write/reservation never committed — nothing
+    // was written and nothing was charged — so this is not a real persistence
+    // failure and must not hard-stop the executor and discard gathered recon. Keep
+    // it recoverable so the attempt can resume, same as the bootstrap-lock degrade.
+    if crate::db::is_transient_contention(&error) {
+        append_runner_log(
+            &context.log_path,
+            &format!("本地写入遇瞬时争用（锁/预留），按可恢复处理（不丢证据、不判死）：{error}"),
+        );
+        return AgentTargetOutcome::incomplete(format!("persistence_contention_retryable:{error}"));
+    }
     append_runner_log(
         &context.log_path,
         &format!("本地记录写入失败，已停止后续模型与目标请求：{error}"),
@@ -108,10 +120,21 @@ fn persistence_stop(context: &AgentRunContext, error: String) -> AgentTargetOutc
 fn agent_tool_terminal_outcome(view: &JsonValue) -> Option<AgentTargetOutcome> {
     let code = view.get("code").and_then(JsonValue::as_str)?;
     let outcome = match code {
-        "evidence_write_failed" | "finding_persist_failed" => AgentTargetOutcome::persistence_failure(format!(
-            "本地记录失败，已停止以避免重复消耗（{}）；已占用请求不退回，先核对执行日志，不自动重放",
-            value_first(view, &["error"]),
-        )),
+        "evidence_write_failed" | "finding_persist_failed" => {
+            let detail = value_first(view, &["error"]);
+            // A transient lock OR budget-reservation collision on an evidence/finding
+            // write committed nothing and charged nothing — keep it recoverable
+            // (preserving already-gathered recon) instead of a fatal stop. This is
+            // the exact path that was discarding a full scan's recon on a transient
+            // child_budget_reservation_exceeded_or_stale.
+            if crate::db::is_transient_contention(&detail) {
+                AgentTargetOutcome::incomplete(format!("persistence_contention_retryable:{detail}"))
+            } else {
+                AgentTargetOutcome::persistence_failure(format!(
+                    "本地记录失败，已停止以避免重复消耗（{detail}）；已占用请求不退回，先核对执行日志，不自动重放",
+                ))
+            }
+        }
         terminal_code::REQUEST_RECONCILIATION_REQUIRED => AgentTargetOutcome::Incomplete(AgentStop::new(
             terminal_code::REQUEST_RECONCILIATION_REQUIRED,
             "请求账本与执行结果需要人工核对，已停止此执行分支及后续请求；预算保留，不自动重放。请核对目标日志与本地证据，不能把未决请求视为成功或未发送；当前没有忽略未决结果后继续的入口",

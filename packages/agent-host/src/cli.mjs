@@ -11,13 +11,19 @@ if (args.includes('--runtime') && !['none', 'grok-acp'].includes(runtimeSelectio
   process.stderr.write('Expected --runtime none or --runtime grok-acp.\n'); process.exit(2);
 }
 const dataDir = resolve(option('--data-dir', './.oviraptor-agent-host'));
-const sessionToken = option('--session-token', randomBytes(32).toString('hex'));
+// The desktop sidecar passes its token on stdin so it never appears in argv.
+async function stdinLine() { let text = ''; for await (const chunk of process.stdin) { text += chunk; if (text.includes('\n')) break; } return text.split('\n')[0].trim(); }
+const sessionToken = args.includes('--session-token-stdin') ? await stdinLine() : option('--session-token', randomBytes(32).toString('hex'));
 if (typeof sessionToken !== 'string' || !/^[0-9a-f]{32,128}$/i.test(sessionToken)) {
   process.stderr.write('Expected --session-token as 32-128 hex characters.\n'); process.exit(2);
 }
 let host;
 const { GrokAcpRuntime } = await import('../../runtime-acp/index.mjs');
-const runtimeFactory = () => new GrokAcpRuntime({ cwd: dataDir, permissionPolicy: 'ask', onEvent: event => host?.runtimeEvent(event) });
+// The grok CLI keeps its own HOME/PATH for login, but must not inherit the
+// desktop bridge tokens or host session: per-session MCP servers carry their
+// own credentials, so the ACP subprocess needs none of the OVIRAPTOR_* vars.
+const acpEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('OVIRAPTOR_')));
+const runtimeFactory = () => new GrokAcpRuntime({ cwd: dataDir, env: acpEnv, permissionPolicy: 'ask', onEvent: event => host?.runtimeEvent(event) });
 host = new AgentHost({ dataDir, runtimeSelection, runtimeFactory });
 await host.ensureBundledApps();
 const web = await serveHost(host, { port: Number(option('--port', '0')), token: sessionToken, uiDir: fileURLToPath(new URL('../../agent-ui/dist/', import.meta.url)) });
@@ -27,4 +33,4 @@ for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, async () => {
   try { await host.close(); await web.close(); process.exitCode = 0; }
   catch { process.stderr.write('Active application work prevents clean shutdown.\n'); closing = false; }
 });
-process.stdout.write(`Oviraptor host: ${web.origin}\nSession: ${web.token}\nRuntime: ${host.settings().runtime.id === 'grok-acp' ? 'grok-acp (not connected until an explicit message)' : 'unconfigured (save-only chat)'}\n`);
+process.stdout.write(`Oviraptor host: ${web.origin}\nSession: ${web.token}\nOpen: ${web.origin}/#session=${web.token}\nRuntime: ${host.settings().runtime.id === 'grok-acp' ? 'grok-acp (not connected until an explicit message)' : 'unconfigured (save-only chat)'}\n`);

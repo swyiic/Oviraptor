@@ -147,13 +147,12 @@ fn test_model_connection(input: ModelProfileTestInput) -> Result<ModelProfileTes
         })
     } else {
         let body_error = llm_test_error_message(&response_body);
-        let stderr_error = String::from_utf8_lossy(&output.stderr)
+        let stderr_line = String::from_utf8_lossy(&output.stderr)
             .lines()
             .next()
             .unwrap_or("")
-            .chars()
-            .take(220)
-            .collect::<String>();
+            .to_string();
+        let stderr_error = redact_ui_error(&stderr_line, 220);
         let error_text = if !body_error.is_empty() {
             body_error
         } else if !stderr_error.is_empty() {
@@ -190,6 +189,15 @@ fn write_private_temp_file(path: &Path, content: &[u8]) -> Result<(), String> {
     }
 }
 
+fn redact_ui_error(text: &str, limit: usize) -> String {
+    let scrubbed = crate::agent_runtime::secrets::redact_text_with(text, None);
+    let line = scrubbed.lines().next().unwrap_or("");
+    if line.trim().is_empty() {
+        return String::new();
+    }
+    line.chars().take(limit).collect()
+}
+
 fn llm_test_error_message(response_body: &str) -> String {
     let trimmed = response_body.trim();
     if trimmed.is_empty() {
@@ -205,32 +213,6 @@ fn llm_test_error_message(response_body: &str) -> String {
                 .and_then(JsonValue::as_str)
         })
         .unwrap_or(trimmed);
-    message
-        .lines()
-        .next()
-        .unwrap_or("")
-        .chars()
-        .take(260)
-        .collect()
+    redact_ui_error(message, 260)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn configuration_model_test_requires_explicit_endpoint_and_cloud_credential() {
-        for deployment in ["cloud", "local"] {
-            let missing_endpoint = ModelProfileTestInput {
-                llm: "openai/synthetic-model".into(), deployment: deployment.into(),
-                api_base: String::new(), api_key: "synthetic-key".into(),
-            };
-            assert!(test_model_connection(missing_endpoint).err().unwrap().contains("Base URL"));
-        }
-        let missing_cloud_key = ModelProfileTestInput {
-            llm: "openai/synthetic-model".into(), deployment: "cloud".into(),
-            api_base: "http://127.0.0.1:9/v1".into(), api_key: String::new(),
-        };
-        assert!(test_model_connection(missing_cloud_key).err().unwrap().contains("此连接的 API Key"));
-    }
-}

@@ -1,9 +1,0 @@
-{
-  "url": "https://fixture.invalid",
-  "stage": "summary",
-  "summary": "聚合摘要：1 条 high、1 条 medium",
-  "counts": {
-    "findings": 2,
-    "endpoints": 2
-  }
-}

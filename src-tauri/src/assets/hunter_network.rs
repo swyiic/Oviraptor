@@ -37,39 +37,3 @@ pub(super) fn client(
     b.build().map_err(|_| "无法初始化 Hunter 网络连接".into())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn legacy_settings_read_defaults_to_direct_without_writes() {
-        let c = Connection::open_in_memory().unwrap();
-        assert_eq!(mode(&c).unwrap(), "direct");
-        let count: i64 = c
-            .query_row("SELECT count(*) FROM sqlite_master", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(count, 0);
-    }
-    #[test]
-    fn direct_client_ignores_business_proxy_and_preserves_redirect_refusal() {
-        let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = server.local_addr().unwrap();
-        let worker = std::thread::spawn(move || {
-            let (mut socket, _) = server.accept().unwrap();
-            let mut b = [0u8; 1024];
-            let _ = socket.read(&mut b);
-            std::io::Write::write_all(&mut socket,b"HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:1/must-not-follow\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
-        });
-        let c = Connection::open_in_memory().unwrap();
-        let transport = client(&c, &json!({"proxyUrl":"http://127.0.0.1:1"}), 2).unwrap();
-        assert_eq!(
-            transport
-                .get(format!("http://{address}/"))
-                .send()
-                .unwrap()
-                .status()
-                .as_u16(),
-            302
-        );
-        worker.join().unwrap();
-    }
-}

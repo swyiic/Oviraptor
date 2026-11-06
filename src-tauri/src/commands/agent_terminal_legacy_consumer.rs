@@ -28,9 +28,28 @@ fn record_agent_target_outcome_original(
         ),
     };
     let outcome = agent_outcome_from_reduction(outcome, published.as_ref());
-    #[cfg(test)]
-    original_terminal_legacy_test_pause();
     let reason = outcome.detail();
+    // §9.1/§9.3: classify this attempt's terminal code into a gate tier and log
+    // it to the inert agent timeline (执行概览). RECORDING ONLY — it changes
+    // nothing about `outcome`, `published`, or what the pipeline does next, and
+    // it runs here, AFTER the sealed single-projection boundary has committed,
+    // on its own connection (never inside that authorizer-locked transaction).
+    // All errors are swallowed so the terminal path can never fail on it.
+    {
+        let terminal_signal = published
+            .as_ref()
+            .map(|reduction| reduction.code.clone())
+            .unwrap_or_else(|| outcome.terminal_code().to_string());
+        if let Ok(timeline_db) = db::open(db_path) {
+            let _ = crate::scanning::stage_adjudicator::adjudicate_and_record(
+                &timeline_db,
+                scan_id,
+                original.attempt_number,
+                "attempt_terminal",
+                &terminal_signal,
+            );
+        }
+    }
     let mut next_tally = tally.clone();
     if published.is_none() && matches!(outcome, AgentTargetOutcome::Cancelled) {
         // A yielded Single has a saved financial boundary and no resume grant.

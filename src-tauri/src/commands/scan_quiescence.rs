@@ -6,17 +6,30 @@ fn claim_scan_quiescence_in(
 ) -> Result<Vec<NativeInvocationOwner>, String> {
     claim_scan_quiescence_with_source_parents(connection,db_path,scan_id,None)
 }
-fn claim_scan_quiescence_with_source_parents(
-    connection:&rusqlite::Connection,db_path:&Path,scan_id:&str,
-    mut parents:Option<&mut crate::agent_runtime::deleted_scan_audit::OriginalSourceParents>,
-)->Result<Vec<NativeInvocationOwner>,String> {
-    if connection.is_autocommit() { return Err("scan_quiescence_requires_transaction".into()); }
+
+/// A live local process, or an analyzer container whose cleanup was never
+/// confirmed, means the scan is not dead. This is the one quiescence fact the
+/// operator force-reconciliation path cannot waive: unlike the per-attempt
+/// clean-exit *proof* (which a crash never writes), a running process would be
+/// actively touching the rows we are about to delete. Checked inside the same
+/// IMMEDIATE transaction as the deletion so the answer cannot change under us.
+pub(crate) fn require_no_live_process_in(
+    connection: &rusqlite::Connection, scan_id: &str,
+) -> Result<(), String> {
     let unresolved: bool = connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM sentinel_processes WHERE scan_id=?1)
          OR EXISTS(SELECT 1 FROM analyzer_container_receipts WHERE scan_id=?1 AND cleanup_status<>'confirmed')",
         [scan_id], |r|r.get(0),
     ).map_err(|_| "scan_quiescence_cleanup_lookup_failed")?;
     if unresolved { return Err("scan_quiescence_cleanup_unconfirmed".into()); }
+    Ok(())
+}
+fn claim_scan_quiescence_with_source_parents(
+    connection:&rusqlite::Connection,db_path:&Path,scan_id:&str,
+    mut parents:Option<&mut crate::agent_runtime::deleted_scan_audit::OriginalSourceParents>,
+)->Result<Vec<NativeInvocationOwner>,String> {
+    if connection.is_autocommit() { return Err("scan_quiescence_requires_transaction".into()); }
+    require_no_live_process_in(connection, scan_id)?;
     let mut attempts = connection.prepare(
         "SELECT attempt_count FROM sentinel_scans WHERE id=?1
          UNION SELECT attempt_number FROM native_scan_branches WHERE scan_id=?1
@@ -223,6 +236,7 @@ fn request_sentinel_pause(db_path: &Path, scan_id: &str) -> Result<i64,String> {
     let valid:bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sentinel_scans WHERE id=?1 AND attempt_count=?2 AND status='pausing' AND current_checkpoint=?3)",params![scan_id,attempt,checkpoint],|r|r.get(0)).map_err(|e|e.to_string())?;
     if changed!=1 || !valid || scan_pause_preservation_hash(&tx,scan_id,attempt)?!=before { return Err("scan_pause_request_not_persisted".into()); }
     tx.commit().map_err(|e|format!("scan_pause_request_commit_unconfirmed:{e}"))?;
+    scan_detail_store::mirror_status(db_path, scan_id);
     Ok(attempt)
 }
 
@@ -299,6 +313,8 @@ fn publish_sentinel_pause_in(tx: &rusqlite::Transaction<'_>, scan_id: &str, atte
     if changed!=1 || !valid || scan_pause_preservation_hash(tx,scan_id,attempt)?!=before {
         return Err("scan_pause_postcondition".into());
     }
+    // Status is already paused on this attempt. Bookkeeping does not pause again.
+    task_binding::promote_completed_pause(tx, scan_id, attempt)?;
     Ok(())
 }
 

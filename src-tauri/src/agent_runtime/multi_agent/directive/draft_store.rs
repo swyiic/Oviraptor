@@ -4,37 +4,9 @@ use super::{
     source_guidance, HumanDirectiveDraft,
 };
 use crate::agent_runtime::secrets::redact_text_with;
-#[cfg(test)]
-use rusqlite::TransactionBehavior;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::json;
 
-#[cfg(test)]
-#[allow(clippy::too_many_arguments)]
-pub fn create_draft(
-    connection: &Connection,
-    scan_id: &str,
-    attempt_number: i64,
-    root_run_id: &str,
-    target_key: &str,
-    recipient_role: &str,
-    text: &str,
-    bound_lease_epoch: i64,
-    bound_fencing_token: &str,
-) -> Result<HumanDirectiveDraft, String> {
-    create_draft_in_thread(
-        connection,
-        scan_id,
-        attempt_number,
-        root_run_id,
-        target_key,
-        recipient_role,
-        text,
-        "team",
-        bound_lease_epoch,
-        bound_fencing_token,
-    )
-}
 
 pub(super) fn validate_thread_key(
     connection: &Connection,
@@ -63,40 +35,6 @@ pub(super) fn validate_thread_key(
     }
 }
 
-#[cfg(test)]
-#[allow(clippy::too_many_arguments)]
-pub fn create_draft_in_thread(
-    connection: &Connection,
-    scan_id: &str,
-    attempt_number: i64,
-    root_run_id: &str,
-    target_key: &str,
-    recipient_role: &str,
-    text: &str,
-    thread_key: &str,
-    bound_lease_epoch: i64,
-    bound_fencing_token: &str,
-) -> Result<HumanDirectiveDraft, String> {
-    let transaction =
-        rusqlite::Transaction::new_unchecked(connection, TransactionBehavior::Immediate)
-            .map_err(|error| format!("无法锁定用户指令草案：{error}"))?;
-    let draft = create_draft_in_transaction(
-        &transaction,
-        scan_id,
-        attempt_number,
-        root_run_id,
-        target_key,
-        recipient_role,
-        text,
-        thread_key,
-        bound_lease_epoch,
-        bound_fencing_token,
-    )?;
-    transaction
-        .commit()
-        .map_err(|error| format!("无法提交用户指令草案：{error}"))?;
-    Ok(draft)
-}
 
 /// Caller resolves the recipient inside this same write transaction, before
 /// drafting. Neither another target nor a new attempt can race the binding.

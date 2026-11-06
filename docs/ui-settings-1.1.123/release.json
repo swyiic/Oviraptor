@@ -1,0 +1,37 @@
+{
+  "version": "1.1.123",
+  "platform": "macos-arm64",
+  "artifact": "/Users/swyiic/Desktop/Rust/Oviraptor/src-tauri/target/release/bundle/Oviraptor-1.1.123-macos-arm64.zip",
+  "bytes": 31130548,
+  "sha256": "2f5ed7bfc87f0b7cfee2249162014865072e9a36c3797a07afabceeb684086eb",
+  "frontendTypecheckAndBuild": "passed",
+  "nativeReleaseBuild": "passed",
+  "adHocCodesignDeepStrict": "passed",
+  "notarized": false,
+  "embeddedCurrentEntryChunks": [
+    "index-jSHz6G11.js",
+    "index-DxHSyFWx.js"
+  ],
+  "archiveCRC": "passed",
+  "archiveEntries": 172,
+  "archiveFilesCompared": 125,
+  "hostDistribution": {
+    "version": "1.1.123",
+    "files": 118
+  },
+  "fingerprints": {
+    "packs": 3,
+    "uniqueIDs": 832,
+    "sourceAndBundleByteIdentical": true
+  },
+  "sourceSHA256": {
+    "src/features/configuration/sections/ConfigDataPermissionsSection.vue": "71a49a8970b4e01fef26e78d725823380509463d8994e38a684df408802a0647",
+    "src/features/agentHost/components/AgentPermissionMode.vue": "c3ec47602a73dcd10f6201931edde9ed4cc50fb3a0cd84f549c4245dcc2c955b",
+    "src/features/runtime/components/WorkerSettingsPanel.vue": "6c6946ee2ede17fbbc34eb5bf69184b3cf941676f003e0bc81200e4368476f96"
+  },
+  "boundaries": {
+    "installedOrLaunchedNewApp": false,
+    "realDatabaseOrCASAccessed": false,
+    "liveWorkerVerification": false
+  }
+}

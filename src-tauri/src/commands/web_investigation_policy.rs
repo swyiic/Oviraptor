@@ -89,7 +89,11 @@ fn build_web_investigation_policy(
     }))
 }
 
-fn web_capability_manifest(_settings: &JsonValue, identity_count: usize) -> JsonValue {
+fn web_capability_manifest(
+    _settings: &JsonValue,
+    identity_count: usize,
+    controlled_write_authorized: bool,
+) -> JsonValue {
     serde_json::json!({
         "browserRuntime": {"available": true, "reason": "内置 CDP 运行时采集"},
         "identityDifferential": {
@@ -113,9 +117,20 @@ fn web_capability_manifest(_settings: &JsonValue, identity_count: usize) -> Json
             "reason": "需要原 worker、预算、业务状态和清理合同；当前未开放并发发送"
         },
         "controlledWrite": {
-            "available": false,
-            "mode": "contract_gated",
-            "reason": "需要冻结写入与清理义务并接入 Broker；当前未开放"
+            // Gated on the scan's deliberate per-task high-risk authorization
+            // (target_write class + the operator's legal-authorization
+            // attestation), not hardcoded closed. When the operator has
+            // authorized target_write, controlled, reversible writes are
+            // sanctioned so the executor's active probes (e.g. the read-only
+            // SQL-injection differential) are consistent with the required-active
+            // -coverage directive instead of contradicting it.
+            "available": controlled_write_authorized,
+            "mode": if controlled_write_authorized { "operator_authorized" } else { "contract_gated" },
+            "reason": if controlled_write_authorized {
+                "操作者已对该任务授权 target_write 高危写入能力（附法律授权声明）；可逆、非破坏的受控写入已获许可，不可逆/破坏性动作仍逐次人工批准"
+            } else {
+                "需要任务开启 target_write 高危能力授权（含法律授权声明）；当前未授权"
+            }
         },
         "attackChainCorrelation": {
             "available": true,
@@ -156,12 +171,27 @@ fn web_policy_skill_ids(
     policy: &JsonValue,
 ) -> Result<Vec<i64>, String> {
     let mut ids = Vec::new();
-    if let Ok(id) = connection.query_row(
-        "SELECT id FROM agent_skills WHERE enabled=1 AND builtin=1 AND name='业务前端深度分析' ORDER BY id LIMIT 1",
-        [],
-        |row| row.get::<_, i64>(0),
-    ) {
-        ids.push(id);
+    // Always inject the shipped web playbooks plus the imported security skill
+    // packages when present and enabled, so the executor carries the full
+    // technique base on every web scan — not only when a user hand-picks them in
+    // the skill selector. Previously only '业务前端深度分析' was auto-injected, so
+    // the secknowledge / src-bounty knowledge stayed dormant unless selected.
+    // Each lookup is best-effort: a skill that is missing (packages are per-install
+    // imports) or disabled is simply skipped, and the user can still add more via
+    // selectedSkillIds below.
+    for name in [
+        "业务前端深度分析",
+        "web-deep-attack-supplement",
+        "secknowledge-skill",
+        "src-bounty-skill",
+    ] {
+        if let Ok(id) = connection.query_row(
+            "SELECT id FROM agent_skills WHERE enabled=1 AND name=?1 ORDER BY id LIMIT 1",
+            [name],
+            |row| row.get::<_, i64>(0),
+        ) {
+            ids.push(id);
+        }
     }
     if let Some(selected) = policy.get("selectedSkillIds").and_then(JsonValue::as_array) {
         for id in selected.iter().filter_map(JsonValue::as_i64) {
@@ -186,13 +216,24 @@ fn effective_web_policy(
     connection: &rusqlite::Connection,
     policy: &JsonValue,
     settings: &JsonValue,
+    scan_id: &str,
+    attempt: i64,
 ) -> Result<(JsonValue, String, String), String> {
     for (key,min,max) in [("maxModelRequests",1,96),("maxModelTokens",512,2_000_000)] {
         if let Some(value)=policy.get(key){if !value.as_i64().is_some_and(|v|(min..=max).contains(&v)){return Err("web_model_limits_invalid".into());}}
     }
     let mode = normalized_web_scan_mode(policy.get("webModeCeiling").and_then(JsonValue::as_str));
     let identity_count = investigation_strings(policy.get("authSessionIds")).len();
-    let capabilities = web_capability_manifest(settings, identity_count);
+    // The capability manifest reflects the scan's own high-risk authorization,
+    // read from the immutable scan_capability_authorizations row so both the web
+    // pipeline and the source-runtime re-derivation compute an identical policy
+    // (source_runtime_policy_mismatch depends on this equality). Fail-closed: any
+    // read error leaves controlled writes unauthorized.
+    let controlled_write_authorized = matches!(
+        scan_capability_class_authorized(connection, scan_id, attempt, "target_write"),
+        Ok(true)
+    );
+    let capabilities = web_capability_manifest(settings, identity_count, controlled_write_authorized);
     let skill_ids = web_policy_skill_ids(connection, policy)?;
     let (skill_names, skill_instructions) = agent_skill_instructions(connection, &skill_ids)?;
     let mut effective = policy.clone();
@@ -271,9 +312,11 @@ Use the authoritative execution packet appended by Oviraptor before making any r
 
 This task uses {mode} mode. Process stable eligible contracts in descending value order, up to {contract_limit} contracts for this attempt. Continue after an exhausted or no-finding branch until the cap, budget, coverage queue or a hard stop is reached. Use at most {verifier_limit} verifier agents and partition contracts between them; never let multiple agents repeat the same endpoint and hypothesis. Deep mode may correlate evidence into attack chains, but every link must remain independently evidenced. Perform up to {discovery_passes} targeted fallback discovery passes only when the coverage ledger shows an untested high-value business surface; derive words from observed business routes and never recursively brute-force unrelated paths.
 
+Active attack coverage is REQUIRED, not optional. For every discovered API endpoint or form that accepts parameters, actively probe the applicable attack families — do not merely observe them: SQL injection with `probe_sql_injection` on each injectable parameter; command injection with `probe_command_execution` where a value may reach a system call; access control / IDOR by replaying an authorized request with another identity's object id and diffing the responses; file upload by submitting a crafted file to an upload endpoint; SSRF with `replay_http` plus an OAST callback where a parameter takes a URL. Never mark injection_sqli, injection_command, ssrf, access_control_idor or file_upload as covered without an actual probe and its request/response differential, and never call finish_target while any of these families is still untested on a discovered parameterized endpoint. A single passive header observation (for example a CORS header) does not count as covering these families.
+
 The execution packet may include `investigation.manualDeepDive`. These are deterministic coverage gaps, not suspected vulnerabilities and not new autonomous discovery tasks. After completing the automatic contracts, preserve up to three highest-priority rows as human follow-up: state the observed evidence, missing prerequisite, concrete manual steps and stop condition. Never turn a missing identity, untriggered function or unavailable environment into a security finding or a claim that the surface passed.
 
-Read-only and non-destructive contract actions are automatically authorized and require no per-request operator approval. Controlled writes are allowed only when capabilities.controlledWrite.available is true, the contract defines cleanup and rollback, and the exact endpoint and attempt count are bounded. Never perform irreversible deletion, financial settlement, external messaging, persistent account/permission changes or denial of service. Treat routine 401/403 as boundary evidence and continue other in-scope contracts. Stop active requests on confirmed WAF/bot challenge/CAPTCHA, sustained 429, or homogeneous blocking; ordinary no-difference and exhausted branches are completion states, not reasons to pause the whole task.
+Read-only and non-destructive contract actions are automatically authorized and require no per-request operator approval. Controlled writes are allowed only when capabilities.controlledWrite.available is true, the contract defines cleanup and rollback, and the exact endpoint and attempt count are bounded. Never perform irreversible deletion, financial settlement, external messaging, persistent account/permission changes or denial of service. Treat routine 401/403 as boundary evidence and continue other in-scope contracts. On a WAF/bot challenge/CAPTCHA, first attempt in-scope, non-destructive bypass before conceding: for a WAF try XFF/forwarded-for and other source headers, case/encoding mutation, parameter pollution, and a raw origin-IP direct connection; for a CAPTCHA check whether it is front-end-only, reusable or non-expiring, OCR-recognizable, or has a predictable slide/click key. Only after repeated bypass attempts fail and the block is confirmed hard and persistent do you stop with confirmed_waf_or_challenge. Never perform denial of service or any destructive/irreversible action. Sustained 429 or homogeneous blocking still stop; ordinary no-difference and exhausted branches are completion states, not reasons to pause the whole task.
 
 Read the mounted `src-capabilities.json` for the target-specific Rust-native adapter commands and runtime OAST state. Invoke only the exact manifest command when an eligible contract requires it; do not rewrite the adapter command or widen its target. Use OAST-dependent SSRF/XXE/blind validation only when its `oast.available` is true; after sending the exact callback URL, poll `oast.pollUrl` at least twice within the contract timeout and do not wait more than 15 seconds. The built-in raw HTTP and race adapters require no package installation, but remain limited to eligible evidence contracts; race writes require cleanup and a reversible business invariant. For a runtime-unreachable capability, record `not_tested` with the network or evidence prerequisite instead of guessing, silently skipping, or claiming the surface passed.
 
@@ -324,13 +367,15 @@ Execution plan ({mode}): use the authoritative execution packet appended by Ovir
 
 Process eligible contracts by score, at most {contract_limit}; use at most {verifier_limit} non-overlapping verifiers. For each contract perform one control request and only the bounded comparison required by its evidence contract. Read-only checks are automatically authorized. A controlled write is allowed only when the capability manifest permits it and the exact contract includes cleanup, rollback and an attempt cap. Never perform irreversible deletion, real settlement, external messaging, persistent account/permission changes or denial of service.
 
+Active attack coverage is required: for each discovered parameterized endpoint, actively probe the attack families with their tools — SQLi via probe_sql_injection, command injection via probe_command_execution, IDOR/access-control by replaying with another identity's id and diffing, file upload by a crafted upload, SSRF via replay_http + OAST. Do not mark injection_sqli/injection_command/ssrf/access_control_idor/file_upload covered without a real probe differential, and do not finish_target while any is untested on a parameterized endpoint; a passive header observation is not coverage.
+
 Identity testing requires the same method, URL, request shape and business-object context from isolated A/B sessions with distinct authentication material and complete responses on both sides. Status-only or one-sided differences are not authorization findings. Anonymous scans must not invent account state. Treat ordinary 401/403 as boundary evidence and continue other contracts.
 
 If no eligible hypothesis exists but standard investigation is allowed, validate only the strongest observed business API or exact source-mapped GET/HEAD, record its status and response structure, then close the target as bounded-complete. A targeted fallback pass is allowed only for an explicit high-value coverage gap, at most {discovery_passes} pass(es), using observed business terms and no recursive brute force. Telemetry, static assets, frontend routes, UNKNOWN methods and string-only URL combinations are not formal APIs.
 
 `investigation.manualDeepDive` is a deterministic list of coverage gaps, not vulnerabilities. Do not spend a model turn rediscovering it. Preserve the highest-priority rows in the final coverage summary with observed evidence, missing prerequisite, concise manual steps and stop condition. Never call an untriggered or untested surface safe.
 
-Use the built-in adapter only through commands declared in `src-capabilities.json`. OAST-dependent conclusions require `oast.available=true` and observed callbacks; otherwise record the missing prerequisite as not tested. Stop active requests on a confirmed WAF/bot challenge/CAPTCHA, sustained 429 or homogeneous blocking. No difference, no finding and an exhausted bounded branch are completion states, not reasons to pause or request another run.
+Use the built-in adapter only through commands declared in `src-capabilities.json`. OAST-dependent conclusions require `oast.available=true` and observed callbacks; otherwise record the missing prerequisite as not tested. On a WAF/bot challenge/CAPTCHA, first attempt in-scope, non-destructive bypass (WAF: XFF/source headers, case/encoding mutation, raw origin-IP; CAPTCHA: front-end-only, reuse/non-expiry, OCR, predictable key) and only stop with confirmed_waf_or_challenge after repeated attempts fail on a hard persistent block; never perform DoS or destructive actions. Sustained 429 or homogeneous blocking still stop. No difference, no finding and an exhausted bounded branch are completion states, not reasons to pause or request another run.
 
 Keep intermediate prose brief. The root agent must finish by calling `finish_scan` exactly once; never return a prose-only final answer. Keep every `finish_scan` field concise: tested function and endpoint, control/test evidence, impact or normal/exhausted result, untested prerequisite, cost/stop reason, and the single highest-value remaining manual lead. A confirmed finding also needs PoC, scope, CVSS/CWE and remediation.
 

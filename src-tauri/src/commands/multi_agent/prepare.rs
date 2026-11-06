@@ -1,11 +1,3 @@
-#[cfg(test)]
-fn multi_agent_prepare(context:&mut AgentRunContext)->Result<MultiAgentSession,String> {
-    let root=context.run.as_ref().ok_or("multi_agent_root_run_missing")?.run_id.clone();
-    if native_frozen_web_root_mode(context)?!=crate::agent_runtime::web_mode::WebMode::Multi {return Err("multi_agent_requires_frozen_multi_root".into());}
-    let owner=crate::agent_runtime::multi_agent::parent_invocation_owner::ParentInvocationOwner::claim(
-        &context.db_path,&context.scan_id,context.attempt_number,&root)?;
-    multi_agent_prepare_owned(context,owner)
-}
 
 fn multi_agent_prepare_owned(context:&mut AgentRunContext,owner:crate::agent_runtime::multi_agent::parent_invocation_owner::ParentInvocationOwner)->Result<MultiAgentSession,String> {
     use crate::agent_runtime::{

@@ -83,45 +83,30 @@ pub(super) fn record_with_provenance(
             &owner.attempt,
         );
     }
-    let mut known = reported
-        && usage.input_tokens.checked_add(usage.output_tokens) == Some(usage.total_tokens)
-        && estimate.is_none_or(|held| usage.total_tokens <= held);
-    let aggregate_limit: Option<i64> = tx
-        .query_row(
-            "SELECT hard_limit FROM agent_budget_limits
-        WHERE root_run_id=?1 AND dimension='model_input_tokens'",
-            [&lease.root_run_id],
-            |r| r.get(0),
-        )
-        .map_err(|e| e.to_string())?;
-    if aggregate_limit.is_some() {
-        let held = owner.initial_tokens(tx)?;
-        let prior = owner
-            .balance(tx, "model_input_tokens")?
-            .consumed
-            .checked_add(owner.balance(tx, "model_output_tokens")?.consumed)
-            .ok_or("budget_counter_overflow")?;
-        if prior
-            .checked_add(usage.total_tokens)
-            .is_none_or(|n| n > held)
-        {
-            known = false;
-        }
-    }
+    // A provider-reported, internally consistent cost is KNOWN, and is billed as
+    // the actual cost even when it exceeds this child's default per-call token
+    // grant — in total OR in a single class. That grant is a reservation hint for
+    // admission, not the spending authority: the real ceiling is the Root hard
+    // limit, enforced on every ledger append below (`budget_hard_limit_exceeded`),
+    // and a class overrun is funded by reserving the extra from the Root budget
+    // just before it is consumed. Children such as external_surface hold a small
+    // grant (e.g. 2000 tokens) yet legitimately spend more on a real page, so
+    // forfeiting the overrun to an indeterminate balance wedged the whole branch
+    // on `budget_indeterminate_requires_reconciliation`. Only an unreported or
+    // self-inconsistent usage now stays unknown (and is forfeited against the
+    // held estimate); a reported overrun is settled elastically within the Root
+    // budget, mirroring the Root tick's own v3 actual-cost path.
+    let known = reported
+        && usage.input_tokens.checked_add(usage.output_tokens) == Some(usage.total_tokens);
     let mut reserved = [0; 4];
     for (index, dimension) in DIMENSIONS[..4].iter().enumerate() {
         reserved[index] = owner.balance(tx, dimension)?.reserved;
-        if index < 3 && values[index] > reserved[index] {
-            let limit:Option<i64>=tx.query_row("SELECT hard_limit FROM agent_budget_limits WHERE root_run_id=?1 AND dimension=?2",
-                params![lease.root_run_id,dimension],|r|r.get(0)).map_err(|e|e.to_string())?;
-            if limit.is_some() {
-                known = false;
-            }
-        }
     }
-    // A finite overrun cannot be hidden by rejecting the provider receipt.
-    // Keep the available estimate indeterminate until explicit reconciliation.
     for (index, dimension) in DIMENSIONS[..4].iter().enumerate() {
+        // Fund a reported class overrun from the Root budget before consuming it.
+        // The reserve append is itself bounded by the Root hard limit, so this
+        // cannot spend past the frozen ceiling; beyond it the append fails
+        // cleanly as `budget_hard_limit_exceeded` rather than wedging as unknown.
         if known && index < 3 && values[index] > reserved[index] {
             owner.append(
                 tx,

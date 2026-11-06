@@ -360,6 +360,3 @@ pub(crate) fn status_on(db_path: &Path) -> Result<Value, String> {
     )
 }
 
-#[cfg(test)]
-#[path = "ownership_service_tests.rs"]
-mod tests;

@@ -6,26 +6,8 @@ use super::{
     fact_refs_current, UserDirective,
 };
 use rusqlite::{params, OptionalExtension};
-#[cfg(test)]
-use rusqlite::{Connection, TransactionBehavior};
 
 // Storage-only test wrapper. Live collection uses the original-parent transaction.
-#[cfg(test)]
-pub fn claim_pending_directives(
-    connection: &Connection,
-    lease: &CoordinatorLease,
-    limit: i64,
-) -> Result<Vec<UserDirective>, String> {
-    validate_coordinator_lease(connection, lease)?;
-    let transaction =
-        rusqlite::Transaction::new_unchecked(connection, TransactionBehavior::Immediate)
-            .map_err(|error| format!("无法锁定用户指令：{error}"))?;
-    let directives = claim_pending_in_transaction(&transaction, lease, limit)?;
-    transaction
-        .commit()
-        .map_err(|error| format!("无法提交用户指令 claim：{error}"))?;
-    Ok(directives)
-}
 
 pub(super) fn claim_pending_in_transaction(
     transaction: &rusqlite::Transaction<'_>,
@@ -182,24 +164,6 @@ pub(super) fn claim_pending_in_transaction(
     Ok(directives)
 }
 
-#[cfg(test)]
-pub fn transition_directive(
-    connection: &Connection,
-    lease: &CoordinatorLease,
-    id: &str,
-    from: &str,
-    to: &str,
-) -> Result<(), String> {
-    // Validate under the same write lock as the transition: a lease can be
-    // replaced while this connection waits for another SQLite writer.
-    let transaction =
-        rusqlite::Transaction::new_unchecked(connection, TransactionBehavior::Immediate)
-            .map_err(|error| format!("无法锁定用户指令状态：{error}"))?;
-    transition_directive_in_transaction(&transaction, lease, id, from, to)?;
-    transaction
-        .commit()
-        .map_err(|error| format!("无法提交用户指令状态：{error}"))
-}
 
 pub(super) fn transition_directive_in_transaction(
     transaction: &rusqlite::Transaction<'_>,

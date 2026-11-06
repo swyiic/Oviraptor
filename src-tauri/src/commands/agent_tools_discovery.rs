@@ -1,3 +1,100 @@
+fn path_segment_ok(word: &str) -> bool {
+    let mut chars = word.chars();
+    let Some(first) = chars.next() else { return false };
+    first.is_ascii_alphanumeric()
+        && word.len() >= 3
+        && word.len() <= 64
+        && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+}
+
+fn naming_seeds(evidence: &JsonValue, target_url: &str) -> Vec<String> {
+    let mut seeds = Vec::new();
+    if let Ok(url) = reqwest::Url::parse(target_url) {
+        if let Some(host) = url.host_str() {
+            for label in host.split('.') {
+                if label.len() >= 2 && !matches!(label, "www" | "com" | "cn" | "net" | "org") {
+                    seeds.push(label.to_string());
+                }
+            }
+        }
+    }
+    for pointer in ["/apiCandidates", "/routeCandidates", "/businessEntrypoints", "/opportunities", "/investigation/apis", "/investigation/actions"] {
+        let Some(items) = evidence.pointer(pointer).and_then(JsonValue::as_array) else { continue };
+        for item in items {
+            for key in ["path", "url", "endpoint", "name", "text"] {
+                if let Some(value) = item.get(key).and_then(JsonValue::as_str) {
+                    let trimmed = value.trim();
+                    if (3..=80).contains(&trimmed.chars().count()) {
+                        seeds.push(trimmed.to_string());
+                    }
+                }
+            }
+        }
+    }
+    seeds.sort();
+    seeds.dedup();
+    seeds.truncate(30);
+    seeds
+}
+
+fn naming_model_text(profile: &GatewayProfile, prompt: &str) -> Result<String, String> {
+    let body = serde_json::json!({
+        "model": profile.model,
+        "messages": [
+            {"role":"system","content":"你只把给定的域名或接口名改写成路径段。只输出 JSON {\"paths\":[\"...\"]}。不要发明与这些名字无关的目录。"},
+            {"role":"user","content":prompt}
+        ],
+        "temperature": 0.1,
+        "max_tokens": 400,
+        "stream": false
+    });
+    let request_body = serde_json::to_vec(&body).map_err(|error| error.to_string())?;
+    let mut request = TransportRequest::post(&profile.endpoint, request_body).header("content-type", "application/json");
+    if let Some(bearer) = profile.bearer() {
+        request = request.header("authorization", format!("Bearer {bearer}"));
+    }
+    request.total_timeout = Some(Duration::from_secs(30));
+    request.proxy = profile.proxy.clone();
+    request.reject_redirects = crate::agent_host_sidecar::is_model_bridge_endpoint(&profile.endpoint);
+    let response = transport::send(request, std::sync::Arc::new(|| false), Box::new(|_| true)).map_err(|error| match error {
+        TransportError::Setup(message)
+        | TransportError::Network(message)
+        | TransportError::Timeout(message)
+        | TransportError::Interrupted(message) => message,
+        TransportError::Cancelled(_) => "naming_model_cancelled".into(),
+    })?;
+    if !(200..300).contains(&response.status) {
+        return Err("naming_model_http".into());
+    }
+    let parsed: JsonValue = serde_json::from_slice(&response.body).map_err(|error| error.to_string())?;
+    match parsed.pointer("/choices/0/message/content") {
+        Some(JsonValue::String(value)) if !value.trim().is_empty() => Ok(value.clone()),
+        _ => Err("naming_model_empty".into()),
+    }
+}
+
+fn expand_naming_paths(connection: &rusqlite::Connection, seeds: &[String]) -> Vec<String> {
+    if seeds.is_empty() {
+        return Vec::new();
+    }
+    let Ok(profile) = crate::model_configuration::gateway_profile_on(connection, None) else {
+        return Vec::new();
+    };
+    let prompt = format!(
+        "这些名字来自已授权目标的域名或已观察到的接口/页面名：{}。只把它们改写成路径段：拼音、中文首字母、英文单词。不要发明无关目录，不要解释。只输出 JSON：{{\"paths\":[\"...\"]}}",
+        seeds.join(" | ")
+    );
+    let Ok(text) = naming_model_text(&profile, &prompt) else {
+        return Vec::new();
+    };
+    let Some(start) = text.find('{') else { return Vec::new() };
+    let Some(end) = text.rfind('}') else { return Vec::new() };
+    let Ok(value) = serde_json::from_str::<JsonValue>(&text[start..=end]) else { return Vec::new() };
+    value.get("paths").and_then(JsonValue::as_array).map(|rows| {
+        rows.iter().filter_map(JsonValue::as_str).map(|word| word.trim().trim_matches('/').to_ascii_lowercase()).filter(|word| path_segment_ok(word)).take(24).collect()
+    }).unwrap_or_default()
+}
+
 fn agent_tool_targeted_discovery(
     context: &AgentRunContext,
     runtime: &mut AgentToolRuntime,
@@ -41,10 +138,26 @@ fn agent_tool_targeted_discovery(
         }
         accepted.push(cleaned);
     }
+    if let Ok(connection) = db::open(&context.db_path) {
+        let seeds = naming_seeds(&context.evidence, &context.target_url);
+        for word in expand_naming_paths(&connection, &seeds) {
+            if !accepted.contains(&word) {
+                accepted.push(word);
+            }
+        }
+        if !seeds.is_empty() {
+            record_pending_observation(
+                &connection,
+                &context.scan_id,
+                "路径命名习惯",
+                &format!("由这些域名或接口名改写路径，待复核：{}", seeds.join(" | ")),
+            );
+        }
+    }
     if accepted.is_empty() {
         return serde_json::json!({
             "status": "insufficient_evidence",
-            "reason": "词表必须来自同源链接、表单、JS 调用点、已观察业务词、产品路由或本地知识库",
+            "reason": "没有可探测的路径。需要证据里的业务词，或云端模型能根据域名和接口名改写出拼音、首字母、英文路径",
             "rejected": rejected,
         });
     }
@@ -124,4 +237,17 @@ fn agent_tool_targeted_discovery(
         "skippedNoise": noise.iter().take(12).collect::<Vec<_>>(),
         "note": "UNKNOWN method、遥测、图片、字体、埋点、广告、Sentry、设备指纹和静态资源不会进入正式 API",
     })
+}
+
+#[cfg(test)]
+mod naming_path_tests {
+    use super::path_segment_ok;
+
+    #[test]
+    fn accepts_pinyin_and_initials_only() {
+        assert!(path_segment_ok("yonghuguanli"));
+        assert!(path_segment_ok("yhgl"));
+        assert!(!path_segment_ok("../etc"));
+        assert!(!path_segment_ok("用户"));
+    }
 }

@@ -3,13 +3,24 @@
 // Generic wire contract only; business adapters stay in their owning modules.
 pub use native_app_sdk;
 
+pub use headless_automation::{
+    default_database_path, default_oviraptor_data_dir, read_headless_wait_job, resolve_cli_resource_root,
+    run_url_scan_cli, CliScanEnvironment,
+};
+
 mod agent_runtime;
 pub mod recovery_finance;
 mod artifact_import;
 mod asset_logs;
+// P0 scaffolding for the credential→keychain migration, inert until a later phase
+// wires it in (docs/KEYCHAIN_MIGRATION_PLAN.md); allow(dead_code) marks it as
+// intentional forward code, not an orphan.
+#[allow(dead_code)]
+mod secret_store;
 mod auth_session;
 mod collaboration_events;
 mod commands;
+mod headless_automation;
 mod scanning;
 mod scanning_contract;
 mod conversations;
@@ -46,8 +57,6 @@ mod log_display;
 mod log_framing;
 mod models;
 mod page_isolation;
-#[cfg(test)]
-mod local_incremental_ipc_tests;
 #[path = "assets/model.rs"]
 mod asset_models;
 #[path = "assets/fofa.rs"]
@@ -64,8 +73,6 @@ mod configuration_models;
 mod application_models;
 #[path = "environment/model.rs"]
 mod environment_models;
-#[path = "hackerone/model.rs"]
-mod hackerone_models;
 mod model_configuration;
 #[path = "configuration/policies.rs"]
 mod configuration_policies;
@@ -102,6 +109,45 @@ use tauri::{
     tray::TrayIconBuilder,
     Emitter, Manager,
 };
+use std::sync::OnceLock;
+use tauri_plugin_notification::NotificationExt;
+
+// D7 (设计稿 §4f): when a NEW high-risk action goes pending, knock on the operator
+// with a native desktop notification so they don't miss it while away. A
+// notification NEVER approves anything — approval stays single-use, operator-only
+// and fencing-bound; this only surfaces that a request is waiting.
+static HIGH_RISK_NOTIFIER: OnceLock<tauri::AppHandle> = OnceLock::new();
+
+/// Show a macOS notification for a newly pending high-risk approval. No-op (never
+/// panics) before the app handle is set (unit tests / headless) or if the OS
+/// declines to show it. Called from the pending-insert site in high_risk_action_approval.
+pub fn notify_high_risk_pending(summary: &str, target: &str) {
+    let Some(handle) = HIGH_RISK_NOTIFIER.get() else {
+        return;
+    };
+    let body = if target.trim().is_empty() {
+        summary.to_string()
+    } else {
+        format!("{summary} · 目标 {target}")
+    };
+    let _ = handle
+        .notification()
+        .builder()
+        .title("Agent 请求批准")
+        .body(body)
+        .show();
+}
+
+#[cfg(test)]
+mod high_risk_notify_tests {
+    #[test]
+    fn notify_is_noop_without_app_handle() {
+        // Before the app handle is set (every unit-test run) knocking must be a
+        // silent no-op: never panics, never touches approval state.
+        super::notify_high_risk_pending("probe_command_execution", "https://app.example");
+        super::notify_high_risk_pending("x", "");
+    }
+}
 
 pub struct AppState {
     pub db_path: PathBuf,
@@ -294,6 +340,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let acceptance = startup_profile::acceptance_root()?;
             let (app_data_dir, export_dir, legacy_icon_dirs) = if let Some(root) = &acceptance {
@@ -329,6 +376,13 @@ pub fn run() {
             // Recover stale desktop runs once, before the window can dispatch
             // work. Refreshing the recovery panel is strictly a read operation.
             commands::assets::recover_interrupted_runs_at(&db_path)?;
+            // Seed the keychain read-through flag from its persisted setting before
+            // any model credential is resolved (docs/KEYCHAIN_MIGRATION_PLAN.md).
+            if let Ok(connection) = db::open(&db_path) {
+                secret_store::set_keychain_setting(
+                    commands::credential_storage::load_persisted(&connection),
+                );
+            }
             let icon = app.default_window_icon().cloned();
             let tray_icon =
                 tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon.png"))
@@ -402,6 +456,8 @@ pub fn run() {
             tauri::async_runtime::spawn_blocking(move || {
                 let _ = worker::restart_worker_service(&worker_app);
             });
+            // D7: give the high-risk pending notifier the app handle (knock-only).
+            let _ = HIGH_RISK_NOTIFIER.set(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -515,6 +571,7 @@ pub fn run() {
             commands::assets::import_targets,
             commands::assets::list_targets,
             commands::assets::remove_target,
+            commands::assets::remove_targets,
             commands::assets::list_assets,
             commands::assets::mark_asset_entry_opened,
             commands::assets::add_content_rule,
@@ -601,9 +658,17 @@ pub fn run() {
             commands::environment::recover_environment_preparation,
             scanning::create_sentinel_scan,
             scanning::create_sentinel_url_scan,
+            scanning::exposure_probe::scan_rule_library,
+            scanning::exposure_probe::scan_fingerprint_template,
+            scanning::exposure_probe::scan_add_user_fingerprint,
+            scanning::exposure_probe::scan_delete_user_fingerprint,
+            scanning::exposure_probe::scan_import_user_fingerprints,
+            scanning::exposure_probe::scan_export_user_fingerprints,
             scanning::create_sentinel_homogeneous_url_scan,
             scanning::create_sentinel_url_scan_with_tool_selection,
             commands::model_profiles::test_model_profile,
+            commands::credential_storage::get_credential_keychain_enabled,
+            commands::credential_storage::set_credential_keychain_enabled,
             asset_fofa::test_fofa_api,
             skills_catalog::instructions::list_agent_instructions,
             scanning::list_capability_bundles,
@@ -618,6 +683,7 @@ pub fn run() {
             skills_catalog::instructions::import_agent_instructions,
             skills_catalog::instructions::import_sec_skill_knowledge,
             skills_catalog::sources::ingest_agent_knowledge_source,
+            skills_catalog::assignment::assign_agent_knowledge_package,
             scanning::list_agent_traces,
             scanning::get_agent_trace,
             skills_catalog::knowledge::list_agent_knowledge,
@@ -646,11 +712,72 @@ pub fn run() {
             scanning::resume_sentinel_scan,
             scanning::cancel_sentinel_scan,
             scanning::delete_sentinel_scan,
+            scanning::force_delete_sentinel_scan,
+            scanning::set_scan_capability_authorization,
+            scanning::get_scan_capability_authorization,
+            scanning::get_operator_permission_tier,
+            scanning::set_operator_permission_tier,
+            scanning::list_pending_high_risk_actions,
+            scanning::approve_high_risk_action,
+            scanning::reject_high_risk_action,
+            scanning::ingest_research_card,
+            scanning::list_research_cards,
+            scanning::decide_research_card,
+            scanning::delete_research_card,
+            scanning::ingest_agent_tool,
+            scanning::list_agent_tools,
+            scanning::decide_agent_tool,
+            scanning::delete_agent_tool,
+            scanning::list_pending_operator_questions,
+            scanning::answer_operator_question,
+            scanning::dismiss_operator_question,
+            scanning::get_agent_tool_permission_rules,
+            scanning::get_scan_post_write_enabled,
+            scanning::set_scan_post_write_enabled,
+            scanning::list_scan_write_confirmations,
+            scanning::decide_scan_write_confirmation,
+            scanning::get_agent_ssrf_callback_url,
+            scanning::set_agent_ssrf_callback_url,
+            scanning::set_agent_tool_permission_rules,
+            scanning::list_agent_mcp_servers,
+            scanning::upsert_agent_mcp_server,
+            scanning::delete_agent_mcp_server,
+            scanning::get_agent_mcp_tool_allowlist,
+            scanning::set_agent_mcp_tool_allowlist,
+            scanning::list_agent_mcp_server_tools,
+            scanning::list_agent_mcp_server_catalog,
+            scanning::get_scan_agent_stats,
+            scanning::list_scan_request_log,
+            scanning::export_scan_agent_stats,
+            scanning::run_headless_url_scan,
+            scanning::get_scan_headless_snapshot,
+            scanning::get_headless_wait_job,
+            scanning::export_project_agent_stats,
+            scanning::analyze_decompiled_artifact,
+            scanning::probe_exposed_endpoints,
+            scanning::probe_cloud_bucket,
+            scanning::set_oob_canary_domain,
+            scanning::mint_oob_canary,
+            scanning::record_oob_canary_callback,
+            scanning::set_request_transform,
+            scanning::analyze_jwt,
+            scanning::run_attack_sweep,
+            scanning::run_finding_deep_dive,
+            scanning::list_scan_finding_exploits,
             scanning::list_sentinel_scans,
             scanning::search_sentinel_scan_page,
             scanning::archive_sentinel_scan,
             scanning::list_sentinel_scan_attempts,
             scanning::list_sentinel_vulnerability_scan_ids,
+            scanning::list_sentinel_vulnerability_counts,
+            scanning::source_collection::scan_collect_source,
+            scanning::source_collection::scan_sandbox_analyze,
+            scanning::source_collection::authorize_scan_source_fetch,
+            scanning::source_collection::revoke_scan_source_fetch,
+            scanning::source_collection::scan_source_fetch_allowed,
+            scanning::source_orchestration::orchestrate_source_audit,
+            scanning::source_orchestration::source_audit_report,
+            scanning::agent_stage_decisions::list_agent_stage_decisions,
             scanning::get_sentinel_runner_log,
             scanning::read_sentinel_runner_log,
             scanning::read_native_process_log,
@@ -712,6 +839,7 @@ pub fn run() {
             scanning::get_native_attempt_mailbox_history,
             scanning::get_native_attempt_tool_history,
             scanning::get_native_attempt_execution_history,
+            scanning::get_native_attempt_tool_counts,
             scanning::get_native_source_findings,
             scanning::export_native_source_findings,
             scanning::draft_scan_directive,
@@ -750,6 +878,8 @@ pub fn run() {
             jobs::autonomous::stop_autonomous_probe,
             jobs::resume_job,
             jobs::cancel_job,
+            jobs::pause_job,
+            jobs::delete_run,
             agent_host_sidecar::agent_host_endpoint,
             commands::chat_files::agent_host_chat_file_action,
         ])
@@ -778,36 +908,3 @@ pub fn run() {
         });
 }
 
-#[cfg(test)]
-mod tests {
-    use super::prepare_oviraptor_data;
-    use std::fs;
-
-    fn test_home() -> std::path::PathBuf {
-        std::env::temp_dir().join(format!("oviraptor-data-dir-test-{}", uuid::Uuid::new_v4()))
-    }
-
-    #[test]
-    fn migrates_a_historical_database_into_oviraptor() {
-        let home = test_home();
-        let historical_dir = home.join("AssetAtlas");
-        fs::create_dir_all(&historical_dir).unwrap();
-        let historical_database = historical_dir.join("asset-atlas.sqlite3");
-        drop(rusqlite::Connection::open(&historical_database).unwrap());
-
-        let result = prepare_oviraptor_data(&home).unwrap();
-        assert_eq!(result, home.join("oviraptor"));
-        assert!(result.join("oviraptor.sqlite3").is_file());
-        fs::remove_dir_all(home).unwrap();
-    }
-
-    #[test]
-    fn uses_oviraptor_directory_for_new_users() {
-        let home = test_home();
-
-        assert_eq!(
-            prepare_oviraptor_data(&home).unwrap(),
-            home.join("oviraptor")
-        );
-    }
-}

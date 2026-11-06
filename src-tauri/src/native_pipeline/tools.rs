@@ -111,24 +111,6 @@ pub struct SourceBroker {
 impl SourceBroker {
     // Historical unit fixtures exercise the isolated broker without publication.
     // Production has no constructor that can grant the full provenance snapshot.
-    #[cfg(test)]
-    pub fn new(
-        snapshot: RepositorySnapshot,
-        scan_id: &str,
-        attempt_number: i64,
-        root_run_id: &str,
-        run_id: &str,
-        revision: i64,
-    ) -> Self {
-        Self::build(
-            snapshot,
-            scan_id,
-            attempt_number,
-            root_run_id,
-            run_id,
-            revision,
-        )
-    }
 
     fn build(
         snapshot: RepositorySnapshot,

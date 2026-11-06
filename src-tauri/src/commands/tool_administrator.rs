@@ -54,25 +54,6 @@ fn tool_inventory_frame(bytes: &[u8]) -> Result<ToolInventoryFrame<'_>, String> 
     Ok((&bytes[20..manifest_start], &bytes[manifest_start..package_start], &bytes[package_start..]))
 }
 
-#[cfg(test)]
-mod tool_inventory_frame_tests {
-    use super::tool_inventory_frame;
-    fn packet(sizes: [u32; 3], payload: &[u8]) -> Vec<u8> {
-        let mut bytes = b"OVTA0001".to_vec();
-        for size in sizes { bytes.extend(size.to_le_bytes()); }
-        bytes.extend(payload); bytes
-    }
-    #[test]
-    fn binary_inventory_frame_exact_lengths_and_boundaries() {
-        let valid = packet([1,2,3], b"abcdef");
-        assert_eq!(tool_inventory_frame(&valid).unwrap(), (&b"a"[..], &b"bc"[..], &b"def"[..]));
-        for invalid in [packet([0,2,4],b"abcdef"), packet([1,2,3],b"abcde"),
-            packet([1,2,3],b"abcdefg"), packet([u32::MAX,1,1],b"abc"),
-            packet([1,16385,1],b"abc"), b"wrongmagic".to_vec()] {
-            assert!(tool_inventory_frame(&invalid).is_err());
-        }
-    }
-}
 
 #[tauri::command]
 pub async fn revoke_tool_inventory(

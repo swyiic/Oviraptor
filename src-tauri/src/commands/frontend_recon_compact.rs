@@ -395,7 +395,7 @@ fn frontend_packet_budget(settings: &JsonValue, deployment: &str) -> usize {
     }
 }
 
-fn compact_ai_fallback(target: &JsonValue) -> JsonValue {
+fn compact_ai_fallback(target: &JsonValue, max_slice_reads: i64, max_cumulative_slice_chars: i64) -> JsonValue {
     let Some(value) = target.get("aiFallback").filter(|value| {
         value
             .get("enabled")
@@ -446,10 +446,10 @@ fn compact_ai_fallback(target: &JsonValue) -> JsonValue {
         "enabled": !snippets.is_empty(),
         "framework": bounded_text(value, &["framework"], 80),
         "reason": bounded_text(value, &["reason"], 240),
-        "instructions": "Infer concrete request candidates from the previews first. Only when a specific dependency is missing, read frontend-code-index.json, choose dependency-definition/http-client slices before related network-call slices, and read at most three files under frontend-code-slices/. Never read every slice or request the complete minified bundle. Verify every inferred endpoint with a request/response tool. If two supplemental reads produce no verifiable candidate, stop static analysis and use the recommended runtime hook.",
+        "instructions": "Infer concrete request candidates from the previews first. Only when a specific dependency is missing, read frontend-code-index.json, choose dependency-definition/http-client slices before related network-call slices, and read at most the allowed number of files (see maxSliceReads) under frontend-code-slices/. Never read every slice or request the complete minified bundle. Verify every inferred endpoint with a request/response tool. If two supplemental reads produce no verifiable candidate, stop static analysis and use the recommended runtime hook.",
         "sliceIndexFile": if slice_index.is_empty() { "" } else { "frontend-code-index.json" },
-        "maxSliceReads": value.get("maxSliceReads").and_then(JsonValue::as_i64).unwrap_or(0).min(3),
-        "maxCumulativeSliceChars": value.get("maxCumulativeSliceChars").and_then(JsonValue::as_i64).unwrap_or(0).min(42_000),
+        "maxSliceReads": value.get("maxSliceReads").and_then(JsonValue::as_i64).filter(|n| *n > 0).unwrap_or(max_slice_reads).min(max_slice_reads),
+        "maxCumulativeSliceChars": value.get("maxCumulativeSliceChars").and_then(JsonValue::as_i64).filter(|n| *n > 0).unwrap_or(max_cumulative_slice_chars).min(max_cumulative_slice_chars),
         "sliceIndex": slice_index,
         "snippets": snippets,
     })
@@ -736,10 +736,16 @@ fn compact_frontend_evidence(
     let runtime_hook_recommended = runtime_hook_plan
         .as_object()
         .is_some_and(|plan| !plan.is_empty());
+    // Slice-read allowance: deep scans may pull more of a large/complex business
+    // frontend's code slices; other modes stay tighter. Both bounded. Upstream
+    // never set these fields (they resolved to 0 = slices effectively off), so a
+    // positive per-mode default both enables and widens the on-demand reads.
+    let (slice_reads_cap, slice_chars_cap) =
+        if route.mode == "deep" { (5i64, 96_000i64) } else { (3i64, 42_000i64) };
     let ai_fallback = if route.surface == "static_frontend" {
         serde_json::json!({})
     } else {
-        compact_ai_fallback(target)
+        compact_ai_fallback(target, slice_reads_cap, slice_chars_cap)
     };
     let stop_rule = if route.surface == "static_frontend" {
         "This is a static framework surface with no actionable API or business entry. Do not read frontend code slices. Use at most two narrowly scoped verification tools; if neither produces a new endpoint or distinct response, finish the target immediately."

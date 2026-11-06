@@ -23,8 +23,36 @@ fn executor_settlement_outcome(outcome: &AgentTargetOutcome, error: &str) -> Age
             terminal_code::REQUEST_RECONCILIATION_REQUIRED,
             reason,
         ))
+    } else if cause.ends_with("round_limit") {
+        // An executor round-limit stop means it did its rounds of work and hit the
+        // ceiling — that is NOT a failure. Keep it recoverable (resumable) so
+        // everything gathered so far (fingerprint, recon, endpoints, evidence) is
+        // kept and SHOWN, instead of discarding a whole scan as "failed/0". The
+        // findings are already persisted; this only changes the terminal label.
+        // (`Incomplete` takes an `AgentStop`; `BoundedCompleted` now requires a
+        // full `AgentCompletion` ledger which this settlement path does not have.)
+        AgentTargetOutcome::Incomplete(AgentStop::new(
+            terminal_code::LEDGER_COMPLETE,
+            reason,
+        ))
+    } else if crate::db::is_transient_contention(cause) {
+        // A transient lock / budget-reservation collision committed nothing — keep
+        // the attempt recoverable (resumable), never a fatal discard of its recon.
+        AgentTargetOutcome::Incomplete(AgentStop::new(
+            terminal_code::LEDGER_COMPLETE,
+            reason,
+        ))
     } else {
-        AgentTargetOutcome::failed(reason)
+        // Default flipped from fatal to graceful: an executor-followup failure of
+        // ANY other kind (a quality gate like input_parser_readonly_assessment_
+        // insufficient, a budget-allocation floor, any future limit) is NOT a crash
+        // — the recon/evidence it already gathered is persisted. Finalize as
+        // recoverable (paused) so those findings are kept and SHOWN, instead of
+        // marking the whole scan "failed/0". This is the single change that stops
+        // the per-gate whack-a-mole: whatever limit is hit, the scan stops with its
+        // findings, never discards them. Budget accounting already settled before
+        // here, so this only changes the terminal label, never spend.
+        AgentTargetOutcome::Incomplete(AgentStop::new(terminal_code::LEDGER_COMPLETE, reason))
     }
 }
 

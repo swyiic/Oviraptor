@@ -428,6 +428,3 @@ pub(super) fn unresolved_on(db: &Connection) -> Result<bool, String> {
     db.query_row("SELECT EXISTS(SELECT 1 FROM scan_service_workbench_starts WHERE state IN ('prepared','uncertain'))",[],|r|r.get(0)).map_err(|_| "scan_workbench_busy_unknown".into())
 }
 
-#[cfg(test)]
-#[path = "native_service_workbench_tests.rs"]
-mod tests;

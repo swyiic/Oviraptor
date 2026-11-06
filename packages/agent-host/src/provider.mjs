@@ -29,9 +29,14 @@ import {
   exposureTaskIntent,
   scanningTaskIntent,
   scanningHandoffIntent,
+  scanPreflightBlock,
+  scanExcludedCapabilities,
+  scanControlFailure,
   normalizeAnswerMode,
   prefersResponsesApi,
   normalizeReasoningEffort,
+  scrubSecrets,
+  scrubbedModelText,
 } from './quality-prompt.mjs';
 import {
   emptyAgentState,
@@ -79,6 +84,13 @@ const isXaiOAuthEndpoint = (provider, baseUrl) => provider === 'xai' && String(b
 export function normalizeProviderModel(input = {}) {
   const out = { ...input };
   const model = String(out.model || '').trim();
+  // A catalog connection already names its provider and endpoint. Match the
+  // Rust gateway's wire model exactly; legacy preset inference must not route
+  // this connection or its credential to a different provider.
+  if (connectionReference(out.connectionRef)) {
+    out.model = model.replace(/^openai\//, '').trim();
+    return out;
+  }
   if (isDeepSeekModel(model)) {
     out.model = model.replace(/^(openai|deepseek)\//i, '');
     if (!out.baseUrl || isXaiBase(out.baseUrl)) {
@@ -108,6 +120,7 @@ function connectionReference(value) {
 }
 const sameReference = (left, right) => JSON.stringify(left || null) === JSON.stringify(right || null);
 export function validateProviderConfig(raw = {}) {
+  const binding = connectionReference(raw.connectionRef);
   const input = normalizeProviderModel(raw);
   const id = input.provider ?? 'xai';
   if (!Object.hasOwn(PROVIDERS, id)) throw hostError('host_provider_invalid');
@@ -115,13 +128,14 @@ export function validateProviderConfig(raw = {}) {
   let url;
   try { url = new URL(baseUrl); } catch { throw hostError('host_provider_base_url_invalid'); }
   if (url.username || url.password || url.search || url.hash) throw hostError('host_provider_base_url_invalid');
-  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback(url.hostname))) throw hostError('host_provider_base_url_invalid');
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && (binding || loopback(url.hostname)))) throw hostError('host_provider_base_url_invalid');
   const model = String(input.model || PROVIDERS[id].model).trim();
   if (!/^[A-Za-z0-9._:/-]{1,128}$/.test(model)) throw hostError('host_provider_model_invalid');
   let apiKey;
   if (input.apiKey !== undefined) {
     apiKey = String(input.apiKey).trim();
-    if (apiKey.length < 8 || apiKey.length > 512 || /[\s\0]/.test(apiKey)) throw hostError('host_provider_api_key_invalid');
+    if (binding ? !apiKey || /[\u0000-\u001f\u007f-\u009f]/.test(apiKey)
+      : apiKey.length < 8 || apiKey.length > 512 || /[\s\0]/.test(apiKey)) throw hostError('host_provider_api_key_invalid');
   }
   return { provider: id, baseUrl, model, ...(apiKey !== undefined ? { apiKey } : {}) };
 }
@@ -141,8 +155,10 @@ export class ProviderStore {
     const candidate = raw?.oauth?.accessToken ? raw.oauth : raw?.authentication === 'oauth' && raw.accessToken ? raw : null;
     const oauth = candidate ? {
       provider: 'xai', baseUrl: PROVIDERS.xai.baseUrl,
-      model: /^(?:xai\/)?grok/i.test(String(candidate.model || '')) ? String(candidate.model).replace(/^xai\//i, '') : PROVIDERS.xai.model,
+      model: connectionReference(candidate.connectionRef) ? String(candidate.model || '').trim()
+        : /^(?:xai\/)?grok/i.test(String(candidate.model || '')) ? String(candidate.model).replace(/^xai\//i, '') : PROVIDERS.xai.model,
       authentication: 'oauth', accessToken: String(candidate.accessToken),
+      connectionRef: connectionReference(candidate.connectionRef),
       ...(candidate.refreshToken ? { refreshToken: String(candidate.refreshToken) } : {}),
       ...(candidate.expiresAt ? { expiresAt: Number(candidate.expiresAt) } : {}),
       ...(candidate.tokenType ? { tokenType: String(candidate.tokenType) } : {}),
@@ -155,12 +171,31 @@ export class ProviderStore {
     if (!raw) return null;
     if (raw.authentication === 'oauth') return this.#savedCredentials(raw).oauth;
     const { keys: _keys, oauth: _oauth, accessToken: _access, refreshToken: _refresh, expiresAt: _expiry, tokenType: _tokenType, scope: _scope, ...value } = raw;
-    const normalized = normalizeProviderModel(value);
+    // New catalog writes already hold the Rust-compatible wire id. Reapplying
+    // prefix normalization would corrupt a real model named openai/custom.
+    const normalized = value.modelWireResolved === true && connectionReference(value.connectionRef)
+      ? value : normalizeProviderModel(value);
     if (normalized.provider === value.provider && normalized.baseUrl === value.baseUrl) return { ...value, model: normalized.model };
     // Repair a stale mismatched combo (e.g. xai + openai/deepseek-*): use the key saved for that endpoint.
     const slot = keySlot(normalized.provider, normalized.baseUrl);
     const apiKey = raw.keys?.[slot] || this.#envKey(normalized.baseUrl);
     return { ...value, provider: normalized.provider, baseUrl: normalized.baseUrl, model: normalized.model, authentication: apiKey ? 'api-key' : null, apiKey: apiKey || undefined };
+  }
+  /** Saved OAuth can serve another workload without changing the chat model. */
+  readOAuth() { return this.#savedCredentials(this.#raw()).oauth; }
+  /** Refresh only the same saved login; a logout/re-login wins over in-flight refresh. */
+  refreshOAuth(tokens, expectedAccessToken) {
+    const raw = this.#raw();
+    const { keys, oauth } = this.#savedCredentials(raw);
+    if (!oauth || oauth.accessToken !== expectedAccessToken) throw hostError('host_oauth_changed', 409);
+    const next = { ...oauth, accessToken: String(tokens.accessToken),
+      ...(tokens.refreshToken ? { refreshToken: String(tokens.refreshToken) } : {}),
+      ...(tokens.expiresAt ? { expiresAt: Number(tokens.expiresAt) } : {}),
+      ...(tokens.tokenType ? { tokenType: String(tokens.tokenType) } : {}),
+      ...(tokens.scope ? { scope: String(tokens.scope) } : {}) };
+    if (!tokens.accessToken) throw hostError('host_oauth_token_invalid');
+    this.#write(raw.authentication === 'oauth' ? { ...next, keys, oauth: next } : { ...raw, keys, oauth: next });
+    return next;
   }
   #envKey(baseUrl) {
     try { if (new URL(baseUrl).origin === DEEPSEEK_BASE_URL) return String(process.env.DEEPSEEK_API_KEY || '').trim() || undefined; } catch { /* no ambient credential for other endpoints */ }
@@ -195,7 +230,7 @@ export class ProviderStore {
     if (previous?.apiKey && previous.provider) keys[keySlot(previous.provider, previous.baseUrl)] ??= previous.apiKey;
     if (input.clearApiKey) delete keys[keySlot(next.provider, next.baseUrl)];
     if (input.authType === 'none' || (input.authType === undefined && sameEndpoint && previous.authentication === 'none' && next.apiKey === undefined)) {
-      this.#write({ provider: next.provider, baseUrl: next.baseUrl, model: next.model, authentication: 'none', connectionRef, keys, ...(oauth ? { oauth } : {}) });
+      this.#write({ provider: next.provider, baseUrl: next.baseUrl, model: next.model, authentication: 'none', connectionRef, ...(connectionRef ? { modelWireResolved: true } : {}), keys, ...(oauth ? { oauth } : {}) });
       return this.publicView();
     }
     // A different catalog connection cannot inherit another connection's key at the same URL.
@@ -210,34 +245,43 @@ export class ProviderStore {
       if (!next.apiKey) throw hostError('host_provider_api_key_required');
     }
     keys[keySlot(next.provider, next.baseUrl)] = next.apiKey;
-    const stored = { provider: next.provider, baseUrl: next.baseUrl, model: next.model, apiKey: next.apiKey, authentication: 'api-key', connectionRef, keys, ...(oauth ? { oauth } : {}) };
+    const stored = { provider: next.provider, baseUrl: next.baseUrl, model: next.model, apiKey: next.apiKey, authentication: 'api-key', connectionRef, ...(connectionRef ? { modelWireResolved: true } : {}), keys, ...(oauth ? { oauth } : {}) };
     this.#write(stored);
     return this.publicView();
   }
   /** Explicit authentication selection; ordinary model edits keep their auth. */
-  selectOAuth() {
+  selectOAuth(input = {}) {
     const { keys, oauth } = this.#savedCredentials(this.#raw());
     if (!oauth) throw hostError('host_oauth_not_configured');
-    this.#write({ ...oauth, keys, oauth });
+    const selected = validateProviderConfig({ provider: 'xai', baseUrl: PROVIDERS.xai.baseUrl, model: input.model || oauth.model, connectionRef: input.connectionRef ?? oauth.connectionRef });
+    if (!isXaiOAuthEndpoint(selected.provider, selected.baseUrl)) throw hostError('host_oauth_provider_invalid');
+    const next = { ...oauth, model: selected.model,
+      connectionRef: input.connectionRef === undefined ? oauth.connectionRef : connectionReference(input.connectionRef) };
+    this.#write({ ...next, keys, oauth: next });
     return this.publicView();
   }
   /** Persist OpenCode-compatible OAuth tokens (access + refresh). */
-  saveOAuth(tokens, { model, baseUrl, provider = 'xai' } = {}) {
+  saveOAuth(tokens, { model, baseUrl, provider = 'xai', select = true } = {}) {
     if (!tokens?.accessToken) throw hostError('host_oauth_token_invalid');
     if (provider !== 'xai' || (baseUrl && !isXaiOAuthEndpoint(provider, baseUrl))) throw hostError('host_oauth_provider_invalid');
-    const { keys, oauth } = this.#savedCredentials(this.#raw());
-    const selected = validateProviderConfig({ provider: 'xai', baseUrl: PROVIDERS.xai.baseUrl, model: model || oauth?.model || PROVIDERS.xai.model });
+    const raw = this.#raw();
+    const { keys, oauth } = this.#savedCredentials(raw);
+    const selected = !model && oauth?.connectionRef
+      ? { provider: 'xai', baseUrl: PROVIDERS.xai.baseUrl, model: oauth.model }
+      : validateProviderConfig({ provider: 'xai', baseUrl: PROVIDERS.xai.baseUrl, model: model || oauth?.model || PROVIDERS.xai.model, connectionRef: oauth?.connectionRef });
     if (!isXaiOAuthEndpoint(selected.provider, selected.baseUrl)) throw hostError('host_oauth_provider_invalid');
     const stored = {
       ...selected,
       authentication: 'oauth',
+      connectionRef: oauth?.connectionRef ?? null,
       accessToken: String(tokens.accessToken),
       ...(tokens.refreshToken || oauth?.refreshToken ? { refreshToken: String(tokens.refreshToken || oauth.refreshToken) } : {}),
       ...(tokens.expiresAt ? { expiresAt: Number(tokens.expiresAt) } : {}),
       ...(tokens.tokenType ? { tokenType: String(tokens.tokenType) } : {}),
       ...(tokens.scope ? { scope: String(tokens.scope) } : {}),
     };
-    this.#write({ ...stored, keys, oauth: stored });
+    this.#write(select || raw?.authentication === 'oauth' ? { ...stored, keys, oauth: stored }
+      : { ...(raw ?? { provider: 'xai', baseUrl: PROVIDERS.xai.baseUrl, model: selected.model, authentication: null }), keys, oauth: stored });
     return this.publicView();
   }
   /** Sign out of Grok without deleting independently configured API providers. */
@@ -270,17 +314,19 @@ export class ProviderStore {
       model: value.model,
       apiKeyConfigured: apiKey,
       oauthConfigured: oauth,
-      oauthSaved: Boolean(this.#savedCredentials(this.#raw()).oauth?.accessToken),
+      oauthSaved: Boolean(this.readOAuth()?.accessToken),
+      oauthModel: this.readOAuth()?.model,
       authentication: oauth ? 'oauth' : apiKey ? 'api-key' : value.authentication === 'none' ? 'none' : null,
       authType: oauth ? 'oauth' : apiKey ? 'api-key' : value.authentication === 'none' ? 'none' : null,
-      connectionRef: oauth ? null : connectionReference(value.connectionRef),
+      connectionRef: connectionReference(value.connectionRef),
       oauthAvailable: true,
       ...(oauth && value.expiresAt ? { oauthExpiresAt: value.expiresAt } : {}),
     };
   }
 }
 
-/** Truncate a tool result to a byte budget (head + tail) so both start and end stay readable. */
+/** Bound an authorized tool result (head + tail) without rewriting its values.
+ * Permission checks and owner-selected field projections happen before this channel. */
 export function truncateToolResult(value, maxBytes = MAX_TOOL_RESULT_BYTES) {
   const text = typeof value === 'string' ? value : JSON.stringify(value ?? null);
   const bytes = Buffer.from(text);
@@ -391,7 +437,8 @@ export async function runToolCalls(calls, execute, { maxBytes = MAX_TOOL_RESULT_
       } else {
         const receipt = toolFailureReceipt(outcome.reason, outcome.reason?.details?.operationId);
         const code = receipt.error;
-        results.set(call.id, { id: call.id, name: call.name, ok: false, content: JSON.stringify({ ...receipt, hint: strategyHint(code) }), code });
+        const cut = truncateToolResult({ ...receipt, hint: strategyHint(code) }, maxBytes);
+        results.set(call.id, { id: call.id, name: call.name, ok: false, content: cut.text, truncated: cut.truncated, code });
       }
     });
   }
@@ -418,6 +465,9 @@ export function extractDsmlToolCalls(raw) {
   return { text: text.replace(/\n{3,}/g, '\n\n').trim(), calls };
 }
 
+function permanentToolErrorCode(result) {
+  try { const err = JSON.parse(result?.content ?? '{}')?.error; return ['workspace_path_denied','workspace_fetch_host_denied','host_tool_permission_denied','host_tool_not_offered'].includes(err) ? err : null; } catch { return null; }
+}
 function executionSignature(call) {
   const canonical = (value, depth = 0) => {
     if (depth > 32) return '[depth-limit]';
@@ -451,7 +501,7 @@ function matchListedTool(name, tools) {
   return hits.length === 1 ? hits[0] : name;
 }
 
-const REFERENCE_READ_TOOLS = new Set(['workspace_list','workspace_read','skills_list','skills_read','skills_list_resources','skills_read_resource']);
+const REFERENCE_READ_TOOLS = new Set(['workspace_list','workspace_read','workspace_grep','workspace_glob','skills_list','skills_read','skills_list_resources','skills_read_resource']);
 const shortToolName = name => String(name ?? '').split(/::|__/).at(-1);
 const isProjectReadTool = name => isDataReadTool(name) || REFERENCE_READ_TOOLS.has(shortToolName(name));
 // A Host grant uses :: while MCP uses __ and provider names may be hashed.
@@ -487,6 +537,388 @@ function remainingPermissionOffer(offer, unavailable, attempted) {
   })};
 }
 
+/** Full refusal text is scrubbed, then clipped. A raw 240-character cut can keep a split secret. */
+function refusalExplanation(value) {
+  const full = typeof value === 'string' ? value : String(value ?? '');
+  return scrubbedModelText(full).slice(0, 240);
+}
+
+// Longest bounded match in scrubSecrets. `{8,}` and `{12,}` have no upper bound, so they do not raise this.
+// sk-/xai-/Bearer, assignment, auth-header, and secret-pair values are held until their own terminators.
+function modelSecretHold() {
+  let max = 0;
+  for (const match of String(scrubSecrets).matchAll(/\{(\d+)(?:,(\d*))?\}/g)) {
+    const bound = match[2] ? Number(match[2]) : Number(match[1]);
+    if (bound > max) max = bound;
+  }
+  return max;
+}
+
+const MODEL_SECRET_HOLD = modelSecretHold();
+
+// Bounded matches are ASCII. A trailing code point above ASCII cannot extend them.
+function secretTailCanGrow(text) {
+  return text.charCodeAt(text.length - 1) <= 0x7f;
+}
+
+// scrubSecrets: /\b(https?:\/\/)([^/\s@:]+:[^/\s@]+)@/i → '$1[redacted]@'
+// Hold only a suffix that can still reach that `@`. Replacement stays in scrubSecrets.
+const URL_USERINFO_USER = /[^/\s@:]/;
+const URL_USERINFO_PASS = /[^/\s@]/;
+const URL_USERINFO_SCHEMES = ['https://', 'http://'];
+
+function isAsciiWord(code) {
+  return (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122) || code === 95;
+}
+
+function wordBoundaryBefore(text, index) {
+  if (!isAsciiWord(text.charCodeAt(index))) return false;
+  if (index === 0) return true;
+  return !isAsciiWord(text.charCodeAt(index - 1));
+}
+
+function schemeLengthAt(text, index) {
+  const match = /^https?:\/\//i.exec(text.slice(index, index + 8));
+  return match ? match[0].length : 0;
+}
+
+function openUserinfoReachesEnd(text, start) {
+  let seenColon = false;
+  let username = 0;
+  for (let i = start; i < text.length; i += 1) {
+    const ch = text[i];
+    if (!seenColon) {
+      if (ch === ':') {
+        if (username < 1) return false;
+        seenColon = true;
+        continue;
+      }
+      if (!URL_USERINFO_USER.test(ch)) return false;
+      username += 1;
+      continue;
+    }
+    if (!URL_USERINFO_PASS.test(ch)) return false;
+  }
+  return true;
+}
+
+function trailingSchemePrefixLength(text) {
+  const max = Math.min(text.length, URL_USERINFO_SCHEMES[0].length);
+  let best = 0;
+  for (let len = 1; len <= max; len += 1) {
+    const suffix = text.slice(text.length - len);
+    const folded = suffix.toLowerCase();
+    if (folded.length !== len || !URL_USERINFO_SCHEMES.some(scheme => scheme.startsWith(folded))) continue;
+    if (!wordBoundaryBefore(text, text.length - len)) continue;
+    best = len;
+  }
+  return best;
+}
+
+function urlUserinfoHoldLength(text) {
+  if (!text) return 0;
+  for (let i = 0; i < text.length; i += 1) {
+    const code = text.charCodeAt(i);
+    if (code !== 72 && code !== 104) continue;
+    if (!wordBoundaryBefore(text, i)) continue;
+    const scheme = schemeLengthAt(text, i);
+    if (!scheme) continue;
+    if (openUserinfoReachesEnd(text, i + scheme)) return text.length - i;
+  }
+  return trailingSchemePrefixLength(text);
+}
+
+// scrubSecrets: /\b(access_token|refresh_token|api[_-]?key|client_secret)\s*[:=]\s*["']?[^\s"',;]{8,}/gi
+// → '$1=[redacted]'. Hold only a suffix that can still reach that terminator.
+// The value class has no upper bound and includes non-ASCII. Replacement stays in scrubSecrets.
+const ASSIGNMENT_KEYS = ['access_token', 'refresh_token', 'apikey', 'api_key', 'api-key', 'client_secret'];
+
+function foldedKeyAt(text, index, key) {
+  if (index + key.length > text.length) return false;
+  for (let i = 0; i < key.length; i += 1) {
+    let code = text.charCodeAt(index + i);
+    if (code >= 65 && code <= 90) code += 32;
+    if (code !== key.charCodeAt(i)) return false;
+  }
+  return true;
+}
+
+function openAssignmentReachesEnd(text, start) {
+  let matched = '';
+  for (const key of ASSIGNMENT_KEYS) {
+    if (key.length > matched.length && foldedKeyAt(text, start, key)) matched = key;
+  }
+  let i = start;
+  if (!matched) {
+    const rest = text.length - start;
+    return rest > 0 && ASSIGNMENT_KEYS.some(key => rest < key.length && foldedKeyAt(text, start, key.slice(0, rest)));
+  }
+  i = start + matched.length;
+  while (i < text.length && /\s/.test(text[i])) i += 1;
+  if (i >= text.length) return true;
+  if (text[i] !== ':' && text[i] !== '=') return false;
+  i += 1;
+  while (i < text.length && /\s/.test(text[i])) i += 1;
+  if (i >= text.length) return true;
+  if (text[i] === '"' || text[i] === "'") {
+    i += 1;
+    if (i >= text.length) return true;
+  }
+  for (; i < text.length; i += 1) {
+    if (/[\s"',;]/.test(text[i])) return false;
+  }
+  return true;
+}
+
+function assignmentHoldLength(text) {
+  if (!text) return 0;
+  for (let i = 0; i < text.length; i += 1) {
+    let code = text.charCodeAt(i);
+    if (code >= 65 && code <= 90) code += 32;
+    if (code !== 97 && code !== 99 && code !== 114) continue;
+    if (!wordBoundaryBefore(text, i)) continue;
+    if (!openAssignmentReachesEnd(text, i)) continue;
+    return text.length - i;
+  }
+  return 0;
+}
+
+// scrubSecrets → scrubHeaderValues. Needles are cookie:, set-cookie:, authorization:,
+// proxy-authorization:. One optional space or tab follows the colon. A quoted value
+// runs until the next `"`. An unquoted value runs until `\r`, `\n`, or `"`.
+// The value has no maximum and may be non-ASCII. Hold only a suffix that already has
+// the colon and has not reached that terminator. Incomplete names stay on the 64-character hold.
+const HEADER_NAMES = ['proxy-authorization', 'set-cookie', 'authorization', 'cookie'];
+
+function openHeaderReachesEnd(text, start) {
+  let matched = '';
+  for (const name of HEADER_NAMES) {
+    if (name.length > matched.length && foldedKeyAt(text, start, name)) matched = name;
+  }
+  if (!matched) return false;
+  let i = start + matched.length;
+  if (i >= text.length || text[i] !== ':') return false;
+  i += 1;
+  if (i >= text.length) return true;
+  if (text[i] === ' ' || text[i] === '\t') {
+    i += 1;
+    if (i >= text.length) return true;
+  }
+  if (text[i] === '"') {
+    for (let j = i + 1; j < text.length; j += 1) {
+      if (text[j] === '"') return false;
+    }
+    return true;
+  }
+  for (; i < text.length; i += 1) {
+    const ch = text[i];
+    if (ch === '\r' || ch === '\n' || ch === '"') return false;
+  }
+  return true;
+}
+
+function headerHoldLength(text) {
+  if (!text) return 0;
+  for (let i = 0; i < text.length; i += 1) {
+    let code = text.charCodeAt(i);
+    if (code >= 65 && code <= 90) code += 32;
+    if (code !== 97 && code !== 99 && code !== 112 && code !== 115) continue;
+    if (!openHeaderReachesEnd(text, i)) continue;
+    return text.length - i;
+  }
+  return 0;
+}
+
+// scrubSecrets → scrubSecretPairs. The value has no maximum and may be non-ASCII.
+// Quoted values run until `"`. Other values run until `&`, `;`, newline, space, comma,
+// quote, or brace. JSON containers are not pair values. Hold only a suffix whose key
+// is already a secret name, whose separator is present, and whose value is still open.
+const PAIR_KEY_SUFFIXES = ['apikey', 'apisecret', 'token', 'secret', 'password', 'passwd', 'pwd', 'cookie', 'credential', 'privatekey', 'sessionid', 'session', 'csrf', 'authorization', 'jwt'];
+
+function isPairKeyChar(ch) {
+  const code = ch.charCodeAt(0);
+  return (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122) || code === 95 || code === 46 || code === 45;
+}
+
+function isPairTerminator(ch) {
+  return ch === '&' || ch === ';' || ch === '\n' || ch === '\r' || ch === ' ' || ch === ',' || ch === '"' || ch === "'" || ch === '{' || ch === '}';
+}
+
+function isPairSecretName(name) {
+  const normalized = name.replace(/[_\-\s.]/g, '').toLowerCase();
+  if (!normalized) return false;
+  return PAIR_KEY_SUFFIXES.some(suffix => normalized === suffix || normalized.endsWith(suffix));
+}
+
+function pairKeyAt(text, sep) {
+  let end = sep;
+  if (end > 0 && (text[end - 1] === '"' || text[end - 1] === "'")) end -= 1;
+  let start = end;
+  while (start > 0 && isPairKeyChar(text[start - 1])) start -= 1;
+  if (start === end) return null;
+  return { start, key: text.slice(start, end) };
+}
+
+function pairJsonContainer(text, from) {
+  const value = text.slice(from).trimStart();
+  const opener = value[0];
+  const next = value.slice(1).trimStart()[0];
+  return (opener === '{' && (next === '"' || next === '}')) || (opener === '[' && (next === '"' || next === '{' || next === '[' || next === ']'));
+}
+
+function openPairHoldLength(text, sep) {
+  const found = pairKeyAt(text, sep);
+  if (!found || !isPairSecretName(found.key)) return 0;
+  if (pairJsonContainer(text, sep + 1)) return 0;
+  let at = sep + 1;
+  while (at < text.length && (text[at] === ' ' || text[at] === '\t')) at += 1;
+  if (at >= text.length) return text.length - found.start;
+  if (text[at] === '"') {
+    for (let i = at + 1; i < text.length; i += 1) {
+      if (text[i] === '"') return 0;
+    }
+    return text.length - found.start;
+  }
+  for (let i = at; i < text.length; i += 1) {
+    if (isPairTerminator(text[i])) return 0;
+  }
+  return text.length - found.start;
+}
+
+function secretPairHoldLength(text) {
+  if (!text) return 0;
+  let hold = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    if (text[i] !== '=' && text[i] !== ':') continue;
+    const pairHold = openPairHoldLength(text, i);
+    if (!(pairHold > hold)) continue;
+    hold = pairHold;
+    break;
+  }
+  return hold;
+}
+
+// scrubSecrets: /\b(sk-|xai-)[A-Za-z0-9_-]{8,}\b/g → '[redacted-key]'
+// scrubSecrets: /\bBearer\s+[A-Za-z0-9._~+/=-]{12,}/gi → 'Bearer [redacted]'
+// Neither value has an upper bound. A word boundary at the end of a chunk is not the
+// terminator: the class can still continue, and `-` is inside the sk-/xai- class.
+// Hold the open suffix until a character outside that class. Replacement stays in scrubSecrets.
+function prefixedKeyChar(code) {
+  return (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122) || code === 95 || code === 45;
+}
+
+function bearerValueChar(code) {
+  return prefixedKeyChar(code) || code === 46 || code === 126 || code === 43 || code === 47 || code === 61;
+}
+
+function prefixedKeyLength(text, start) {
+  if (text.startsWith('xai-', start)) return 4;
+  if (text.startsWith('sk-', start)) return 3;
+  return 0;
+}
+
+function openPrefixedKeyReachesEnd(text, start) {
+  const prefix = prefixedKeyLength(text, start);
+  if (!prefix) return false;
+  for (let i = start + prefix; i < text.length; i += 1) {
+    if (!prefixedKeyChar(text.charCodeAt(i))) return false;
+  }
+  return true;
+}
+
+function prefixedKeyHoldLength(text) {
+  if (!text) return 0;
+  for (let i = 0; i < text.length; i += 1) {
+    const code = text.charCodeAt(i);
+    if (code !== 115 && code !== 120) continue;
+    if (!wordBoundaryBefore(text, i)) continue;
+    if (!openPrefixedKeyReachesEnd(text, i)) continue;
+    return text.length - i;
+  }
+  return 0;
+}
+
+function openBearerReachesEnd(text, start) {
+  let i = start + 6;
+  if (i < text.length && isAsciiWord(text.charCodeAt(i))) return false;
+  if (i >= text.length) return true;
+  if (!/\s/.test(text[i])) return false;
+  while (i < text.length && /\s/.test(text[i])) i += 1;
+  for (; i < text.length; i += 1) {
+    if (!bearerValueChar(text.charCodeAt(i))) return false;
+  }
+  return true;
+}
+
+function bearerHoldLength(text) {
+  if (!text) return 0;
+  for (let i = 0; i < text.length; i += 1) {
+    const code = text.charCodeAt(i);
+    if (code !== 66 && code !== 98) continue;
+    if (!wordBoundaryBefore(text, i)) continue;
+    if (!foldedKeyAt(text, i, 'bearer')) continue;
+    if (!openBearerReachesEnd(text, i)) continue;
+    return text.length - i;
+  }
+  return 0;
+}
+
+function unboundedValueHoldLength(text) {
+  return Math.max(assignmentHoldLength(text), headerHoldLength(text), secretPairHoldLength(text), prefixedKeyHoldLength(text), bearerHoldLength(text));
+}
+
+function visibleModelDelta(scrubbed, raw) {
+  const text = scrubbed && String(scrubbed).trim()
+    ? scrubbed
+    : (!String(raw ?? '').trim() ? String(raw ?? '') : '');
+  return text;
+}
+
+// Prefix that can no longer grow. Bounded ASCII matches still hold MODEL_SECRET_HOLD.
+// URL userinfo holds its open suffix, which may be longer and non-ASCII, until `@`.
+// sk-/xai- and Bearer values hold their open suffix until a character outside the
+// class scrubSecrets already uses. Assignment, auth-header, and secret-pair values
+// hold their open suffix until the terminator scrubSecrets already uses. A tail that
+// can no longer be one of those is scrubbed.
+function splitHeldModelText(raw) {
+  if (!raw) return { emit: null, rest: '' };
+  let held = '';
+  let body = raw;
+  while (body) {
+    const hold = unboundedValueHoldLength(body);
+    if (!(hold > 0)) break;
+    if (hold >= body.length) return { emit: null, rest: raw };
+    held = `${body.slice(body.length - hold)}${held}`;
+    body = body.slice(0, body.length - hold);
+  }
+  const bounded = splitHeldBoundedText(body);
+  if (bounded.emit == null) return { emit: null, rest: raw };
+  return { emit: bounded.emit, emitRaw: bounded.emitRaw, rest: `${bounded.rest}${held}` };
+}
+
+function splitHeldBoundedText(raw) {
+  if (!raw) return { emit: null, rest: '' };
+  const asciiHold = MODEL_SECRET_HOLD > 0 && secretTailCanGrow(raw) ? MODEL_SECRET_HOLD : 0;
+  const hold = Math.max(asciiHold, urlUserinfoHoldLength(raw));
+  if (!(hold > 0)) {
+    return { emit: raw.trim() ? scrubbedModelText(raw) : '', emitRaw: raw, rest: '' };
+  }
+  if (raw.length <= hold) return { emit: null, rest: raw };
+  if (!raw.trim()) return { emit: '', emitRaw: raw.slice(0, -hold), rest: raw.slice(-hold) };
+  const scrubbed = scrubbedModelText(raw);
+  if (!scrubbed) return { emit: '', emitRaw: raw, rest: '' };
+  if (scrubbed === raw) return { emit: raw.slice(0, -hold), emitRaw: raw.slice(0, -hold), rest: raw.slice(-hold) };
+  let same = 0;
+  const cap = Math.min(hold, raw.length, scrubbed.length);
+  while (same < cap && raw.charCodeAt(raw.length - 1 - same) === scrubbed.charCodeAt(scrubbed.length - 1 - same)) same += 1;
+  if (same >= raw.length) return { emit: scrubbed, emitRaw: raw, rest: '' };
+  return {
+    emit: scrubbed.slice(0, scrubbed.length - same),
+    emitRaw: raw.slice(0, raw.length - same),
+    rest: raw.slice(raw.length - same),
+  };
+}
+
 /** Parse an OpenAI-compatible chat.completions SSE stream into text deltas and assembled tool calls. */
 export async function readChatStream(body, onText, onUsage = () => {}) {
   const decoder = new TextDecoder(); let buffer = '', raw = '', shown = '', finish = null, reasoning = '';
@@ -514,7 +946,7 @@ export async function readChatStream(body, onText, onUsage = () => {}) {
     const delta = choice.delta ?? {};
     if (delta.refusal) {
       const explanation = typeof delta.refusal === 'string' ? delta.refusal : String(delta.refusal.explanation || delta.refusal.reason || '');
-      refusal = { code: 'model_refusal', category: typeof delta.refusal === 'object' && delta.refusal.category ? String(delta.refusal.category).slice(0, 80) : 'model_refusal', explanation: explanation.slice(0, 240) };
+      refusal = { code: 'model_refusal', category: typeof delta.refusal === 'object' && delta.refusal.category ? String(delta.refusal.category).slice(0, 80) : 'model_refusal', explanation: refusalExplanation(explanation) };
       finish = 'refusal';
     }
     if (typeof delta.reasoning_content === 'string') {
@@ -596,7 +1028,7 @@ export async function readResponsesStream(body, onText, onUsage = () => {}) {
           arguments: typeof item.arguments === 'string' ? item.arguments : JSON.stringify(item.arguments ?? {}),
         });
       } else if (item.type === 'refusal') {
-        refusal = { code: 'model_refusal', category: 'model_refusal', explanation: String(item.refusal || item.content || '').slice(0, 240) };
+        refusal = { code: 'model_refusal', category: 'model_refusal', explanation: refusalExplanation(item.refusal || item.content || '') };
         finish = 'refusal';
         outputItems.push(item);
       } else if (item.type === 'reasoning' || item.encrypted_content || item.type === 'message') {
@@ -637,7 +1069,7 @@ export async function readResponsesStream(body, onText, onUsage = () => {}) {
         } else if (item.type === 'message') {
           for (const part of item.content ?? []) {
             if (part.type === 'refusal') {
-              refusal = { code: 'model_refusal', category: 'model_refusal', explanation: String(part.refusal || part.text || '').slice(0, 240) };
+              refusal = { code: 'model_refusal', category: 'model_refusal', explanation: refusalExplanation(part.refusal || part.text || '') };
               finish = 'refusal';
             } else if (part.type === 'output_text' && typeof part.text === 'string' && !text.includes(part.text)) {
               // Already streamed usually; only fill if empty
@@ -733,6 +1165,66 @@ function chatMessagesToResponsesInput(messages) {
 }
 
 /**
+ * Ids and type fields stay. Other strings use scrubbedModelText.
+ * An empty scrub is omitted. An item left with only that dropped secret is not replayed.
+ */
+function scrubReasoningNode(value, key) {
+  if (value == null || typeof value === 'number' || typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    if (key === 'id' || key === 'type') return value;
+    const scrubbed = scrubbedModelText(value);
+    return scrubbed ? scrubbed : undefined;
+  }
+  if (Array.isArray(value)) {
+    const next = [];
+    for (const entry of value) {
+      const scrubbed = scrubReasoningNode(entry);
+      if (scrubbed !== undefined) next.push(scrubbed);
+    }
+    return next.length || !value.length ? next : undefined;
+  }
+  if (typeof value === 'object') {
+    const next = {};
+    for (const [childKey, child] of Object.entries(value)) {
+      const scrubbed = scrubReasoningNode(child, childKey);
+      if (scrubbed === undefined) continue;
+      next[childKey] = scrubbed;
+    }
+    const structural = Object.keys(next).every(childKey => childKey === 'id' || childKey === 'type');
+    if (structural && Object.keys(value).some(childKey => childKey !== 'id' && childKey !== 'type')) return undefined;
+    return next;
+  }
+  return undefined;
+}
+
+function scrubReasoningItemsForModel(items) {
+  const next = [];
+  for (const item of items ?? []) {
+    if (item?.type !== 'reasoning') continue;
+    const scrubbed = scrubReasoningNode(item);
+    if (!scrubbed || scrubbed.type !== 'reasoning') continue;
+    next.push(scrubbed);
+  }
+  return next;
+}
+
+/** Scrub assistant prose/reasoning only; replay tool-call arguments verbatim. */
+function scrubAssistantMessagesForModel(messages) {
+  for (const message of messages) {
+    if (message?.role !== 'assistant') continue;
+    if (typeof message.content === 'string') {
+      const scrubbed = scrubbedModelText(message.content);
+      message.content = scrubbed || null;
+    }
+    if (typeof message.reasoning_content === 'string') {
+      const scrubbed = scrubbedModelText(message.reasoning_content);
+      if (scrubbed) message.reasoning_content = scrubbed;
+      else delete message.reasoning_content;
+    }
+  }
+}
+
+/**
  * Host-native agent loop against xAI Responses API (preferred) or Chat Completions.
  * Streams tokens, parallel tools, truncation, quality harness (fact/goal/reviewer), reasoning.effort.
  */
@@ -787,7 +1279,9 @@ export class OpenAiCompatibleRuntime {
     const usable = [];
     for (const message of messages) {
       if (message?.role !== 'user' && message?.role !== 'assistant') continue;
-      const content = String(message.content ?? '').trim();
+      const raw = String(message.content ?? '');
+      // User rows were scrubbed when saved. Scrub only assistant text; an empty scrub is not replayed.
+      const content = message.role === 'assistant' ? scrubbedModelText(raw).trim() : raw.trim();
       if (!content) continue;
       usable.push({ role: message.role, content });
     }
@@ -818,8 +1312,23 @@ export class OpenAiCompatibleRuntime {
     this.maxSteps = this.stepLimitOverride ?? mode.maxSteps;
   }
   async #chatTurn(session, tools, { toolChoice, onText } = {}) {
+    scrubAssistantMessagesForModel(session.messages);
     const options = session.options;
     const config = session.config;
+    // DeepSeek thinking mode (enabled below only for quality turns) rejects any
+    // request whose assistant history has a turn without reasoning_content — and
+    // host-injected notes, or turns the scrub emptied, legitimately lack it. When
+    // thinking is on, backfill a minimal placeholder on those so the "must be
+    // passed back" contract holds; turns that still carry real reasoning keep it
+    // verbatim, and non-thinking requests are untouched.
+    if ((isDeepSeekModel(config.model) || isDeepSeekBase(config.baseUrl)) && options.answerMode === 'quality') {
+      for (const message of session.messages) {
+        if (message.role === 'assistant'
+          && !(typeof message.reasoning_content === 'string' && message.reasoning_content.length > 0)) {
+          message.reasoning_content = ' ';
+        }
+      }
+    }
     const body = {
       model: config.model,
       stream: true,
@@ -844,12 +1353,15 @@ export class OpenAiCompatibleRuntime {
     return { api: 'chat', turn: await readChatStream(response.body, onText, usage => this.host?.recordModelUsage?.(session.conversationId, requestId, usage)) };
   }
   async #responsesTurn(session, tools, { toolChoice, onText } = {}) {
+    scrubAssistantMessagesForModel(session.messages);
     const options = session.options;
     const config = session.config;
     const effort = normalizeReasoningEffort(options.reasoningEffort, options.answerMode);
+    const reasoningItems = scrubReasoningItemsForModel(session.reasoningItems);
+    session.reasoningItems = reasoningItems;
     const input = [
       ...chatMessagesToResponsesInput(session.messages),
-      ...((session.reasoningItems ?? []).filter(item => item?.type === 'reasoning')),
+      ...reasoningItems,
     ];
     const body = {
       model: config.model,
@@ -940,9 +1452,24 @@ export class OpenAiCompatibleRuntime {
     session.httpAttempts = 0;
     const fullPrompt = typeof prompt === 'string' ? prompt : JSON.stringify(prompt);
     // Goal must be the user's raw question — never the whole turn prompt blob.
-    let goalText = (typeof rawUserText === 'string' && rawUserText.trim())
-      ? rawUserText.trim()
-      : fullPrompt;
+    // The model copy of that question is scrubbed once, below; the envelope is not scrubbed again.
+    const hasExplicitTurn = typeof rawUserText === 'string';
+    const suppliedTurn = hasExplicitTurn && rawUserText.trim() ? rawUserText : '';
+    let modelPrompt = fullPrompt;
+    let loggedTurn = '';
+    if (suppliedTurn) {
+      const scrubbedTurn = scrubbedModelText(suppliedTurn);
+      loggedTurn = scrubbedTurn.trim();
+      const at = fullPrompt.lastIndexOf(suppliedTurn);
+      if (at >= 0) {
+        modelPrompt = `${fullPrompt.slice(0, at)}${loggedTurn ? scrubbedTurn : ''}${fullPrompt.slice(at + suppliedTurn.length)}`;
+        if (!loggedTurn) modelPrompt = modelPrompt.replace(/\n+$/, '');
+      }
+    } else if (!hasExplicitTurn) {
+      modelPrompt = scrubbedModelText(fullPrompt);
+      loggedTurn = modelPrompt.trim() ? modelPrompt : '';
+    }
+    let goalText = suppliedTurn ? suppliedTurn.trim() : fullPrompt;
     const unavailableThisTurn = new Set((Array.isArray(authorizationContext?.unavailableTools) ? authorizationContext.unavailableTools : [])
       .filter(name => typeof name === 'string' && name.length > 0 && name.length <= 256).slice(0,128));
     const authorizationAttempted = new Set();
@@ -956,9 +1483,9 @@ export class OpenAiCompatibleRuntime {
     } else {
       session.messages[0] = { role: 'system', content: system };
     }
-    const userContent = harnessBlock ? `${harnessBlock}\n\n${fullPrompt}` : fullPrompt;
+    const userContent = harnessBlock ? `${harnessBlock}\n\n${modelPrompt}` : modelPrompt;
     // Internal provenance is consumed by compaction and removed from API input.
-    session.messages.push({ role: 'user', content: userContent, _hostUserText: goalText });
+    session.messages.push({ role: 'user', content: userContent, _hostUserText: suppliedTurn || !hasExplicitTurn ? loggedTurn : goalText });
     // Compress API messages (same shape as SQLite memory): recent window + fold old tools into harness.
     let sawCompression = false;
     {
@@ -975,10 +1502,12 @@ export class OpenAiCompatibleRuntime {
     if (unavailableThisTurn.size) session.messages.push({ role:'user', _hostAuthorizationContext:true, content:`Host: 本轮权限核对后仍不可用的具体工具：${JSON.stringify([...unavailableThisTurn])}。${authorizationContext?.authorizationDeclined ? '用户未批准这些新权限，本轮不得再次询问或调用。' : '授权核对尚未使这些工具可用，本轮不得重复询问。'}这不影响当前 tools/list 中其余已获准的读取与操作。先完成可做的部分，再准确说明这些工具对应的缺口；不能声称全项目无权限，也不能冒充执行。` });
     const emit = event => { try { this.onEvent({ sessionId, turnId, ...event }); } catch { /* observer isolated */ } };
     let holdNote = '';
+    let innerSeq = 0;
     const emitInner = (phase, hold = '') => {
       if (phase === 'model') holdNote = hold;
       else if (hold) holdNote = hold;
-      emit({ type: 'inner', ...publicInnerState(session.harness, { phase, hold: phase === 'model' ? hold : (hold || holdNote), compressed: sawCompression }) });
+      // seq + at let the UI order 'thinking' snapshots precisely between tool steps.
+      emit({ type: 'inner', seq: ++innerSeq, at: Date.now(), ...publicInnerState(session.harness, { phase, hold: phase === 'model' ? hold : (hold || holdNote), compressed: sawCompression }) });
     };
     if (sawCompression && this.host?.recordSummary && session.conversationId) {
       const sourceIds = session.messages.flatMap(message => [message.tool_call_id, message._hostUserText].filter(Boolean)).slice(0, 32);
@@ -993,15 +1522,73 @@ export class OpenAiCompatibleRuntime {
       return { stopReason: contextFit.reason === 'context_insufficient' ? 'context_insufficient' : 'unsupported_capability', replaceText: true, assistantText: note, metrics: { toolSelection, firstTextMs, firstToolMs, totalMs: performance.now() - started, api: options.useResponsesApi ? 'responses' : 'chat', messageCount: session.messages.length }, harness: session.harness };
     }
     emitInner(sawCompression ? 'compress' : 'model');
-    const onText = delta => { if (firstTextMs === null) firstTextMs = performance.now() - started; session._producedText = true; emit({ type: 'text_delta', text: delta }); };
+    // A secret split across text_delta chunks is not visible to a per-chunk scrub,
+    // and a later content-policy stop does not rewrite deltas already sent.
+    // Hold only the tail that can still grow into a scrubSecrets match.
+    let pending = '';
+    let pendingPieces = [];
+    const markText = () => {
+      if (firstTextMs === null) firstTextMs = performance.now() - started;
+      session._producedText = true;
+    };
+    const emitVisible = (scrubbed, raw) => {
+      const text = visibleModelDelta(scrubbed, raw);
+      if (!text) return;
+      emit({ type: 'text_delta', text });
+    };
+    const flushPending = () => {
+      if (!pending) return;
+      const raw = pending;
+      const pieces = pendingPieces;
+      pending = '';
+      pendingPieces = [];
+      if (!raw.trim()) {
+        emitVisible('', raw);
+        return;
+      }
+      const scrubbed = scrubbedModelText(raw);
+      if (!scrubbed) return;
+      if (scrubbed === raw && pieces.join('') === raw) {
+        for (const piece of pieces) emitVisible(scrubbedModelText(piece), piece);
+        return;
+      }
+      emitVisible(scrubbed, raw);
+    };
+    const releasePending = () => {
+      const split = splitHeldModelText(pending);
+      if (split.emit == null) return;
+      emitVisible(split.emit, split.emitRaw);
+      pending = split.rest;
+      pendingPieces = pending ? [pending] : [];
+    };
+    const onStreamText = delta => {
+      markText();
+      const raw = typeof delta === 'string' ? delta : '';
+      if (!raw) return;
+      pending += raw;
+      pendingPieces.push(raw);
+      releasePending();
+    };
+    const onText = delta => {
+      flushPending();
+      const raw = typeof delta === 'string' ? delta : '';
+      if (!raw) return;
+      markText();
+      emitVisible(scrubbedModelText(raw), raw);
+    };
     const consumeSteer = () => {
       const lines = this.host?.takeSteer?.(session.conversationId) ?? [];
+      let kept = 0;
       for (const line of lines) {
-        session.messages.push({ role: 'user', content: `用户插话：${line}`, _hostUserText: line });
-        goalText += `\n用户插话：${line}`;
+        // Scrub only this interruption. The current user message was already scrubbed once.
+        const scrubbed = scrubbedModelText(line);
+        if (!scrubbed) continue;
+        session.messages.push({ role: 'user', content: `用户插话：${scrubbed}`, _hostUserText: scrubbed });
+        goalText += `\n用户插话：${scrubbed}`;
+        kept += 1;
       }
-      if (lines.length) session.harness = setGoal(session.harness, goalText);
-      return lines.length > 0;
+      if (kept) session.harness = setGoal(session.harness, goalText);
+      return kept > 0;
     };
     let usedToolThisPrompt = false;
     let toolNamesThisPrompt = [];
@@ -1009,11 +1596,12 @@ export class OpenAiCompatibleRuntime {
     const failedExecutions = new Map();
     let forcedToolHint = false;
     let forcedEmptyBlock = false;
+    let lengthContinued = false;
     let forcedVerifier = false;
     let injectedReview = false;
     let countAnswerHint = false;
     let certificateStatusHint = false;
-    let scanStatusHint = false;
+    let scanStatusHint = false, scanBlockedHint = false;
     let scanResultsHint = false;
     let handoffFinishedHint = false;
     let readOnlyHint = false;
@@ -1169,14 +1757,20 @@ export class OpenAiCompatibleRuntime {
           handoffPhase={created:Boolean(taskId),creationAttempted,inspected:Boolean(inspected),startAttempted,executionChecked};
           let allowed=['inventory_query','inventory_search','inventory_schema','scan_list','scan_status','scan_preflight','scan_from_assets'];
           if(creationAttempted&&!taskId){const attempt=toolResultsThisPrompt.findLastIndex(result=>short(result.name)==='scan_from_assets');allowed=toolResultsThisPrompt.slice(attempt+1).some(result=>['scan_list','scan_status'].includes(short(result.name)))?[]:['scan_list','scan_status'];} // Unknown writes are reconciled once, never replayed.
-          if(taskId)allowed=inspected?(handoffIntent.start?(startAttempted?['scan_status']:['scan_start']):[]):[handoffIntent.preflight?'scan_preflight':'scan_status'];
+          if(taskId){
+            const blockedStart=handoffIntent.start&&scanPreflightBlock(toolResultsThisPrompt,taskId);
+            allowed=inspected?(handoffIntent.start?(startAttempted||blockedStart?['scan_status']:['scan_start']):[]):[handoffIntent.preflight?'scan_preflight':'scan_status'];
+            if(blockedStart&&!scanBlockedHint){scanBlockedHint=true;session.messages.push({role:'user',content:`Host: 预检已阻断启动（${blockedStart}）。报告该原因，不要调用 scan_start，不要新建任务。`});}
+          }
           if(executionChecked)allowed=[];
           tools=listedTools.filter(tool=>allowed.includes(short(tool._hostName)));
           if(taskId&&!tools.length&&!handoffFinishedHint){handoffFinishedHint=true;session.messages.push({role:'user',content:'Host: 本次资产交接及所请求的后续读取已经有同一 taskId 的成功回执。直接报告该任务的真实状态、保存模式与上限，不再重复预检或创建；创建草稿和预检都不是启动执行。'});}
         }
         let scanFollowupBinding;
         const scanIntent=scanningTaskIntent(goalText);
-        const scanTools=listedTools.filter(tool=>['scan_list','scan_status','scan_preflight','scan_recovery','scan_results','scan_start','scan_pause','scan_resume'].includes(String(tool._hostName).split(/::|__/).at(-1)));
+        // The destination is always this conversation; the Host checks that the old one is gone.
+        const namedBindingDestination=/(?:重新关联|改绑|换绑|reassociate)/i.test(goalText)&&/(?:会话|conversation|这里|当前)/i.test(goalText);
+        const scanTools=listedTools.filter(tool=>['scan_list','scan_status','scan_preflight','scan_recovery','scan_results','scan_fingerprint_search','scan_fingerprint_read','scan_start','scan_pause','scan_resume','scan_continue_targets','scan_bind','scan_reassociate_binding','scan_command','scan_command_ack','scan_review','scan_verify','scan_retry_delivery'].includes(String(tool._hostName).split(/::|__/).at(-1)));
         const scanTurn=Boolean(scanIntent&&scanTools.length&&!certificateTurn&&!enrichmentTurn&&!assistTurn&&!handoffIntent);
         if(scanTurn){
           const short=name=>String(name).split(/::|__/).at(-1);
@@ -1191,11 +1785,30 @@ export class OpenAiCompatibleRuntime {
           const financial=toolResultsThisPrompt.some(result=>{if(short(result.name)!=='scan_resume')return false;try{const v=JSON.parse(result.content);const b=v.structuredContent??v;return b.recovery||/host_scan_financial_/.test(b.error??'')||/^scan_financial_/.test(b.reasonCode??'');}catch{return false;}});
           const followup=financial?'scan_recovery':'scan_status';
           const allowed=['scan_list','scan_status',...(financial?['scan_recovery']:[]),...(!attempted&&scanIntent.action!=='status'?['scan_'+scanIntent.action]:[]),...(!attempted&&['start','resume'].includes(scanIntent.action)?['scan_preflight']:[])];
+          const blockedStart=allowed.includes('scan_start')?scanPreflightBlock(toolResultsThisPrompt,typeof target==='string'?target:undefined):null;
+          if(blockedStart)allowed.splice(allowed.indexOf('scan_start'),1);
+          const excludedPlan=scanExcludedCapabilities(toolResultsThisPrompt,typeof target==='string'?target:undefined);
+          const askedExcluded=[['browser',/浏览器/],['uploadRole',/上传/],['concurrencyRole',/并发/]].filter(([id,pattern])=>excludedPlan.includes(id)&&pattern.test(goalText)).map(([id])=>id);
+          if(askedExcluded.length){for(const name of ['scan_start','scan_resume','scan_continue_targets']){const index=allowed.indexOf(name);if(index>=0)allowed.splice(index,1);}}
+          const controlFailure=scanControlFailure(toolResultsThisPrompt,typeof target==='string'?target:undefined);
+          if(controlFailure){for(const name of ['scan_start','scan_resume','scan_continue_targets']){const index=allowed.indexOf(name);if(index>=0)allowed.splice(index,1);}if(!allowed.includes('scan_status'))allowed.push('scan_status');}
+          if(namedBindingDestination&&!['start','resume'].includes(scanIntent.action))allowed.push('scan_reassociate_binding');
           tools=scanTools.filter(tool=>allowed.includes(short(tool._hostName)));
+          if(blockedStart&&!scanBlockedHint){scanBlockedHint=true;session.messages.push({role:'user',content:`Host: 预检已阻断启动（${blockedStart}）。报告该原因，不要调用 scan_start，不要新建任务。`});}
+          if(askedExcluded.length){session.messages.push({role:'user',content:`Host: 预检已把 ${askedExcluded.join('、')} 排除出可执行计划。不要启动、恢复或续跑这些能力，也不要把 HTTP 读取说成它们已经完成。`});}
+          if(controlFailure){session.messages.push({role:'user',content:`Host: 启动或恢复已失败（${controlFailure}）。先前预检通过不能当成执行成功。读取 scan_status 报告这次失败，不要再次启动。`});}
           if(attempted&&!verified){tools=tools.filter(tool=>short(tool._hostName)===followup);if(!scanStatusHint){scanStatusHint=true;session.messages.push({role:'user',content:`Host: 扫描控制操作已返回。请使用 taskId 读取一次 ${followup}，然后报告实际状态、进度或恢复缺口。保留原账本，不新建预算、不重复启动或恢复，不循环等待完成；结果未知时先核对，不重发。`});}}
           if(attempted&&typeof target==='string'&&target.length<=128){scanFollowupBinding={taskId:target,tool:followup};tools=tools.map(tool=>short(tool._hostName)===followup?{...tool,function:{...tool.function,parameters:{...tool.function.parameters,required:['taskId'],properties:{taskId:{type:'string',enum:[target]}}}}}:tool);}
           const readLimit=scanIntent.action==='results'?8:3;
           if(verified||scanIntent.action==='status'&&reads.length||['preflight','recovery'].includes(scanIntent.action)&&reads.some(result=>short(result.name)==='scan_'+scanIntent.action)||reads.length>=readLimit)tools=[];
+          // Keep only reference tools already present in the current granted/leased
+          // list. A later short follow-up need not repeat a Skill keyword. The
+          // mandatory post-control status/recovery read and global call caps remain.
+          if(!attempted){
+            const references=new Set(['scan_fingerprint_search','scan_fingerprint_read','skills_list','skills_read','skills_list_resources','skills_read_resource']);
+            const present=new Set(tools.map(tool=>tool._hostName));
+            tools.push(...listedTools.filter(tool=>references.has(short(tool._hostName))&&!present.has(tool._hostName)));
+          }
           if(scanIntent.action==='results'&&reads.length>=readLimit&&!scanResultsHint){scanResultsHint=true;session.messages.push({role:'user',content:'Host: 本轮结果读取已达到分页调用上限。请依据已返回的完整 summary 与实际读过的页回答，明确 nextAfterId 和未读范围，不宣称已经读取全部记录；不为补读结果启动扫描。'});}
         }
         const exposureIntent=exposureTaskIntent(goalText);
@@ -1222,9 +1835,15 @@ export class OpenAiCompatibleRuntime {
           emit({ type: 'tool_update', toolCallId: `review-${step}`, title: '方向审查', status: 'completed', summary: 'harness reviewer' });
         }
 
+        if(!namedBindingDestination)tools=tools.filter(tool=>String(tool._hostName).split(/::|__/).at(-1)!=='scan_reassociate_binding');
         toolSelection.push({step,readOnlyTurn,handoffPhase,listedCount:listedTools.length,selectedCount:tools.length,selectedNames:tools.slice(0,16).map(tool=>tool._hostName),namesTruncated:tools.length>16});
         session.serialToolCalls=enrichmentTurn||assistTurn||cleanupTurn||exposureTurn;
-        const result = await this.#modelTurn(session, tools, { toolChoice, onText });
+        let result;
+        try {
+          result = await this.#modelTurn(session, tools, { toolChoice, onText: onStreamText });
+        } finally {
+          flushPending();
+        }
         apiUsed = result.api;
         const turn = result.turn;
         if (session.abort.signal.aborted) throw hostError('host_reply_cancelled');
@@ -1240,7 +1859,14 @@ export class OpenAiCompatibleRuntime {
 
         const modelRefusal = turn.finishReason === 'refusal' || turn.finishReason === 'content_filter' || turn.refusal;
         if (modelRefusal) {
-          const explanation = String(turn.refusal?.explanation || turn.text || '').slice(0, 240);
+          // Refusal explanations are already scrubbed, then clipped. A content-policy
+          // stop leaves explanation empty and falls back to turn.text: scrub that full
+          // text before the 240-character cut. A raw prefix can keep a split secret.
+          const suppliedExplanation = typeof turn.refusal?.explanation === 'string' ? turn.refusal.explanation : '';
+          const policyStop = !suppliedExplanation && (turn.finishReason === 'content_filter' || turn.refusal?.category === 'content_filter');
+          const explanation = policyStop
+            ? refusalExplanation(turn.text)
+            : String(suppliedExplanation || turn.text || '').slice(0, 240);
           if (explanation && !session._producedText) onText(explanation);
           session.messages.push({ role: 'assistant', content: explanation || null });
           emitInner('done', turn.finishReason === 'content_filter' ? '模型按内容策略停止' : '模型拒绝继续');
@@ -1271,6 +1897,13 @@ export class OpenAiCompatibleRuntime {
           if (consumeSteer()) {
             stepLimit = Math.max(stepLimit, step + 2);
             emitInner('hold', '正在处理你刚补充的要求');
+            continue;
+          }
+          if (turn.finishReason === 'length' && !usedToolThisPrompt && !lengthContinued) {
+            lengthContinued = true;
+            options.maxTokens = Math.max(options.maxTokens || 0, 16384);
+            emitInner('hold', '思考被长度截断，改为直接抓取');
+            session.messages.push({ role: 'user', content: 'Host: 上一轮输出被长度截断，没有工具结果，用户还看不到分析。停止长篇思考。用户给了网址就立刻调用 workspace_fetch；给了本地文件就调用 workspace_read_path。抓到或读到之后再写解密脚本。' });
             continue;
           }
           if (turn.finishReason === 'length' || turn.finishReason === 'content_filter') {
@@ -1438,6 +2071,13 @@ export class OpenAiCompatibleRuntime {
         const invalidResults = calls.filter(call => call.code).map(call => ({ id: call.id, name: call.name, ok: false, code: call.code, content: JSON.stringify({ error: call.code, hint: strategyHint(call.code) }) }));
         appendResults(invalidResults);
         const executable = calls.filter(call => !call.code);
+        if (turn.finishReason === 'length' && !executable.length && !lengthContinued) {
+          lengthContinued = true;
+          options.maxTokens = Math.max(options.maxTokens || 0, 16384);
+          emitInner('hold', '工具调用被截断，重新抓取');
+          session.messages.push({ role: 'user', content: 'Host: 上一轮工具调用不完整。不要继续思考。立刻重新调用 workspace_fetch 或 workspace_read_path，参数必须是完整 JSON。' });
+          continue;
+        }
         if (turn.finishReason === 'length' || turn.finishReason === 'content_filter') {
           return { stopReason: turn.finishReason === 'length' ? 'max_tokens' : 'refusal', harness: session.harness, metrics: { toolSelection, firstTextMs, firstToolMs, totalMs: performance.now() - started, api: apiUsed } };
         }
@@ -1446,7 +2086,7 @@ export class OpenAiCompatibleRuntime {
           if (offer.offers?.length && (typeof this.host?.requestAuthorization === 'function' || typeof this.host?.waitForAuthorization === 'function')) {
             for(const name of [...permissionCandidates.map(call=>call.requestedName),...permissionNames])authorizationAttempted.add(name);
             emitInner('wait', '这一步要先经过你');
-            const request = { projectId: offer.projectId, identity: offer.identity, offers: offer.offers, question: goalText };
+            const request = { projectId: offer.projectId, identity: offer.identity, offers: offer.offers, question: suppliedTurn || !hasExplicitTurn ? loggedTurn : goalText };
             let authorization;
             if (typeof this.host.requestAuthorization === 'function') authorization = this.host.requestAuthorization(session.conversationId, request);
             else {
@@ -1490,7 +2130,7 @@ export class OpenAiCompatibleRuntime {
         const results = await awaitWhileActive(runToolCalls(ready, call => this.host.mcp(session.token, session.conversationId, 'tools/call', { name: call.name, arguments: call.arguments, _hostToolCallId: call.id }, { runId: session.runId })), session.abort.signal);
         for (const result of results) {
           const key = executionSignature(ready.find(call => call.id === result.id));
-          if (result.ok) failedExecutions.delete(key); else failedExecutions.set(key, (failedExecutions.get(key) ?? 0) + 1);
+          if (result.ok) failedExecutions.delete(key); else failedExecutions.set(key, permanentToolErrorCode(result) ? 2 : (failedExecutions.get(key) ?? 0) + 1);
         }
         const suppressed = blocked.map(call => ({ id: call.id, name: call.name, ok: false, code: 'host_tool_repeat_blocked', content: JSON.stringify({ error: 'host_tool_repeat_blocked', hint: 'This exact operation failed twice. It was not executed again. Use a different applicable read or explain the gap.' }) }));
         appendResults([...results, ...suppressed]);

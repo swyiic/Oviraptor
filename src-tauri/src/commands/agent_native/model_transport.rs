@@ -16,6 +16,22 @@ fn native_model_transport(
     specs: &[AgentToolSpec],
     round: i64,
 ) -> Result<crate::agent_runtime::model::gateway::ModelResponse, NativeModelRoundFailure> {
+    let model_stop = |reason: String| {
+        let message = if reason == "scan_model_profile_changed" {
+            "当前模型配置已与这次执行开始时不一致，停止发送请求，没有沿用旧预检".to_string()
+        } else if reason.starts_with("scan_") {
+            format!("当前预检未通过（{reason}），停止发送请求，没有沿用旧预检")
+        } else {
+            "当前模型配置未能重新核对，停止发送请求，没有沿用旧预检".to_string()
+        };
+        NativeModelRoundFailure::outcome(AgentTargetOutcome::resume_incompatible(message))
+    };
+    if let Err(reason) = refuse_stale_capability_snapshot(&context.db_path, &context.scan_id, context.attempt_number, context.proxy.as_deref()) {
+        return Err(model_stop(reason));
+    }
+    if let Err(reason) = refuse_stale_continuation_model(&context.db_path, &context.scan_id, context.attempt_number, context.proxy.as_deref(), context.continuation_holder.as_deref(), client) {
+        return Err(model_stop(reason));
+    }
     let mut request = agent_model_request(messages, specs);
     let unbounded = native_model_unbounded_window(context)
         .map_err(|e|NativeModelRoundFailure::outcome(persistence_stop(context,e)))?;
@@ -50,8 +66,13 @@ fn native_model_transport(
     }
     let admitted = (|| {
         native_model_budget_preflight(context)?;
-        native_coordinator_budget_consumption_before_action(context)?;
-        native_coordinator_http_budget_consumption_before_action(context)?;
+        // Serialize + retry so a transient DB lock does not abort a model round.
+        crate::db::guarded_write(&context.db_path, || {
+            native_coordinator_budget_consumption_before_action(context)
+        })?;
+        crate::db::guarded_write(&context.db_path, || {
+            native_coordinator_http_budget_consumption_before_action(context)
+        })?;
         if unbounded {
             native_model_budget_admission_with_estimate(context, round, request_hash, unbounded_estimate)
         } else {
@@ -144,4 +165,66 @@ fn native_model_transport(
         client.complete(&request, &cancel)
     };
     result.map_err(NativeModelRoundFailure::Model)
+}
+
+/// A saved preflight names the model host and port. A later call must not keep
+/// going after that host or port changes, even when no continuation holder exists.
+pub(crate) fn refuse_stale_capability_snapshot(db_path: &Path, scan_id: &str, attempt: i64, proxy: Option<&str>) -> Result<(), String> {
+    let connection = match db::open(db_path) { Ok(connection) => connection, Err(_) => return Ok(()) };
+    let raw: String = match connection.query_row(
+        "SELECT capability_snapshot_json FROM sentinel_scan_attempts WHERE scan_id=?1 AND attempt_number=?2",
+        params![scan_id, attempt], |row| row.get(0),
+    ) { Ok(raw) => raw, Err(_) => return Ok(()) };
+    if raw.trim().is_empty() { return Ok(()); }
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else { return Ok(()); };
+    if let Some((host, port)) = saved_model_endpoint(&value) {
+        if let Ok(settings) = agent_policy_settings_for_attempt(&connection, scan_id, attempt) {
+            if let Ok(environment) = model_runtime_env(&settings) {
+                if let Ok(fresh) = agent_model_profile(&environment, proxy) {
+                    let (live_host, live_port) = agent_channel::model_endpoint_port(&fresh.endpoint)?;
+                    if live_host != host || live_port != port { return Err("scan_model_profile_changed".into()); }
+                }
+            }
+        }
+    }
+    let project: i64 = connection.query_row("SELECT project_id FROM sentinel_scans WHERE id=?1", [scan_id], |row| row.get(0)).map_err(|_| "scan_task_unavailable".to_string())?;
+    if let Some(reason) = agent_channel::fresh_execution_preflight_block(&connection, project, scan_id)? {
+        return Err(reason);
+    }
+    Ok(())
+}
+
+fn saved_model_endpoint(value: &serde_json::Value) -> Option<(String, u16)> {
+    let version = value.get("configVersion").and_then(serde_json::Value::as_str).filter(|item| !item.is_empty())
+        .or_else(|| value.get("readiness").and_then(serde_json::Value::as_array).and_then(|items| {
+            items.iter().find_map(|item| item.get("configVersion").and_then(serde_json::Value::as_str).filter(|text| !text.is_empty()))
+        }))?;
+    let (left, port) = version.rsplit_once(':')?;
+    let host = left.split_once('@').map(|(_, host)| host).unwrap_or(left);
+    let port = port.parse::<u16>().ok()?;
+    if host.is_empty() { return None; }
+    Some((host.to_string(), port))
+}
+
+/// A continuation may sit after an earlier preflight. Re-read the saved model
+/// profile before any provider call. A mismatch or an unreadable profile stops
+/// the call; a fresh start without a continuation holder keeps its client.
+pub(crate) fn refuse_stale_continuation_model(
+    db_path: &Path,
+    scan_id: &str,
+    attempt: i64,
+    proxy: Option<&str>,
+    holder: Option<&str>,
+    client: &AgentModelClient,
+) -> Result<(), String> {
+    if holder.is_none() { return Ok(()); }
+    let connection = db::open(db_path).map_err(|_| "scan_model_profile_unchecked".to_string())?;
+    let settings = agent_policy_settings_for_attempt(&connection, scan_id, attempt).map_err(|_| "scan_model_profile_unchecked".to_string())?;
+    let environment = model_runtime_env(&settings).map_err(|_| "scan_model_profile_changed".to_string())?;
+    let fresh = agent_model_profile(&environment, proxy).map_err(|_| "scan_model_profile_changed".to_string())?;
+    let current = client.profile();
+    if fresh.endpoint != current.endpoint || fresh.proxy != current.proxy || fresh.model != current.model || fresh.local != current.local {
+        return Err("scan_model_profile_changed".into());
+    }
+    Ok(())
 }

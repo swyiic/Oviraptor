@@ -1,5 +1,6 @@
 import { ref, watch, type Ref } from "vue";
 import { sentinelApi } from "../api";
+import { useI18n } from "../../../i18n";
 import type { GapFollowupDraftInput, GapFollowupPreview, GapFollowupSubmission } from "../types";
 
 type RecoveryForm = { urls: string; taskName: string };
@@ -14,6 +15,7 @@ export function useFollowupRecovery(options: {
   notify: (type: "success" | "error" | "info", text: string) => void;
 }) {
   const { source, generation, isDisposed, form, busy, resetIdentitySelection, notify } = options;
+  const { tr } = useI18n();
   const pendingFollowupInput = ref<GapFollowupDraftInput>();
   const followupSubmission = ref<GapFollowupSubmission>();
   const followupRecoveryBusy = ref(false);
@@ -65,7 +67,7 @@ export function useFollowupRecovery(options: {
       followupSubmission.value = undefined;
       showReleaseFollowup.value = false;
       form.urls = source()?.targetUrl || "";
-      form.taskName = "补充证据任务";
+      form.taskName = tr("补充证据任务", "Evidence follow-up task");
       resetIdentitySelection();
       await restoreFollowupSubmission();
     } catch (error) {

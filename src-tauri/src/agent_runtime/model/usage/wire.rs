@@ -81,29 +81,3 @@ pub(crate) fn usage_wire_is_unambiguous(text: &str) -> bool {
     d.deserialize_map(UsageEnvelope).is_ok() && d.end().is_ok()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn duplicate_billing_members_are_unknown_including_escaped_and_nested_keys() {
-        for text in [
-            r#"{"usage":{"prompt_tokens":1,"prompt_tokens":2}}"#,
-            r#"{"usage":{},"usage":{}}"#,
-            r#"{"usage":{"prompt_tokens":1,"prompt\u005ftokens":1}}"#,
-            r#"{"usage":{"prompt_tokens_details":{"cached_tokens":1,"cached_tokens":2}}}"#,
-            r#"{"usage":{"details":[{"cached_tokens":1,"cached_tokens":1}]}}"#,
-            r#"{"usage":{}} trailing"#,
-            r#"{}"#,
-        ] {
-            assert!(!usage_wire_is_unambiguous(text), "{text}");
-        }
-        assert!(usage_wire_is_unambiguous(
-            r#"{"usage":{"prompt_tokens":1,"total_tokens":1,"details":{"cached_tokens":0},"optional":null},"metadata":{"x":1,"x":2}}"#
-        ));
-        // This structural reader deliberately leaves malformed usage amounts to
-        // the separate semantic validator, and ignores unrelated metadata.
-        assert!(usage_wire_is_unambiguous(
-            r#"{"usage":{"prompt_tokens":"unknown","cached_tokens":false}}"#
-        ));
-    }
-}

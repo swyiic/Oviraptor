@@ -23,8 +23,6 @@ pub(crate) use completion_audit::{audit_completion, audit_exhausted, SourceRound
 pub(crate) use dispatch::{prepare_next_authorized,start_for_transport};
 pub(crate) use lifetime::require_idle_for_root;
 pub use dispatch::{record_received, record_uncertain};
-#[cfg(test)]
-pub use dispatch::start_authorized;
 pub(crate) use reentry::{
     audit_pending_finish, audit_recoverable_boundary, audit_saved_finish_transition,
     audit_settled_finish,

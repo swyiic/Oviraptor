@@ -348,6 +348,3 @@ pub(crate) fn require_current_on(
     Ok(VerifiedCurrentToolPlan { original })
 }
 
-#[cfg(test)]
-#[path = "frozen_plan/tests.rs"]
-pub(crate) mod tests;

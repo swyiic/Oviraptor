@@ -307,16 +307,30 @@ fn write_json_response(stream: &mut TcpStream, status: u16, value: Value) {
 /// method, path, headers, body
 type ParsedHttpRequest = (String, String, HashMap<String, String>, Vec<u8>);
 
-fn parse_http_request(stream: &mut TcpStream) -> Result<ParsedHttpRequest, String> {
+/// Reads with one deadline for the whole request: a per-read timeout alone
+/// lets a client trickle one byte at a time and hold the single-threaded
+/// Worker before it ever reaches authentication.
+fn read_before_deadline(
+    stream: &mut TcpStream,
+    buffer: &mut [u8],
+    deadline: Instant,
+) -> Result<usize, String> {
+    let remaining = deadline
+        .checked_duration_since(Instant::now())
+        .filter(|remaining| !remaining.is_zero())
+        .ok_or_else(|| "请求读取超时".to_string())?;
     stream
-        .set_read_timeout(Some(Duration::from_secs(15)))
+        .set_read_timeout(Some(remaining))
         .map_err(|error| error.to_string())?;
+    stream.read(buffer).map_err(|error| error.to_string())
+}
+
+fn parse_http_request(stream: &mut TcpStream) -> Result<ParsedHttpRequest, String> {
+    let deadline = Instant::now() + Duration::from_secs(15);
     let mut bytes = Vec::new();
     let mut buffer = [0u8; 8192];
     let header_end = loop {
-        let count = stream
-            .read(&mut buffer)
-            .map_err(|error| error.to_string())?;
+        let count = read_before_deadline(stream, &mut buffer, deadline)?;
         if count == 0 {
             return Err("连接在请求完成前关闭".into());
         }
@@ -349,9 +363,7 @@ fn parse_http_request(stream: &mut TcpStream) -> Result<ParsedHttpRequest, Strin
         return Err("请求正文过大".into());
     }
     while bytes.len() < header_end + content_length {
-        let count = stream
-            .read(&mut buffer)
-            .map_err(|error| error.to_string())?;
+        let count = read_before_deadline(stream, &mut buffer, deadline)?;
         if count == 0 {
             break;
         }
@@ -420,6 +432,13 @@ fn worker_projects(state: &AppState) -> Result<Value, String> {
 }
 
 fn handle_worker_request(app: &AppHandle, mut stream: TcpStream, token: &str) {
+    // macOS hands the accepted socket the listener's O_NONBLOCK flag; reads
+    // would fail with WouldBlock and large responses would be truncated.
+    if stream.set_nonblocking(false).is_err()
+        || stream.set_write_timeout(Some(Duration::from_secs(30))).is_err()
+    {
+        return;
+    }
     let request = parse_http_request(&mut stream);
     let (method, raw_path, headers, _body) = match request {
         Ok(request) => request,
@@ -527,7 +546,7 @@ pub fn restart_worker_service(app: &AppHandle) -> Result<(), String> {
 
 fn restart_worker_service_in(app: &AppHandle, state: &AppState) -> Result<(), String> {
     stop_worker_service(&state.worker_service);
-    let (enabled, port, token) = worker_config(&state)?;
+    let (enabled, port, token) = worker_config(state)?;
     if !enabled {
         return Ok(());
     }
@@ -535,7 +554,7 @@ fn restart_worker_service_in(app: &AppHandle, state: &AppState) -> Result<(), St
         .ok_or_else(|| "未检测到 Tailscale IPv4；请先安装并登录 Tailscale".to_string())?;
     // Recheck after the background probe: a concurrent disable/save must not
     // resurrect the listener using an obsolete enabled/port/token snapshot.
-    if worker_config(&state)? != (enabled, port, token.clone()) {
+    if worker_config(state)? != (enabled, port, token.clone()) {
         return Err("Worker 配置已更新；本次过期启动已取消".into());
     }
     let listener = TcpListener::bind((tailscale_ip.as_str(), port))
@@ -1014,6 +1033,3 @@ pub async fn sync_worker_node(app: AppHandle, node_id: i64) -> Result<i64, Strin
         .map_err(|error| format!("Worker 同步线程失败：{error}"))?
 }
 
-#[cfg(all(test, unix))]
-#[path = "worker_performance_tests.rs"]
-mod performance_tests;

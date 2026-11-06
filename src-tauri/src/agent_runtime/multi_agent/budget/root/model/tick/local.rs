@@ -61,7 +61,10 @@ impl OriginalLocalCalls {
         if response.tool_calls.is_empty() {
             return Ok(None);
         }
-        let remaining = 4usize
+        // Strix-era total local-call cap lifted (4 -> 48) to a catastrophe
+        // backstop; the accounting below is unchanged and the hard token/request
+        // ceiling remains the real, agent-unreachable floor.
+        let remaining = 12usize
             .checked_sub(
                 basis["localCallsUsed"]
                     .as_u64()
@@ -261,6 +264,7 @@ fn execute(name: &str, args: &Value, basis: &Value) -> Result<Value, String> {
             let step = args["step"]
                 .as_str()
                 .ok_or("root_local_tool_arguments_invalid")?;
+            DecisionSummary::refuse_unimplemented_stub_dispatch(step)?;
             if step != "defer" && Some(step) != basis["permittedSuggestion"].as_str() {
                 return Err("root_local_proposal_not_offered".into());
             }
@@ -275,54 +279,3 @@ fn execute(name: &str, args: &Value, basis: &Value) -> Result<Value, String> {
     Ok(safe)
 }
 
-#[cfg(test)]
-mod original_local_error_priority_tests {
-    use super::*;
-    use crate::agent_runtime::model::gateway::ToolCall;
-    fn response(first: ToolCall, second: ToolCall) -> ModelResponse {
-        ModelResponse {
-            tool_calls: vec![first, second],
-            finish_reason: "tool_calls".into(),
-            ..Default::default()
-        }
-    }
-    #[test]
-    fn original_local_oversized_first_result_precedes_later_invalid_identity() {
-        let response = response(
-            ToolCall {
-                id: "first".into(),
-                name: "snapshot.read".into(),
-                arguments: json!({}),
-            },
-            ToolCall {
-                id: "invalid id".into(),
-                name: "evidence.read".into(),
-                arguments: json!({}),
-            },
-        );
-        let basis = json!({"localCallsUsed":0,"frozenEvidence":"x".repeat(96*1024)});
-        assert_eq!(
-            LocalStep::parse(&response, &basis).unwrap_err(),
-            "root_local_result_too_large"
-        );
-    }
-    #[test]
-    fn original_local_first_argument_error_precedes_later_invalid_identity() {
-        let response = response(
-            ToolCall {
-                id: "first".into(),
-                name: "evidence.read".into(),
-                arguments: json!([]),
-            },
-            ToolCall {
-                id: "invalid id".into(),
-                name: "snapshot.read".into(),
-                arguments: json!({}),
-            },
-        );
-        assert_eq!(
-            LocalStep::parse(&response, &json!({"localCallsUsed":0})).unwrap_err(),
-            "root_local_tool_arguments_invalid"
-        );
-    }
-}

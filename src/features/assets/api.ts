@@ -49,6 +49,7 @@ export const assetApi = {
     invoke<number>("import_targets", { input: { projectId, targetType, values } }),
   listTargets: (projectId: number) => invoke<Target[]>("list_targets", { projectId }),
   removeTarget: (targetId: number) => invoke<void>("remove_target", { targetId }),
+  removeTargets: (targetIds: number[]) => invoke<number>("remove_targets", { targetIds }),
   listAssets: (query: AssetQuery) => invoke<AssetPage>("list_assets", { query }),
   markAssetEntryOpened: (projectId: number, assetId: number) =>
     invoke<string>("mark_asset_entry_opened", { projectId, assetId }),
@@ -116,10 +117,12 @@ export const assetApi = {
   listEvents: (projectId?: number, eventType?: string, limit = 500) =>
     invoke<AssetEvent[]>("list_asset_events", { projectId, eventType, limit }),
   currentExecutionPlan: () => invoke<AssetExecutionPlan>("current_asset_execution_plan"),
-  startJob: (projectId: number, profileId: number, name: string, pipeline: string, configurationSource?: "current-defaults" | "legacy-profile", reprobeScope?: ReprobeScope) =>
-    invoke<number>("start_job", { input: { projectId, profileId, name, pipeline, configurationSource, ...(reprobeScope ? { reprobeScope } : {}) } }),
+  startJob: (projectId: number, profileId: number, name: string, pipeline: string, configurationSource?: "current-defaults" | "legacy-profile", reprobeScope?: ReprobeScope, incremental?: boolean) =>
+    invoke<number>("start_job", { input: { projectId, profileId, name, pipeline, configurationSource, ...(reprobeScope ? { reprobeScope } : {}), ...(incremental === undefined ? {} : { incremental }) } }),
   resumeJob: (runId: number) => invoke<number>("resume_job", { runId }),
   cancelJob: (runId: number) => invoke<void>("cancel_job", { runId }),
+  pauseJob: (runId: number) => invoke<void>("pause_job", { runId }),
+  deleteRun: (runId: number) => invoke<void>("delete_run", { runId }),
   exportAssets: (query: AssetQuery, fields: string[], chineseHeaders = true) =>
     invoke<{ path: string; rows: number }>("export_assets", {
       request: { query, fields, chineseHeaders },

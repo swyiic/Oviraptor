@@ -12,6 +12,7 @@ import ConversationMessage from "../../conversations/ConversationMessage.vue";
 import AgentPermissionMode from "./AgentPermissionMode.vue";
 import AgentTaskCollaboration from "./AgentTaskCollaboration.vue";
 import DiscoveryAssistPanel from "./DiscoveryAssistPanel.vue";
+import AgentWorkspacePanel from "./AgentWorkspacePanel.vue";
 import type { DiscoveryChatRequest } from "../../assets/discoveryAnalysis";
 import ConversationFinder from '../../conversations/ConversationFinder.vue';
 import type { AgentHostEvent } from "../chatClient";
@@ -19,8 +20,10 @@ import ConversationHistoryList from './ConversationHistoryList.vue';
 import { sortConversationHistory } from '../conversationHistory';
 import { useConversationFiles } from '../useConversationFiles';
 import ConversationFiles from './ConversationFiles.vue';
+import { useToolTimeline } from '../toolTimeline';
+import AgentToolTimelineList from './AgentToolTimelineList.vue';
 
-const props = defineProps<{ client: AgentHostChatClient; settings: AgentHostSettings; projectName: string; projectId?: number; historySearchRequest?:number; draftRequest?:DiscoveryChatRequest }>();
+const props = defineProps<{ client: AgentHostChatClient; settings: AgentHostSettings; projectName: string; projectId?: number; /** No named workspace: bind to the reserved personal/direct-chat space instead of `projectId`. */ personal?: boolean; historySearchRequest?:number; draftRequest?:DiscoveryChatRequest }>();
 const emit = defineEmits<{ draftApplied:[id:number]; settingsChanged: [settings: AgentHostSettings] }>();
 const { tr } = useI18n();
 
@@ -61,7 +64,7 @@ const readOnlyAnswered = computed(() => {
 const taskDisplayGoal = computed(() => readOnlyAnswered.value
   ? messages.value.find(item => item.id === task.value?.readOnlyAnswer?.userMessageId)?.content || task.value?.goal
   : task.value?.goal);
-type InnerView = { goal: string; phase: string; phaseLabel: string; facts: string[]; hypotheses: string[]; compressed: boolean; hold: string };
+type InnerView = { goal: string; phase: string; phaseLabel: string; facts: string[]; hypotheses: string[]; compressed: boolean; hold: string; seq?: number; at?: number };
 const inner = ref<InnerView | null>(null);
 const activityRunId = ref<string>(), activityMessageId = ref<string>();
 const activityOpen = ref(false);
@@ -85,8 +88,16 @@ const activityMessage = computed(() => {
 const activityEvidence = computed(() => activityMessage.value?.runId
   ? task.value?.evidence.filter(item => item.runId === activityMessage.value?.runId).slice(-12) || [] : []);
 const activityCount = computed(() => steps.value.length || activityEvidence.value.length);
+const chainHops = ref<Array<{ id: string; factLabel: string; factValue: string; source: string; opensNext: boolean }>>([]);
+async function loadChain() {
+  const id = selectedId.value;
+  const projectId = hostProjectId.value;
+  if (!id || projectId === undefined) { chainHops.value = []; return; }
+  try { chainHops.value = await props.client.chain(id, projectId); }
+  catch { chainHops.value = []; }
+}
 function resetActivity() {
-  inner.value = null; steps.value = []; heartbeat.value = undefined;
+  inner.value = null; steps.value = []; heartbeat.value = undefined; toolProgress.value = new Map();
   activityRunId.value = undefined; activityMessageId.value = undefined; activityOpen.value = false;
 }
 /** Match public execution updates to their reply; old runs cannot replace the active process. */
@@ -113,7 +124,7 @@ let appliedDraftRequest=0,applyingDraftRequest=false;
 async function applyDiscoveryDraft(){
  const request=props.draftRequest;if(!request||request.id===appliedDraftRequest||request.projectId!==props.projectId||loadingProject.value||running.value||continuingTask.value||hostProjectId.value===undefined||applyingDraftRequest)return;
  applyingDraftRequest=true;const generation=projectGeneration;
- try{await newConversation();if(disposed||generation!==projectGeneration||props.draftRequest?.id!==request.id||request.projectId!==props.projectId)return;
+ try{await (request.taskId?openTaskConversation(request.taskId):newConversation());if(disposed||generation!==projectGeneration||props.draftRequest?.id!==request.id||request.projectId!==props.projectId)return;
  draft.value=request.prompt;appliedDraftRequest=request.id;emit("draftApplied",request.id);await nextTick();composerInput.value?.focus();composerInput.value?.setSelectionRange(0,0);if(composerInput.value)composerInput.value.scrollTop=0;
  }catch(e){error.value=String((e as Error).message||e);}finally{applyingDraftRequest=false;if(props.draftRequest&&props.draftRequest.id!==request.id)void nextTick(applyDiscoveryDraft);}
 }
@@ -125,7 +136,7 @@ let messageGeneration = 0;
 let disposed = false;
 const error = ref("");
 const transcript = ref<HTMLElement>();
-const followingTail = ref(true), unreadBelow = ref(false), loadingMessages = ref(false), loadingEarlier = ref(false), hasEarlier = ref(false), discoveryPanelOpen = ref(false);
+const followingTail = ref(true), unreadBelow = ref(false), loadingMessages = ref(false), loadingEarlier = ref(false), hasEarlier = ref(false), discoveryPanelOpen = ref(false), workspacePanelOpen = ref(false);
 let earlierCursor: string | undefined, historyLoaded = false;
 let messageLoad: {id:string;projectId:number;promise:Promise<void>} | undefined;
 function observeTranscript(){const el=transcript.value;if(el){followingTail.value=el.scrollHeight-el.scrollTop-el.clientHeight<80;if(followingTail.value)unreadBelow.value=false;}}
@@ -141,6 +152,16 @@ async function loadEarlierMessages(){
 }
 const composerInput = ref<HTMLTextAreaElement>();
 const heartbeat = ref<{ elapsedMs: number; stepTitle?: string }>();
+/** `runtime.toolProgress` ticks (~1s) for the step still running, keyed by evidenceId; cleared on resetActivity. */
+const toolProgress = ref<Map<string, { outputLines: number; previewText: string }>>(new Map());
+const { timeline: toolTimeline, totalElapsedMs: toolTimelineElapsedMs } = useToolTimeline({
+  steps: () => steps.value,
+  heartbeat: () => heartbeat.value,
+  inner: () => inner.value,
+  evidence: () => activityEvidence.value,
+  running: () => running.value,
+  toolProgress: () => toolProgress.value,
+});
 type GrantOffer = { appId: string; revision: number; permissions: Array<{ permission: string; tools: string[] }> };
 const grantPrompt = ref<{ conversationId: string; runId?: string; requestId?: string; projectId: number; identity: string; offers: GrantOffer[]; question: string } | null>(null);
 type RuntimePermission = { id: string; conversationId: string; description: string; options: Array<{ id: string; label: string }> };
@@ -151,18 +172,19 @@ const pendingApproval = ref<{ id: string; scopeHash: string; choice: string } | 
 const grantIsWorkspace = computed(() => !!grantPrompt.value?.offers.some(offer => offer.appId === "workspace"));
 function permissionLabel(id: string) {
   const known: Record<string, string> = {
-    "inventory.read": "读取资产",
-    "inventory.write": "修改资产",
-    "inventory.exposure.read": "读取暴露面",
-    "investigation.read": "读取调查",
-    "investigation.draft.write": "创建调查草稿",
-    "investigation.execute": "执行或恢复扫描（可能产生费用）",
-    "investigation.control": "暂停扫描",
-    "certificate.collect": "采集范围内的公开证书",
-    "legacy.snapshot.read": "读取历史快照",
-    "workspace.read": "读取工作区文件",
-    "workspace.write": "写入工作区文件",
-    "workspace.run": "在工作区运行脚本",
+    "inventory.read": tr("读取资产", "Read assets"),
+    "inventory.write": tr("修改资产", "Modify assets"),
+    "inventory.exposure.read": tr("读取暴露面", "Read exposures"),
+    "investigation.read": tr("读取调查", "Read investigations"),
+    "investigation.draft.write": tr("创建调查草稿", "Create investigation drafts"),
+    "investigation.execute": tr("执行或恢复扫描（可能产生费用）", "Run or resume scans (may incur costs)"),
+    "investigation.control": tr("暂停扫描", "Pause scans"),
+    "certificate.collect": tr("采集范围内的公开证书", "Collect in-scope public certificates"),
+    "legacy.snapshot.read": tr("读取历史快照", "Read historical snapshots"),
+    "workspace.read": tr("读取工作区文件", "Read workspace files"),
+    "workspace.write": tr("写入工作区文件", "Write workspace files"),
+    "workspace.run": tr("在工作区运行脚本", "Run scripts in the workspace"),
+    "material.open": tr("放行网址和本地文件。确认后本对话不再询问；大文件按原路径读取，不整份复制", "Allow URLs and local files. This conversation will not ask again; large files stay in place"),
   };
   return known[id] || id;
 }
@@ -176,6 +198,9 @@ const innerPhaseText = computed(() => {
     if (message.status === 'refused' || message.stopReason === 'refusal') return tr('已停止', 'Stopped');
     if (message.status === 'completed') return message.stopReason && message.stopReason !== 'end_turn'
       ? tr('本轮已结束', 'Turn ended') : tr('已完成', 'Completed');
+    if (message.status === 'incomplete') return message.stopReason === 'max_tokens'
+      ? tr('回复被长度截断，还没开始抓取', 'Reply hit the length limit before any fetch')
+      : tr('本轮没有做完', 'Turn did not finish');
   }
   const known: Record<string, [string, string]> = {
     model: ["思考中", "Thinking"],
@@ -187,12 +212,6 @@ const innerPhaseText = computed(() => {
   };
   const pair = known[innerPhase.value];
   return pair ? tr(...pair) : (inner.value?.phaseLabel || "");
-});
-const heartbeatLabel = computed(() => {
-  if (!heartbeat.value) return "";
-  const seconds = Math.max(1, Math.round(heartbeat.value.elapsedMs / 1000));
-  const step = heartbeat.value.stepTitle ? ` · ${heartbeat.value.stepTitle}` : "";
-  return tr(`仍在运行 · 已用 ${seconds}s${step}`, `Still working · ${seconds}s${step}`);
 });
 const copiedId = ref<string>();
 async function copyMessage(message: AgentHostMessage) {
@@ -275,14 +294,14 @@ async function readMessages() {
 async function loadProject() {
   const generation = ++projectGeneration;
   ++messageGeneration;
-  const { projectName, projectId } = props;
+  const { projectName, projectId, personal } = props;
   hostProjectId.value = undefined; selectedId.value = undefined; messages.value = []; task.value = null; conversations.value = [];
   grantPrompt.value = null; runtimePermission.value = null; running.value = false; draft.value = "";
   permissionsOpen.value = false; ++permissionGeneration; savedFilePermissions.value = []; workspaceFullAccess.value=false; savedAppPermissions.value = []; historyQuery.value = ""; finderOpen.value=false;
   loadingProject.value = true;
   error.value = "";
   try {
-    const boundId = await props.client.ensureProject(projectName, projectId);
+    const boundId = personal ? (await props.client.ensurePersonalProject()).id : await props.client.ensureProject(projectName, projectId);
     if (disposed || generation !== projectGeneration) return;
     const listed = await props.client.conversations(boundId);
     if (disposed || generation !== projectGeneration) return;
@@ -336,7 +355,9 @@ async function loadPermissions() {
     const [apps, files, policy] = await Promise.all([props.client.listApps(), props.client.workspaceGrants(conversationId, projectId),props.client.accessPolicy(projectId)]);
     if (disposed || generation !== permissionGeneration || conversationId !== selectedId.value || projectId !== hostProjectId.value) return;
     workspaceFullAccess.value=policy.mode==='full';
-    savedFilePermissions.value = policy.mode==='full'?policy.workspacePermissions:files.permissions;
+    // 'full' and 'auto' both surface their policy-granted workspace permissions
+    // ('auto' = read + isolated run only); 'ask' shows this conversation's own grants.
+    savedFilePermissions.value = policy.mode!=='ask'?policy.workspacePermissions:files.permissions;
     savedAppPermissions.value = apps.items.flatMap(app => {
       const grant = app.grants?.find(item => item.projectId === projectId);
       const automatic=policy.mode==='full'?policy.apps[app.id]:undefined;
@@ -365,6 +386,19 @@ async function updateHistoryConversation(id: string, patch: { title?: string; pi
     ...(item.lastActivityAt && (!updated.lastActivityAt || item.lastActivityAt > updated.lastActivityAt) ? { lastActivityAt: item.lastActivityAt } : {}),
   } : item);
 }
+/** List of named workspaces a direct-chat conversation can be re-homed to (personal space excluded). */
+async function attachTargets() {
+  return (await props.client.projects()).filter(item => item.kind !== 'personal');
+}
+async function attachHistoryConversation(id: string, targetProjectId: number) {
+  const projectId = hostProjectId.value, generation = projectGeneration;
+  if (projectId === undefined || loadingProject.value || !conversations.value.some(item => item.id === id)) throw Error('host_conversation_not_found');
+  const updated = await props.client.attachConversation(id, targetProjectId);
+  if (disposed || generation !== projectGeneration || projectId !== hostProjectId.value) return;
+  if (updated.id !== id || updated.projectId !== targetProjectId) throw Error('host_conversation_scope_mismatch');
+  conversations.value = conversations.value.filter(item => item.id !== id);
+  if (selectedId.value === id) selectedId.value = conversations.value[conversations.value.length - 1]?.id;
+}
 async function revealHistoryConversation(id: string) {
   const projectId = hostProjectId.value, generation = projectGeneration;
   if (projectId === undefined || loadingProject.value || !conversations.value.some(item => item.id === id)) throw Error('host_conversation_not_found');
@@ -388,7 +422,7 @@ async function removeConversation(id = selectedId.value): Promise<boolean> {
   } catch (e) { if (generation === projectGeneration && !disposed) error.value = String((e as Error).message || e); return false; }
 }
 function conversationLabel(title?: string) {
-  if (!title || title === "New conversation" || title === "新对话" || title === "新對話") return tr("新对话", "New conversation");
+  if (!title || title === "New conversation" || title === "新对话" || title === "新對話") return tr("新对话", "New conversation"); // i18n-ignore: matches stored default titles
   return title;
 }
 async function newConversation() {
@@ -398,6 +432,19 @@ async function newConversation() {
   if (disposed || generation !== projectGeneration || projectId !== hostProjectId.value) return;
   conversations.value = [...conversations.value, created];
   selectedId.value = created.id; messages.value = []; task.value = null; resetActivity();
+}
+/** Analysing a scan task again continues the conversation its results return to. */
+async function openTaskConversation(taskId: string) {
+  if (hostProjectId.value === undefined) return;
+  if (!props.client.openScanTaskConversation) return newConversation();
+  const projectId = hostProjectId.value, generation = projectGeneration, before = selectedId.value;
+  let opened;
+  // An older Host without the route, or a refused project, still gets a draft.
+  try { opened = await props.client.openScanTaskConversation(projectId, taskId); }
+  catch { return newConversation(); }
+  if (disposed || generation !== projectGeneration || projectId !== hostProjectId.value || selectedId.value !== before) return;
+  if (!conversations.value.some(item => item.id === opened.conversation.id)) conversations.value = [...conversations.value, opened.conversation];
+  if (selectedId.value !== opened.conversation.id) { selectedId.value = opened.conversation.id; messages.value = []; task.value = null; resetActivity(); }
 }
 async function chooseIntent(choice: string, message: AgentHostMessage) {
   const url = [...messages.value].reverse().find(item => item.role === "user" && item.createdAt <= message.createdAt)?.content.trim();
@@ -412,7 +459,7 @@ async function confirmIntent() {
   if (!approval || !selectedId.value || hostProjectId.value === undefined) return;
   try {
     const confirmed = await props.client.confirmTask(selectedId.value, hostProjectId.value, approval.id, approval.scopeHash);
-    if (confirmed.startsScan) error.value = "确认不应启动扫描";
+    if (confirmed.startsScan) error.value = tr("确认不应启动扫描", "Confirming this choice should not start a scan");
     pendingApproval.value = null;
   } catch (e) { error.value = String((e as Error).message || e); }
 }
@@ -485,6 +532,11 @@ let needsReconnectRefresh=false;
 async function refreshConversationMetadata(){const pid=hostProjectId.value,g=projectGeneration;if(pid===undefined)return;try{const rows=await props.client.conversations(pid);if(!disposed&&g===projectGeneration&&pid===hostProjectId.value){conversations.value=rows.map(row=>{const current=conversations.value.find(c=>c.id===row.id);return current&&(current.metadataRevision??0)>(row.metadataRevision??0)?current:row;});if(selectedId.value&&!rows.some(c=>c.id===selectedId.value))selectedId.value=visibleConversations.value[0]?.id;}}catch{/* Reconnect metadata is retried by the next event. */}}
 function handleEvent(event: AgentHostEvent) {
   if(event.type==='access.policy.changed'&&typeof window!=='undefined'&&typeof CustomEvent!=='undefined')window.dispatchEvent(new CustomEvent('oviraptor:access-policy-changed',{detail:{projectId:event.projectId}}));
+  if (event.type === "chain.updated" && event.conversationId === selectedId.value && event.hop && typeof event.hop === "object") {
+    const hop = event.hop as { id: string; factLabel: string; factValue: string; source: string; opensNext: boolean };
+    if (hop.id && !chainHops.value.some(item => item.id === hop.id)) chainHops.value = [...chainHops.value, hop];
+    return;
+  }
   if (event.type === "connection.status") { if(event.connected!==true)needsReconnectRefresh=true;connected.value = event.connected === true; return; }
   if (event.type === "host.snapshot") {
     connected.value = true;
@@ -510,6 +562,8 @@ function handleEvent(event: AgentHostEvent) {
       facts: Array.isArray(event.facts) ? event.facts.map(item => String(item)).slice(-3) : [],
       hypotheses: Array.isArray(event.hypotheses) ? event.hypotheses.map(item => String(item)).slice(-2) : [],
       compressed: Boolean(event.compressed),
+      seq: typeof event.seq === "number" ? event.seq : undefined,
+      at: typeof event.at === "number" ? event.at : undefined,
       hold: String(event.hold ?? ""),
     };
     return;
@@ -526,7 +580,10 @@ function handleEvent(event: AgentHostEvent) {
     };
     return;
   }
+  if(event.type==='conversation.message'&&event.conversationId){if(event.conversationId===selectedId.value&&!running.value)void loadMessages(true);else void refreshConversationMetadata();return;}
   if(event.type==='conversation.deleted'&&event.conversationId){conversations.value=conversations.value.filter(item=>item.id!==event.conversationId);if(selectedId.value===event.conversationId)selectedId.value=visibleConversations.value[0]?.id;return;}
+  // Re-homed to another workspace (agent-at-top §5): drop it from this project's list, same as a delete.
+  if(event.type==='conversation.attached'&&event.conversationId&&event.projectId!==hostProjectId.value){conversations.value=conversations.value.filter(item=>item.id!==event.conversationId);if(selectedId.value===event.conversationId)selectedId.value=visibleConversations.value[0]?.id;return;}
   if (event.type === "conversation.updated" && event.conversationId) {
     conversations.value = conversations.value.map(item => (item.id === event.conversationId && (typeof event.metadataRevision!=='number'||event.metadataRevision>=(item.metadataRevision??0)) ? { ...item,
       ...(typeof event.metadataRevision==='number'?{metadataRevision:event.metadataRevision}:{}),
@@ -554,6 +611,9 @@ function handleEvent(event: AgentHostEvent) {
   } else if (event.type === "runtime.heartbeat") {
     if (!bindActivity(event)) return;
     heartbeat.value = { elapsedMs: Number(event.elapsedMs) || 0, stepTitle: typeof event.stepTitle === "string" ? event.stepTitle : undefined };
+  } else if (event.type === "runtime.toolProgress" && typeof event.evidenceId === "string") {
+    if (!bindActivity(event)) return;
+    toolProgress.value = new Map(toolProgress.value).set(event.evidenceId, { outputLines: Number(event.outputLines) || 0, previewText: String(event.previewText ?? "") });
   } else if (event.type === "message.steer") { void loadMessages(); }
   else if (event.type === "runtime.usage" && event.usage && typeof event.usage === 'object') {
     const message = messages.value.find(item => item.role === 'assistant' && item.runId === event.runId);
@@ -569,9 +629,9 @@ function handleEvent(event: AgentHostEvent) {
 }
 const stop = props.client.events(handleEvent);
 onBeforeUnmount(() => { ++permissionGeneration; disposed = true; ++projectGeneration; ++messageGeneration; stop(); });
-watch(() => [props.projectName, props.projectId], () => void loadProject(), { immediate: true, flush: "sync" });
+watch(() => [props.projectName, props.projectId, props.personal], () => void loadProject(), { immediate: true, flush: "sync" });
 watch(running, value => { if (!value) heartbeat.value = undefined; });
-watch(selectedId, (id,previous) => { if(previous)conversationDrafts.set(previous,draft.value);++messageGeneration;messageLoad=undefined;messages.value=[];loadingMessages.value=false;loadingEarlier.value=false;historyLoaded=false;earlierCursor=undefined;hasEarlier.value=false;followingTail.value=true;unreadBelow.value=false;error.value='';discoveryPanelOpen.value=!!props.draftRequest?.analysis;draft.value=id?conversationDrafts.get(id)||"":""; permissionsOpen.value = false; ++permissionGeneration; resetActivity(); task.value = null; cancellingChildren.value = []; grantPrompt.value = null; runtimePermission.value = null; running.value = false; void loadMessages(); void restoreStatus(); }, { flush: "sync" });
+watch(selectedId, (id,previous) => { if(previous)conversationDrafts.set(previous,draft.value);++messageGeneration;messageLoad=undefined;messages.value=[];loadingMessages.value=false;loadingEarlier.value=false;historyLoaded=false;earlierCursor=undefined;hasEarlier.value=false;followingTail.value=true;unreadBelow.value=false;error.value='';discoveryPanelOpen.value=!!props.draftRequest?.analysis;workspacePanelOpen.value=false;draft.value=id?conversationDrafts.get(id)||"":""; permissionsOpen.value = false; ++permissionGeneration; resetActivity(); task.value = null; cancellingChildren.value = []; grantPrompt.value = null; runtimePermission.value = null; running.value = false; void loadMessages(); void loadChain(); void restoreStatus(); }, { flush: "sync" });
 watch([()=>props.draftRequest,loadingProject,running,continuingTask,hostProjectId],()=>void applyDiscoveryDraft(),{immediate:true});
 watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{immediate:true});
 </script>
@@ -579,10 +639,11 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
 <template>
   <Teleport defer to="#conversation-history">
     <nav class="ahc-side-list" :aria-label="tr('聊天记录', 'Chat history')" data-testid="agent-host-history">
+      <p v-if="personal" class="ahc-personal-badge" data-testid="agent-host-personal-badge">{{ tr('直接对话 · 未挂工作空间', 'Direct chat · no workspace') }}</p>
       <button type="button" class="ahc-side-new" :disabled="loadingProject" @click="newConversation"><Plus :size="16" />{{ tr('新对话', 'New chat') }}</button>
       <label class="ahc-history-search"><Search :size="14" /><input v-model="historyQuery" type="search" :placeholder="tr('搜索对话', 'Search chats')" :aria-label="tr('搜索对话', 'Search chats')" /><button type="button" :aria-label="tr('查找全部会话','Find all conversations')" title="⌘K / Ctrl+K" @click="finderOpen=true">⌘K</button></label>
       <div class="ahc-history-heading"><span>{{ tr('对话', 'Chats') }}</span><button type="button" @click="finderOpen=true">{{tr(`全部 ${conversations.length}`,`All ${conversations.length}`)}}</button></div>
-      <ConversationHistoryList :items="recentConversations" :selected-id="selectedId" :project-id="hostProjectId" :loading="loadingProject" :deleting-disabled="running||continuingTask" :empty-label="historyQuery?tr('没有匹配的对话','No matching chats'):tr('新对话会显示在这里','Your chats appear here')" :update-conversation="updateHistoryConversation" :reveal-conversation="revealHistoryConversation" :remove-conversation="removeConversation" @select="selectedId=$event"/>
+      <ConversationHistoryList :items="recentConversations" :selected-id="selectedId" :project-id="hostProjectId" :loading="loadingProject" :deleting-disabled="running||continuingTask" :empty-label="historyQuery?tr('没有匹配的对话','No matching chats'):tr('新对话会显示在这里','Your chats appear here')" :update-conversation="updateHistoryConversation" :reveal-conversation="revealHistoryConversation" :remove-conversation="removeConversation" :personal="personal" :attach-conversation="attachHistoryConversation" :attach-targets="attachTargets" @select="selectedId=$event"/>
     </nav>
   </Teleport>
   <ConversationFinder v-model:open="finderOpen" v-model:query="historyQuery" :items="finderConversations" :selected-id="selectedId" :project-name="projectName" :loading="loadingProject" @select="findConversation"/>
@@ -602,6 +663,7 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
     <div ref="transcript" class="agent-host-chat-transcript" @scroll="observeTranscript">
       <div class="ahc-column">
       <details v-if="selectedId&&hostProjectId" class="ahc-discovery-details" :open="discoveryPanelOpen" @toggle="discoveryPanelOpen=($event.target as HTMLDetailsElement).open"><summary>{{tr('项目资产发现','Project asset discovery')}}</summary><DiscoveryAssistPanel v-if="discoveryPanelOpen" :client="client" :conversation-id="selectedId" :project-id="hostProjectId" :refresh-key="task?.revision" /></details>
+      <details v-if="selectedId" class="ahc-discovery-details" :open="workspacePanelOpen" @toggle="workspacePanelOpen=($event.target as HTMLDetailsElement).open"><summary>{{tr('产物与脚本 · 报告','Artifacts, scripts & report')}}</summary><AgentWorkspacePanel v-if="workspacePanelOpen" :client="client" :conversation-id="selectedId" /></details>
       <button v-if="hasEarlier" type="button" class="text-button" :disabled="loadingEarlier" @click="loadEarlierMessages">{{loadingEarlier?tr('读取中…','Loading…'):tr('加载更早消息','Load earlier messages')}}</button>
       <p v-if="loadingMessages&&!messages.length" role="status">{{tr('正在读取此会话…','Loading this conversation…')}}</p>
       <p v-if="!messages.length" class="ahc-empty">{{ tr(`当前模型：${header || '尚未选择'}。权限不足时会说明用途；已保存的授权会在原范围内复用。`, `Model: ${header || 'not selected'}. Missing permissions are explained; saved grants are reused within their scope.`) }}</p>
@@ -649,9 +711,7 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
               <p v-else>{{ tr('没有。这里的内容不是事实。', 'None. Items here are not facts.') }}</p>
             </div>
             <p v-if="inner?.compressed">{{ tr('更早的原文已收成一条。最早的要求还留着。', 'Older text was folded. The first request is still kept.') }}</p>
-            <p v-if="running && heartbeat" class="ahc-heartbeat" data-testid="agent-host-heartbeat" aria-live="polite"><span class="ahc-pulse" />{{ heartbeatLabel }}</p>
-            <ol v-if="steps.length" class="agent-host-chat-steps"><li v-for="step in steps" :key="step">{{ step }}</li></ol>
-            <ol v-else-if="activityEvidence.length" class="agent-host-chat-steps"><li v-for="item in activityEvidence" :key="item.id"><strong>{{ item.toolName }} · {{ taskLabel(item.status) }}</strong><p v-if="item.summary">{{ item.summary }}</p></li></ol>
+            <AgentToolTimelineList v-if="toolTimeline.length" :items="toolTimeline" :running="message.status === 'running'" :total-elapsed-ms="toolTimelineElapsedMs" />
           </div>
         </details>
       </article>
@@ -664,8 +724,9 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
       <code>{{ errorView.code }}</code>
     </div>
     <div v-if="grantPrompt" class="ahc-grant" role="dialog" aria-modal="true" :aria-label="tr('授权', 'Grant access')">
-      <strong>{{ grantIsWorkspace ? tr('需要授权才能继续', 'Permission needed to continue') : tr('需要授权才能查', 'Permission needed') }}</strong>
-      <p>{{ tr('这次操作要用到还没打开的权限。授权只作用于当前工作空间，也可以先不授。', 'This step needs a permission that is still off. Granting applies only to this workspace.') }}</p>
+      <strong>{{ grantPrompt.offers.some(offer => offer.appId === 'material') ? tr('放行这次访问', 'Allow this access') : (grantIsWorkspace ? tr('需要授权才能继续', 'Permission needed to continue') : tr('需要授权才能查', 'Permission needed')) }}</strong>
+      <p v-if="grantPrompt.question">{{ grantPrompt.question }}</p>
+      <p v-else>{{ tr('这次操作要用到还没打开的权限。授权只作用于当前工作空间，也可以先不授。', 'This step needs a permission that is still off. Granting applies only to this workspace.') }}</p>
       <p v-if="grantPrompt.offers.some(offer => offer.appId === 'workspace')">{{ tr('此请求只授予列出的文件权限。脚本执行将在隔离运行环境接通后开放。', 'This request grants only the listed file permissions. Script execution requires an isolated runtime.') }}</p>
       <ul>
         <li v-for="offer in grantPrompt.offers" :key="offer.appId">{{ offer.permissions.map(item => permissionLabel(item.permission)).join('、') }}</li>
@@ -678,6 +739,16 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
     </div>
     <div v-if="runtimePermission" class="ahc-grant" role="dialog" :aria-label="tr('运行时授权','Runtime permission')"><strong>{{tr('请审核运行时操作','Review runtime operation')}}</strong><p>{{runtimePermission.description}}</p><footer><button v-for="option in runtimePermission.options" :key="option.id" type="button" class="button secondary compact" @click="decidePermission(option.id)">{{option.label}}</button></footer></div>
     <p v-if="!connected" class="ahc-connection" role="status">{{tr('连接中断，正在重连。已运行的任务状态会重新核实。','Connection lost. Reconnecting and checking the running task.')}}</p>
+    <details v-if="chainHops.length" class="ahc-chain" open>
+      <summary><Search :size="12" /> {{ tr('本轮访问来源', 'Sources accessed this turn') }} <span class="ahc-chain-count">{{ chainHops.length }}</span></summary>
+      <ul :aria-label="tr('访问来源记录（读取记录，非选项）', 'Access log (read record, not options)')">
+        <li v-for="hop in chainHops" :key="hop.id">
+          <b>{{ hop.factLabel }}</b>
+          <span v-if="hop.factValue" :title="hop.factValue">{{ hop.factValue }}</span>
+          <small>{{ hop.source }} · {{ hop.opensNext ? tr('可继续读取', 'resumable') : tr('已到末尾', 'end') }}</small>
+        </li>
+      </ul>
+    </details>
     <div class="ahc-compose-dock">
     <form class="ahc-composer" @submit.prevent="send">
       <textarea ref="composerInput" v-model="draft" rows="1" :disabled="loadingProject" :placeholder="running ? tr('输入插话：会在下一步带入当前回复', 'Steer: injected before the next step') : tr('问点什么…（Enter 发送，Shift+Enter 换行）', 'Ask anything… (Enter to send)')" @keydown="onComposerKeydown" />
@@ -714,10 +785,11 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
 <style scoped>
 .ahc-side-list{display:flex;flex-direction:column;height:100%;min-height:0;gap:10px;padding:4px 0 12px;overflow:hidden}
 .ahc-side-new{display:flex;align-items:center;gap:8px;flex-shrink:0;width:100%;padding:10px;border:1px solid var(--line,#e5e6e1);border-radius:9px;background:var(--app-surface,#fff);color:var(--app-ink,#252624);font:inherit;font-size:12px;cursor:pointer}
+.ahc-personal-badge{margin:0;flex-shrink:0;font-size:var(--text-micro);font-weight:600;color:var(--blue,#416b9c);background:color-mix(in srgb,var(--blue,#416b9c) 10%,transparent);border-radius:7px;padding:4px 9px}
 .ahc-history-search{display:flex;align-items:center;gap:7px;flex-shrink:0;padding:0 8px;color:var(--app-muted,#72746f)}
 .ahc-history-search input{min-width:0;width:100%;height:28px;padding:0;border:0!important;background:transparent!important;box-shadow:none!important;font:inherit;font-size:11px;color:inherit}
-.ahc-history-search button{flex-shrink:0;padding:3px 5px;border:1px solid var(--line);border-radius:5px;background:transparent;color:inherit;font:inherit;font-size:10px;cursor:pointer}.ahc-history-heading button{border:0;padding:0;background:transparent;color:inherit;font:inherit;cursor:pointer}.ahc-history-heading button:hover{color:var(--blue)}
-.ahc-history-heading{display:flex;justify-content:space-between;padding:2px 10px 0;font-size:10px;color:var(--app-muted,#72746f)}
+.ahc-history-search button{flex-shrink:0;padding:3px 5px;border:1px solid var(--line);border-radius:5px;background:transparent;color:inherit;font:inherit;font-size:var(--text-micro);cursor:pointer}.ahc-history-heading button{border:0;padding:0;background:transparent;color:inherit;font:inherit;cursor:pointer}.ahc-history-heading button:hover{color:var(--blue)}
+.ahc-history-heading{display:flex;justify-content:space-between;padding:2px 10px 0;font-size:var(--text-micro);color:var(--app-muted,#72746f)}
 
 .agent-host-chat { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; width: 100%; height: 100%; background: var(--app-bg, transparent); }
 .agent-host-chat-transcript { flex: 1; min-height: 0; overflow: auto; padding: 18px 28px 8px; }
@@ -754,7 +826,7 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
 @media(prefers-reduced-motion:reduce){.ahc-inner-chevron{transition:none}.ahc-inner .ahc-pulse{animation:none}}
 .agent-host-chat-failure { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; padding: 8px 10px; border-radius: 8px; font-size: 12px; white-space: normal; background: color-mix(in srgb, #d14343 9%, transparent); color: var(--app-ink, inherit); }
 .agent-host-chat-failure strong, .agent-host-chat-alert strong { color: #c03535; font-weight: 600; }
-.agent-host-chat-failure code, .agent-host-chat-alert code { font-size: 10px; opacity: .55; }
+.agent-host-chat-failure code, .agent-host-chat-alert code { font-size: var(--text-micro); opacity: .55; }
 .ahc-refusal { margin: 6px 0 0; color: var(--app-muted, #72746f); font-size: 12px; line-height: 1.5; }
 .ahc-intent { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .ahc-intent button { border: 1px solid var(--line, #e5e6e1); border-radius: 999px; background: transparent; color: var(--app-ink, #252624); font: inherit; font-size: 12px; padding: 4px 10px; cursor: pointer; }
@@ -790,12 +862,22 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
 .ahc-remember input { flex:0 0 auto; width:16px; height:16px; margin:2px 0 0; }
 @media(max-width:900px){.agent-host-chat-transcript{padding:16px}.ahc-model .ahc-select{max-width:240px}}
 
+.ahc-chain{width:min(800px,calc(100% - 40px));margin:0 auto 4px;font-size:12px;line-height:1.5}
+.ahc-chain>summary{display:flex;align-items:center;gap:6px;cursor:pointer;color:var(--muted,#666);font-size:11px;padding:4px 0;list-style:none}
+.ahc-chain>summary::-webkit-details-marker{display:none}
+.ahc-chain-count{color:var(--muted,#999);font-weight:400}
+.ahc-chain ul{list-style:none;margin:0;padding:0}
+.ahc-chain li{display:grid;gap:2px;padding:6px 0;border-top:1px solid var(--line,#e6e6e6)}
+.ahc-chain b{font-weight:600}
+.ahc-chain span,.ahc-chain small{overflow-wrap:anywhere;color:var(--muted,#666)}
+.ahc-mem-chip{display:inline-flex;align-items:center;gap:5px;color:var(--blue,#416b9c)}
+.ahc-mem-hint{font-size:var(--text-micro,11px);color:var(--muted,#666);margin:2px 0 0}
 .ahc-compose-dock{flex-shrink:0;position:relative;width:min(800px,calc(100% - 40px));margin:8px auto 12px}
 .ahc-composer-controls{display:flex;align-items:center;gap:8px;min-height:34px;padding:6px 8px 0;color:var(--app-muted,#72746f)}
 .ahc-composer-controls .ahc-select{max-width:280px;height:26px;padding-left:0;border-color:transparent;background:transparent;font-size:11px;font-weight:500}
 .ahc-permissions-toggle{display:flex;align-items:center;gap:5px;padding:5px 7px;border:0;border-radius:6px;background:transparent;color:inherit;font:inherit;font-size:11px;cursor:pointer}
 .ahc-permissions-toggle:hover,.ahc-permissions-toggle[aria-expanded="true"]{background:color-mix(in srgb,var(--app-ink,#252624) 6%,transparent);color:var(--app-ink,#252624)}
-.ahc-composer-hint{margin-left:auto;font-size:10px;white-space:nowrap}
+.ahc-composer-hint{margin-left:auto;font-size:var(--text-micro);white-space:nowrap}
 .ahc-permissions-panel{position:absolute;bottom:38px;left:0;z-index:25;width:min(420px,100%);max-height:44vh;overflow:auto;padding:14px 16px;border:1px solid var(--line,#e5e6e1);border-radius:12px;background:var(--app-surface,#fff);box-shadow:0 8px 28px #00000014;font-size:12px;line-height:1.6}
 .ahc-permissions-panel header{display:flex;justify-content:space-between;align-items:center}.ahc-permissions-panel p{margin:8px 0}.ahc-permissions-panel ul{padding-left:18px;margin:6px 0}.ahc-permissions-panel button{padding:4px 0;border:0;background:transparent;color:var(--blue,#386fe5);font:inherit;font-size:11px;cursor:pointer}.ahc-permissions-help{color:var(--app-muted,#72746f);font-size:11px}
 @media(max-width:650px){.ahc-compose-dock{width:calc(100% - 24px)}.ahc-composer-controls .ahc-select{max-width:210px}.ahc-composer-hint{display:none}.ahc-task{margin:8px 12px 0}}

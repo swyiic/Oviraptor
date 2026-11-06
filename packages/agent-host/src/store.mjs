@@ -72,6 +72,7 @@ export class HostStore {
     if(!this.db.prepare("SELECT sql FROM sqlite_master WHERE name='conversation_workspace_grants'").get().sql.includes('workspace.run')){
       this.db.exec("BEGIN IMMEDIATE; ALTER TABLE conversation_workspace_grants RENAME TO workspace_grants_before_run; CREATE TABLE conversation_workspace_grants(conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,runtime_identity TEXT NOT NULL,permission TEXT NOT NULL CHECK(permission IN ('workspace.read','workspace.write','workspace.run')),PRIMARY KEY(conversation_id,runtime_identity,permission)); INSERT INTO conversation_workspace_grants SELECT * FROM workspace_grants_before_run; DROP TABLE workspace_grants_before_run; COMMIT;");
     }
+    this.db.exec(`CREATE TABLE IF NOT EXISTS conversation_material_grants(conversation_id TEXT NOT NULL,runtime_identity TEXT NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(conversation_id,runtime_identity));`);
     this.db.exec(`CREATE TABLE IF NOT EXISTS conversation_tasks(id TEXT PRIMARY KEY,conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,payload TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS conversation_tasks_conversation ON conversation_tasks(conversation_id);`);
     for (const row of this.db.prepare('SELECT id,payload FROM conversation_tasks').all()) {
@@ -115,6 +116,9 @@ export class HostStore {
       CREATE TABLE IF NOT EXISTS human_reviews(id TEXT PRIMARY KEY, project_id INTEGER NOT NULL, task_id TEXT NOT NULL, report_version INTEGER NOT NULL, note TEXT NOT NULL, created_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS report_versions(id TEXT PRIMARY KEY, project_id INTEGER NOT NULL, task_id TEXT NOT NULL, version INTEGER NOT NULL, format TEXT NOT NULL, snapshot_hash TEXT NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(project_id, task_id, snapshot_hash, format));`);
     this.db.exec(`CREATE TABLE IF NOT EXISTS application_retained(app_id TEXT PRIMARY KEY,version TEXT NOT NULL,digest TEXT NOT NULL,data_path TEXT,data_version TEXT NOT NULL,data_schema_version INTEGER NOT NULL,retained_at TEXT NOT NULL);`);
+    this.db.exec(`CREATE TABLE IF NOT EXISTS project_memory(project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,entry_id TEXT NOT NULL,note TEXT NOT NULL,kind TEXT NOT NULL DEFAULT 'fact',tags TEXT NOT NULL DEFAULT '[]',source_conversation_id TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,scope TEXT NOT NULL DEFAULT 'project',PRIMARY KEY(project_id,entry_id));`);
+    if (!columns('project_memory').has('scope')) this.db.exec("ALTER TABLE project_memory ADD COLUMN scope TEXT NOT NULL DEFAULT 'project'");
+    this.db.exec(`CREATE TABLE IF NOT EXISTS agent_findings(id TEXT PRIMARY KEY,conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,project_id INTEGER NOT NULL,title TEXT NOT NULL DEFAULT '',severity TEXT NOT NULL DEFAULT 'info',kind TEXT NOT NULL DEFAULT 'vulnerability',record_json TEXT NOT NULL DEFAULT '{}',status TEXT NOT NULL DEFAULT 'unverified' CHECK(status IN ('unverified','confirmed','rejected')),created_at TEXT NOT NULL,decided_at TEXT NOT NULL DEFAULT '');`);
     initializeNativeOwners(this.db);
     const recordColumns = columns('tool_records');
     if (recordColumns.size && !recordColumns.has('visibility')) this.db.exec("ALTER TABLE tool_records ADD COLUMN visibility TEXT NOT NULL DEFAULT 'available'");
@@ -262,7 +266,7 @@ export class HostStore {
     return row;
   }
   normalizeProjectKind(kind) {
-    return kind === 'scratch' ? 'scratch' : 'project';
+    return kind === 'scratch' ? 'scratch' : kind === 'personal' ? 'personal' : 'project';
   }
   createProject(name, { externalId, kind } = {}) {
     const value = boundedText(name, 256);
@@ -297,6 +301,14 @@ export class HostStore {
     }
     return this.createProject(name || `Workspace ${external}`, { externalId: external });
   }
+  /** The reserved top-level "direct chat" space (agent-at-top): conversations with no named
+   * workspace land here. A fixed external_id keeps it stable and idempotent across restarts. */
+  ensurePersonalProject() {
+    const external = '__personal__';
+    this.db.prepare("INSERT OR IGNORE INTO projects(name,created_at,external_id,kind) VALUES('直接对话',?,?,'personal')").run(stamp(), external);
+    const row = this.db.prepare('SELECT id FROM projects WHERE external_id=?').get(external);
+    return this.project(row.id);
+  }
   conversations(projectId) {
     this.project(projectId);
     return this.db.prepare(`SELECT c.id,c.project_id AS projectId,c.title,c.created_at AS createdAt,c.pinned,c.metadata_revision AS metadataRevision,
@@ -321,6 +333,29 @@ export class HostStore {
     this.db.prepare('UPDATE conversations SET title=?,metadata_revision=metadata_revision+1 WHERE id=? AND title_manual=0').run(boundedText(title, 256), String(id));
     return this.conversation(id);
   }
+  /** Re-home a conversation to another workspace (agent-at-top §5): forward-only —
+   * future turns use the target's workspace/memory/budget; past evidence stays. */
+  attachConversation(id, projectId) {
+    this.conversation(id);
+    this.project(projectId);
+    this.db.prepare('UPDATE conversations SET project_id=?,metadata_revision=metadata_revision+1 WHERE id=?').run(positiveId(projectId), String(id));
+    return this.conversation(id);
+  }
+  // Agent-recorded structured findings (authorized pentest evidence). Advisory
+  // record only — recording a finding grants no permission; real requests still
+  // go through authorization + approval. Default 'unverified' until operator review.
+  #findingRow(row) { let rec = {}; try { rec = JSON.parse(row.record_json ?? '{}'); } catch { /* advisory */ } return { id: row.id, conversationId: row.conversation_id, projectId: row.project_id, title: row.title, severity: row.severity, kind: row.kind, record: rec && typeof rec === 'object' ? rec : {}, status: row.status, createdAt: row.created_at, decidedAt: row.decided_at }; }
+  finding(id) { const row = this.db.prepare('SELECT * FROM agent_findings WHERE id=?').get(String(id)); if (!row) throw hostError('host_finding_unknown', 404); return this.#findingRow(row); }
+  findings(conversationId, status) { return this.db.prepare('SELECT * FROM agent_findings WHERE (?1 IS NULL OR conversation_id=?1) AND (?2 IS NULL OR status=?2) ORDER BY created_at DESC, id').all(conversationId != null ? String(conversationId) : null, status != null ? String(status) : null).map(r => this.#findingRow(r)); }
+  recordFinding(conversationId, projectId, { title, severity, kind, recordJson } = {}) {
+    this.conversation(conversationId);
+    const id = randomUUID();
+    const sev = ['critical','high','medium','low','info'].includes(severity) ? severity : 'info';
+    this.db.prepare("INSERT INTO agent_findings(id,conversation_id,project_id,title,severity,kind,record_json,created_at) VALUES(?,?,?,?,?,?,?,?)").run(id, String(conversationId), positiveId(projectId), boundedText(title || '', 256), sev, kind || 'vulnerability', String(recordJson ?? '{}'), stamp());
+    return this.finding(id);
+  }
+  decideFinding(id, confirm) { const changed = this.db.prepare("UPDATE agent_findings SET status=?2, decided_at=? WHERE id=?1 AND status='unverified'").run(String(id), confirm ? 'confirmed' : 'rejected', stamp()).changes; if (changed !== 1) throw hostError('host_finding_not_pending', 409); return this.finding(id); }
+  deleteFinding(id) { return this.db.prepare('DELETE FROM agent_findings WHERE id=?').run(String(id)).changes > 0; }
   updateConversationMetadata(id, input) {
     if (!input || typeof input !== 'object' || Array.isArray(input) || !Object.hasOwn(input, 'projectId')
       || Object.keys(input).some(key => !['projectId', 'title', 'pinned'].includes(key))
@@ -373,7 +408,8 @@ export class HostStore {
   turnMessages(id, userMessageId, projectId) {
     this.conversation(id, projectId);
     const columns='id,role,content,status,run_id AS runId,stop_reason AS stopReason,outcome_unknown AS outcomeUnknown';
-    const latest=this.db.prepare(`SELECT ${columns} FROM messages WHERE conversation_id=? ORDER BY rowid DESC LIMIT 1`).get(id);
+    // Scan deliveries are appended outside any run and are never a turn's reply.
+    const latest=this.db.prepare(`SELECT ${columns} FROM messages WHERE conversation_id=? AND COALESCE(stop_reason,'')<>'scan_delivery' ORDER BY rowid DESC LIMIT 1`).get(id);
     if(!latest)return [];
     const user=typeof userMessageId==='string'
       ?this.db.prepare(`SELECT ${columns} FROM messages WHERE conversation_id=? AND id=? AND role='user'`).get(id,userMessageId):null;
@@ -468,5 +504,47 @@ export class HostStore {
     this.conversation(id);
     this.db.prepare('INSERT INTO conversation_memory(conversation_id,payload,updated_at) VALUES(?,?,?) ON CONFLICT(conversation_id) DO UPDATE SET payload=excluded.payload,updated_at=excluded.updated_at')
       .run(String(id), JSON.stringify(payload ?? { turns: [], facts: [] }), stamp());
+  }
+  // Agent-curated, project-scoped cross-session memory. Advisory reference only:
+  // never an input to any authorization/scope/settlement gate (see design note).
+  projectMemory(projectId) {
+    return this.db.prepare("SELECT entry_id AS entryId,note,kind,tags,source_conversation_id AS sourceConversationId,created_at AS createdAt,updated_at AS updatedAt FROM project_memory WHERE project_id=? AND scope='project' ORDER BY updated_at DESC")
+      .all(Number(projectId))
+      .map(row => { let tags = []; try { const parsed = JSON.parse(row.tags ?? '[]'); if (Array.isArray(parsed)) tags = parsed; } catch { /* advisory */ } return { ...row, tags }; });
+  }
+  /** Global cross-workspace memory: scope='global' entries, visible from every project. */
+  globalMemory() {
+    return this.db.prepare("SELECT entry_id AS entryId,note,kind,tags,source_conversation_id AS sourceConversationId,created_at AS createdAt,updated_at AS updatedAt FROM project_memory WHERE scope='global' ORDER BY updated_at DESC")
+      .all()
+      .map(row => { let tags = []; try { const parsed = JSON.parse(row.tags ?? '[]'); if (Array.isArray(parsed)) tags = parsed; } catch { /* advisory */ } return { ...row, tags }; });
+  }
+  upsertProjectMemory(projectId, entry = {}) {
+    this.project(projectId);
+    const now = stamp();
+    this.db.prepare('INSERT INTO project_memory(project_id,entry_id,note,kind,tags,source_conversation_id,created_at,updated_at,scope) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(project_id,entry_id) DO UPDATE SET note=excluded.note,kind=excluded.kind,tags=excluded.tags,updated_at=excluded.updated_at')
+      .run(Number(projectId), String(entry.entryId), String(entry.note ?? ''), String(entry.kind || 'fact'), JSON.stringify(Array.isArray(entry.tags) ? entry.tags : []), entry.sourceConversationId ? String(entry.sourceConversationId) : null, entry.createdAt || now, now, entry.scope === 'global' ? 'global' : 'project');
+  }
+  touchProjectMemory(projectId, entryId) {
+    this.db.prepare('UPDATE project_memory SET updated_at=? WHERE project_id=? AND entry_id=?').run(stamp(), Number(projectId), String(entryId));
+  }
+  deleteProjectMemory(projectId, entryId) {
+    return this.db.prepare('DELETE FROM project_memory WHERE project_id=? AND entry_id=?').run(Number(projectId), String(entryId)).changes > 0;
+  }
+  clearProjectMemory(projectId) {
+    return this.db.prepare("DELETE FROM project_memory WHERE project_id=? AND scope='project'").run(Number(projectId)).changes;
+  }
+  deleteVisibleMemoryEntry(projectId, entryId) {
+    return this.db.prepare("DELETE FROM project_memory WHERE entry_id=? AND (project_id=? OR scope='global')").run(String(entryId), Number(projectId)).changes > 0;
+  }
+  deleteGlobalMemoryEntry(entryId) {
+    return this.db.prepare("DELETE FROM project_memory WHERE entry_id=? AND scope='global'").run(String(entryId)).changes > 0;
+  }
+  pruneProjectMemory(projectId, maxEntries) {
+    this.db.prepare("DELETE FROM project_memory WHERE project_id=? AND scope='project' AND entry_id NOT IN (SELECT entry_id FROM project_memory WHERE project_id=? AND scope='project' ORDER BY updated_at DESC LIMIT ?)")
+      .run(Number(projectId), Number(projectId), Math.max(0, Number(maxEntries) || 0));
+  }
+  pruneGlobalMemory(maxEntries) {
+    this.db.prepare("DELETE FROM project_memory WHERE scope='global' AND entry_id NOT IN (SELECT entry_id FROM project_memory WHERE scope='global' ORDER BY updated_at DESC LIMIT ?)")
+      .run(Math.max(0, Number(maxEntries) || 0));
   }
 }

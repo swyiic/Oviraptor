@@ -129,6 +129,11 @@ export class ChatController {
       else{step.title=String(event.title??step.title);step.status=event.status||step.status;}
       plan.runId=event.runId||plan.runId;this.state.plans.set(id,plan);
     }
+    if(event.type==='conversation.message'&&event.message?.id){
+      // A message stored outside any run: append it, leave runs and approvals alone.
+      if(active&&!this.state.messages.some(x=>same(x.id,event.message.id))){this.messageRevision++;this.state.messages.push({...event.message,text:event.message.content??'',streaming:false});}
+      this.update();return;
+    }
     if(event.type==='message.delta'||event.type==='message.completed'){
       if(event.type==='message.completed'){
         this.finishedRuns.add(entityId(event.runId));if(this.finishedRuns.size>1000)this.finishedRuns.delete(this.finishedRuns.values().next().value);

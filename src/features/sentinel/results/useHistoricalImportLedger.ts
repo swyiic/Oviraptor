@@ -2,9 +2,11 @@ import { onBeforeUnmount, ref, watch, type Ref } from "vue";
 import type { HistoricalImportPreview, HistoricalImportRun } from "../types";
 import { sentinelApi } from "../api";
 import { validateHistoricalPreviews } from "./historicalPreviewContract";
+import { useI18n } from "../../../i18n";
 
 // Global historical ledger only; importing never grants native task authority.
 export function useHistoricalImportLedger(view: Ref<"attention" | "history" | "all">) {
+  const { tr } = useI18n();
   const importedRuns = ref<HistoricalImportRun[]>([]);
   const importedSelected = ref<HistoricalImportRun>();
   const importedPreviews = ref<HistoricalImportPreview[]>([]);
@@ -41,7 +43,7 @@ export function useHistoricalImportLedger(view: Ref<"attention" | "history" | "a
       importedRuns.value = older ? [...importedRuns.value, ...page.slice(0, 50)] : page.slice(0, 50);
       importedLoaded.value = true;
     } catch {
-      if (serial === importedSerial) importedError.value = "历史导入记录暂时不可读取，请重试";
+      if (serial === importedSerial) importedError.value = tr("历史导入记录暂时不可读取，请重试", "Historical import records are temporarily unavailable; try again");
     } finally {
       if (serial === importedSerial) importedLoading.value = false;
     }
@@ -68,7 +70,7 @@ export function useHistoricalImportLedger(view: Ref<"attention" | "history" | "a
       if (serial !== importedPreviewSerial) return;
       importedPreviews.value = validateHistoricalPreviews(rows, run.scanId);
     } catch {
-      if (serial === importedPreviewSerial) importedError.value = "历史产物预览暂时不可读取，请重试";
+      if (serial === importedPreviewSerial) importedError.value = tr("历史产物预览暂时不可读取，请重试", "Historical artifact previews are temporarily unavailable; try again");
     } finally {
       if (serial === importedPreviewSerial) importedPreviewLoading.value = false;
     }

@@ -1,0 +1,151 @@
+{
+  "checks": [
+    "usage gates removed",
+    "existing canonical model reports synchronized",
+    "advanced settings folded",
+    "editor padding survives global panel CSS",
+    "key visibility toggles",
+    "adding another model keeps current default unchecked",
+    "changed API requires test before save",
+    "new connection joins shared catalog without dropping other models",
+    "save without default keeps Host provider unchanged",
+    "new catalog revision preserves synchronized default",
+    "historical versions do not duplicate directory entries",
+    "default choice updates category and Host together",
+    "OAuth uses same editor without API key",
+    "OAuth persists real profile with no token or key",
+    "saving OAuth nondefault does not switch current API",
+    "OAuth default synchronizes model and catalog reference",
+    "OAuth default is shown synchronized",
+    "local default clears prior credentials explicitly",
+    "failed Host synchronization leaves saved model recoverable",
+    "retry does not duplicate Rust save",
+    "superseded save does not overwrite later Host selection",
+    "model test failures surfaced",
+    "existing split defaults clearly report pending sync",
+    "nondefault model can save with Host offline",
+    "network configuration remains functional",
+    "api 1440 light fits",
+    "oauth 1440 light fits",
+    "api 1440 dark fits",
+    "oauth 1440 dark fits",
+    "api 1024 light fits",
+    "oauth 1024 light fits",
+    "api 1024 dark fits",
+    "oauth 1024 dark fits",
+    "api 800 light fits",
+    "oauth 800 light fits",
+    "api 800 dark fits",
+    "oauth 800 dark fits",
+    "api 480 light fits",
+    "api narrow fields stack false",
+    "oauth 480 light fits",
+    "oauth narrow fields stack false",
+    "api 480 dark fits",
+    "api narrow fields stack true",
+    "oauth 480 dark fits",
+    "oauth narrow fields stack true",
+    "no browser runtime errors"
+  ],
+  "matrix": [
+    {
+      "view": "api",
+      "width": 1440,
+      "dark": false,
+      "overflow": false
+    },
+    {
+      "view": "oauth",
+      "width": 1440,
+      "dark": false,
+      "overflow": false
+    },
+    {
+      "view": "api",
+      "width": 1440,
+      "dark": true,
+      "overflow": false
+    },
+    {
+      "view": "oauth",
+      "width": 1440,
+      "dark": true,
+      "overflow": false
+    },
+    {
+      "view": "api",
+      "width": 1024,
+      "dark": false,
+      "overflow": false
+    },
+    {
+      "view": "oauth",
+      "width": 1024,
+      "dark": false,
+      "overflow": false
+    },
+    {
+      "view": "api",
+      "width": 1024,
+      "dark": true,
+      "overflow": false
+    },
+    {
+      "view": "oauth",
+      "width": 1024,
+      "dark": true,
+      "overflow": false
+    },
+    {
+      "view": "api",
+      "width": 800,
+      "dark": false,
+      "overflow": false
+    },
+    {
+      "view": "oauth",
+      "width": 800,
+      "dark": false,
+      "overflow": false
+    },
+    {
+      "view": "api",
+      "width": 800,
+      "dark": true,
+      "overflow": false
+    },
+    {
+      "view": "oauth",
+      "width": 800,
+      "dark": true,
+      "overflow": false
+    },
+    {
+      "view": "api",
+      "width": 480,
+      "dark": false,
+      "overflow": false
+    },
+    {
+      "view": "oauth",
+      "width": 480,
+      "dark": false,
+      "overflow": false
+    },
+    {
+      "view": "api",
+      "width": 480,
+      "dark": true,
+      "overflow": false
+    },
+    {
+      "view": "oauth",
+      "width": 480,
+      "dark": true,
+      "overflow": false
+    }
+  ],
+  "errors": [],
+  "realDatabase": false,
+  "realNetwork": false
+}

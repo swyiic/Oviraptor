@@ -1,5 +1,7 @@
 import { computed, ref, watch, type Ref } from "vue";
 import { sentinelApi } from "../api";
+import { expandSteeringInput } from "../steering/playbooks";
+import { steeringInsert } from "../steering/insertBus";
 import { orderedAssessmentPlan, orderedAssessmentExecution, orderedPlanCoherent } from "../directives/orderedAssessmentPlan";
 import type { AgentTimelineItem, HumanDirectiveDraft, NativeScanStatus } from "../types";
 
@@ -134,7 +136,7 @@ export function useAgentDialogDirectives(options: {
   }
 
   async function send() {
-    const text = draft.value.trim();
+    const text = expandSteeringInput(draft.value.trim());
     if (isDisposed() || !scanId.value || !text || sending.value) return;
     const current = state.value;
     if (!current || current.scanId !== scanId.value || !Number.isSafeInteger(current.attemptNumber) || current.attemptNumber < 1) {
@@ -320,6 +322,13 @@ export function useAgentDialogDirectives(options: {
     if (text) unsentDrafts.set(activeComposerKey, { text });
     else unsentDrafts.delete(activeComposerKey);
   }, { flush: "sync" });
+  watch(steeringInsert, (text) => {
+    const next = text.trim();
+    if (!next || !scanId.value) return;
+    const current = draft.value.trim();
+    draft.value = current ? `${current}\n${next}` : next;
+    steeringInsert.value = "";
+  });
   watch(composerKey, (key) => {
     // Review editors belong to this exact project/task/thread view. Preserve
     // the existing send cache settlement when no review is in progress.

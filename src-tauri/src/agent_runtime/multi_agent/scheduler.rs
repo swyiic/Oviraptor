@@ -26,6 +26,7 @@ include!("scheduler/supervised_bootstrap.rs");
 include!("scheduler/budget_reservation.rs");
 include!("scheduler/schedule_authority.rs");
 include!("scheduler/child_contract.rs");
+include!("scheduler/controller_phase_lease.rs");
 include!("scheduler/child_grant.rs");
 include!("scheduler/assignment.rs");
 include!("scheduler/reassignment.rs");

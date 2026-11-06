@@ -49,11 +49,6 @@ fn native_model_budget_admission_with_estimate(
     unbounded_estimate: Option<i64>,
 ) -> Result<Option<NativeModelBudgetAdmission>, String> {
     let Some(run) = &context.run else {
-        #[cfg(test)]
-        {
-            return Ok(None);
-        }
-        #[cfg(not(test))]
         {
             return Err("tool_run_not_found".into());
         }
@@ -93,9 +88,6 @@ fn native_model_budget_admission_with_estimate(
 // This is not an admission or a claim: the atomic admission repeats every check.
 fn native_model_budget_preflight(context: &AgentRunContext) -> Result<(), String> {
     let Some(run) = &context.run else {
-        #[cfg(test)]
-        { return Ok(()); }
-        #[cfg(not(test))]
         { return Err("tool_run_not_found".into()); }
     };
     if run.db_path != context.db_path {

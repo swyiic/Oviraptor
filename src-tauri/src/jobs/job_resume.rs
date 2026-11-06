@@ -145,13 +145,6 @@ pub(super) fn validate_seeds(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-pub(super) fn prepare_resume(
-    connection: &mut rusqlite::Connection,
-    run_id: i64,
-    app_data_dir: &Path,
-) -> Result<PreparedResume, String> {
-    prepare_resume_with_credentials(connection, run_id, app_data_dir, native_config::fofa_key)
-}
 
 pub(super) fn prepare_resume_with_credentials(
     connection: &mut rusqlite::Connection,
@@ -173,7 +166,7 @@ pub(super) fn prepare_resume_with_credentials(
     if !matches!(pipeline.as_str(), "full" | "collect" | "reprobe") {
         return Err("该任务类型不支持原地恢复".into());
     }
-    if !matches!(status.as_str(), "interrupted" | "cancelled" | "failed") {
+    if !matches!(status.as_str(), "interrupted" | "cancelled" | "failed" | "paused") {
         return Err("该任务当前不能继续".into());
     }
     require_idle_project(&tx, project_id, Some(run_id))?;
@@ -288,7 +281,7 @@ pub(super) fn prepare_resume_with_credentials(
         crate::configuration_runtime_owners::materialize_asset_transport(&tx, &mut snapshot)?;
         crate::configuration_runtime_owners::repair_asset_transport(&mut settings, &snapshot)?;
     }
-    let changed = tx.execute("UPDATE runs SET status='queued',stage=?1,error='',finished_at=NULL,config_snapshot=?3 WHERE id=?2 AND status IN ('failed','cancelled','interrupted')",
+    let changed = tx.execute("UPDATE runs SET status='queued',stage=?1,error='',finished_at=NULL,config_snapshot=?3 WHERE id=?2 AND status IN ('failed','cancelled','interrupted','paused')",
         params![if pipeline=="reprobe" {"reprobe"} else {"collect"},run_id,persisted_snapshot]).map_err(|error| error.to_string())?;
     if changed != 1 {
         return Err("该任务已由其他进程恢复".into());
@@ -302,6 +295,3 @@ pub(super) fn prepare_resume_with_credentials(
     })
 }
 
-#[cfg(test)]
-#[path = "job_resume_tests.rs"]
-mod tests;

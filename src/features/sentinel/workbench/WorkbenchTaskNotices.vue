@@ -20,7 +20,7 @@ const { pendingFollowupInput, followupSubmission, followupRecoveryBusy,
 </script>
 
 <template>
-  <section v-if="handoff" class="effective-policy-card" aria-label="独立任务交接">
+  <section v-if="handoff" class="effective-policy-card" :aria-label="tr('独立任务交接', 'Independent task handoff')">
     <strong>{{ tr('人工结案后的独立任务 · 仅保存草稿', 'Independent task after administrative closure · draft only') }}</strong>
     <p>{{ tr('来源任务／结案回执', 'Source task / closure receipt') }}：{{ handoff.sourceScanId }} · {{ handoff.closureId }}</p>
     <p>{{ tr('不复制原登录身份、授权、预算或未完成指令；旧任务不会恢复。每个结案保留一个正式交接任务，重复提交或重新打开会找回它。原任务的未知效果仍未结清。', 'No old identities, grants, budget or unfinished instructions are copied. The old task never resumes. Each closure retains one canonical handoff; retries and reopening recover it. Source effects remain unsettled.') }}</p>

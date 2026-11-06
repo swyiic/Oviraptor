@@ -177,6 +177,11 @@ pub(super) struct CollectionCheckpoint<'a> {
     proxy: String,
     retention: std::cell::RefCell<RetentionReport>,
     legacy_noted: std::cell::RefCell<std::collections::BTreeSet<String>>,
+    // Signatures of queries whose pagination fully terminated in a prior run
+    // (appended only at true completion). Lets a resume skip already-finished
+    // queries instead of re-iterating every one. Binding-scoped: this file lives
+    // in the per-task checkpoint dir, so it only applies to the exact same seed set.
+    completed: std::cell::RefCell<std::collections::HashSet<String>>,
     _lock: File,
 }
 
@@ -191,19 +196,7 @@ fn known_request(path: &Path) -> bool {
 }
 
 impl<'a> CollectionCheckpoint<'a> {
-    #[cfg(test)]
-    pub(super) fn open(output: &Path, binding: CollectionBinding) -> Result<Self, String> {
-        Self::open_redacted(output, binding, "", "")
-    }
 
-    pub(super) fn open_redacted(
-        output: &Path,
-        binding: CollectionBinding,
-        key: &str,
-        proxy: &str,
-    ) -> Result<Self, String> {
-        Self::open_with_storage(output, binding, key, proxy, None)
-    }
 
     pub(super) fn open_with_storage(
         output: &Path,
@@ -268,6 +261,18 @@ impl<'a> CollectionCheckpoint<'a> {
         let binding_sha256 =
             digest(&serde_json::to_vec(&binding).map_err(|error| error.to_string())?);
         fs::create_dir_all(directory.join("pages")).map_err(|error| error.to_string())?;
+        let completed = {
+            let mut set = std::collections::HashSet::new();
+            if let Ok(text) = fs::read_to_string(directory.join("completed-queries.v1")) {
+                for line in text.lines() {
+                    let signature = line.trim();
+                    if !signature.is_empty() {
+                        set.insert(signature.to_string());
+                    }
+                }
+            }
+            std::cell::RefCell::new(set)
+        };
         let checkpoint = Self {
             storage,
             directory,
@@ -276,6 +281,7 @@ impl<'a> CollectionCheckpoint<'a> {
             key: key.into(),
             proxy: proxy.into(),
             _lock: lock,
+            completed,
             legacy_noted: std::cell::RefCell::new(std::collections::BTreeSet::new()),
             retention: std::cell::RefCell::new(RetentionReport {
                 max_age_seconds: MAX_RECEIPT_AGE_SECONDS,
@@ -471,6 +477,29 @@ impl<'a> CollectionCheckpoint<'a> {
 
     pub(super) fn binding_sha256(&self) -> &str {
         &self.binding_sha256
+    }
+
+    /// Whether this query's pagination already fully terminated in a prior run of
+    /// THIS task (same seed set / binding), so a resume can skip it entirely.
+    pub(super) fn is_query_complete(&self, signature: &str) -> bool {
+        self.completed.borrow().contains(signature)
+    }
+
+    /// Record that this query fully finished. Append-only (one signature per line)
+    /// so marking N queries costs O(N), not an O(N^2) rewrite of a growing set.
+    /// Call ONLY at true termination (pagination ended, status ok) — never mid-page
+    /// — so a crash/pause mid-query is NOT marked and is re-collected on resume.
+    pub(super) fn mark_query_complete(&self, signature: &str) -> Result<(), String> {
+        if !self.completed.borrow_mut().insert(signature.to_string()) {
+            return Ok(());
+        }
+        use std::io::Write as _;
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.directory.join("completed-queries.v1"))
+            .map_err(|error| format!("无法写入采集完成标记：{error}"))?;
+        writeln!(file, "{signature}").map_err(|error| error.to_string())
     }
 
     pub(super) fn sanitize_legacy(&self, path: &Path, payload: &Value) -> Result<(), String> {

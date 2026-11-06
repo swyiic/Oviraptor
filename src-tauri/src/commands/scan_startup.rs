@@ -194,6 +194,14 @@ fn prepare_web_startup_in(connection: &rusqlite::Connection, app_data: &Path, sc
         WebStartMode::Confirm if status != "draft" => return Err(format!("任务当前状态为 {status}，不能重复确认")),
         WebStartMode::Resume => {
             if !matches!(status.as_str(), "paused" | "partial") { return Err(format!("任务当前状态为 {status}，不能恢复")); }
+            let existing_allowance: bool = connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM agent_root_budget_attempts a
+                   WHERE EXISTS(SELECT 1 FROM agent_runs r WHERE r.id=a.root_run_id AND r.scan_id=?1
+                     AND r.backend='native' AND r.role='coordinator' AND r.parent_run_id IS NULL AND r.assignment_id='')
+                   OR json_extract(a.contract_json,'$.root.scan')=?1)",
+                [scan_id], |row| row.get(0),
+            ).map_err(|e| e.to_string())?;
+            if existing_allowance { return Err("web_resume_original_allowance_reused".into()); }
             let sealed: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM agent_runs WHERE scan_id=?1 AND status='legacy_backend_removed')", [scan_id], |r| r.get(0)).map_err(|e| e.to_string())?;
             if sealed { return Err("legacy_backend_removed: 历史执行不能恢复，请发起全新 Native 执行".into()); }
             let changed = connection.execute("UPDATE sentinel_scans SET status='draft' WHERE id=?1 AND status=?2 AND attempt_count=?3", params![scan_id,status,previous_attempt]).map_err(|e| e.to_string())?;
@@ -262,6 +270,13 @@ fn persist_web_startup_in(connection: &rusqlite::Connection, startup: &WebStartu
     let changed = connection.execute("INSERT INTO sentinel_scan_attempts(scan_id,attempt_number,execution_mode,status,stage,checkpoint,work_dir,llm_requests_start,input_tokens_start,output_tokens_start,cached_tokens_start,total_tokens_start,backend_plan_json) SELECT id,?2,?3,'scanning',?4,?5,?6,llm_requests,input_tokens,output_tokens,cached_tokens,total_tokens,?7 FROM sentinel_scans WHERE id=?1",
         params![scan_id,attempt,startup.execution_mode,stage,checkpoint,work_dir,backend]).map_err(|e| e.to_string())?;
     if changed != 1 { return Err("web_start_ledger_not_persisted".into()); }
+    if startup.execution_mode == "resume" {
+        let linked = connection.execute(
+            "UPDATE sentinel_scan_attempts SET parent_attempt_number=?3 WHERE scan_id=?1 AND attempt_number=?2 AND execution_mode='resume'",
+            params![scan_id, attempt, startup.previous_attempt],
+        ).map_err(|e| e.to_string())?;
+        if linked != 1 { return Err("web_start_parent_attempt_not_persisted".into()); }
+    }
     connection.execute("DELETE FROM app_settings WHERE key=?1", [format!("sentinel-next-attempt-mode:{scan_id}")]).map_err(|e| e.to_string())?;
     prepare_current_attempt_surface(connection,scan_id,attempt)?;
     // A new attempt inherits the explicit scheduling contract, rather than
@@ -278,8 +293,8 @@ fn persist_web_startup_in(connection: &rusqlite::Connection, startup: &WebStartu
     // Validate persisted rows AFTER all writes/triggers, not just row counts.
     let valid: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM sentinel_scans s JOIN projects p ON p.id=s.project_id WHERE s.id=?1 AND s.project_id=?2 AND p.status='active' AND s.status='scanning' AND s.scan_type='web' AND s.attempt_count=?3 AND s.task_path=?4 AND s.skill_names=?5 AND s.current_checkpoint=?6) AND NOT EXISTS(SELECT 1 FROM sentinel_deleted_scans WHERE scan_id=?1)",
         params![scan_id,startup.project_id,attempt,task_path,skills,checkpoint], |r| r.get(0)).map_err(|e| e.to_string())?;
-    let ledger_valid: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM sentinel_scan_attempts a JOIN sentinel_scans s ON s.id=a.scan_id WHERE a.scan_id=?1 AND a.attempt_number=?2 AND a.execution_mode=?3 AND a.status='scanning' AND a.stage=?4 AND a.checkpoint=?5 AND a.work_dir=?6 AND a.backend_plan_json=?7 AND a.finished_at='' AND a.stop_reason='' AND a.llm_requests_start=s.llm_requests AND a.input_tokens_start=s.input_tokens AND a.output_tokens_start=s.output_tokens AND a.cached_tokens_start=s.cached_tokens AND a.total_tokens_start=s.total_tokens)",
-        params![scan_id,attempt,startup.execution_mode,stage,checkpoint,work_dir,backend], |r| r.get(0)).map_err(|e| e.to_string())?;
+    let ledger_valid: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM sentinel_scan_attempts a JOIN sentinel_scans s ON s.id=a.scan_id WHERE a.scan_id=?1 AND a.attempt_number=?2 AND a.execution_mode=?3 AND a.status='scanning' AND a.stage=?4 AND a.checkpoint=?5 AND a.work_dir=?6 AND a.backend_plan_json=?7 AND a.finished_at='' AND a.stop_reason='' AND a.llm_requests_start=s.llm_requests AND a.input_tokens_start=s.input_tokens AND a.output_tokens_start=s.output_tokens AND a.cached_tokens_start=s.cached_tokens AND a.total_tokens_start=s.total_tokens AND ((a.execution_mode<>'resume' AND a.parent_attempt_number IS NULL) OR (a.execution_mode='resume' AND a.parent_attempt_number=?8)))",
+        params![scan_id,attempt,startup.execution_mode,stage,checkpoint,work_dir,backend,startup.previous_attempt], |r| r.get(0)).map_err(|e| e.to_string())?;
     let projection_valid: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM sentinel_checkpoints WHERE scan_id=?1 AND url='' AND stage='scan_backend_plan' AND raw_json=?2) AND EXISTS(SELECT 1 FROM app_settings WHERE key=?3 AND value=?4) AND NOT EXISTS(SELECT 1 FROM app_settings WHERE key=?5)",
         params![scan_id,backend,format!("agent-current-attempt:{scan_id}"),attempt.to_string(),format!("sentinel-next-attempt-mode:{scan_id}")], |r| r.get(0)).map_err(|e| e.to_string())?;
     let stored_policy: String = connection.query_row("SELECT policy_json FROM sentinel_scan_contexts WHERE scan_id=?1", [scan_id], |r| r.get(0)).map_err(|e| e.to_string())?;

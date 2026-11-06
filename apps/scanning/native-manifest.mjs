@@ -1,7 +1,11 @@
 // Native execution is a versioned package. The Node v1 draft package remains
 // separate and is never allowed to spawn a native executable implicitly.
 export function createNativeManifest({ platform = process.platform, arch = process.arch } = {}) {
-  const task = { type: 'object', properties: { taskId: { type: 'string', minLength: 1, maxLength: 128 } }, required: ['taskId'], additionalProperties: false };
+  const task = { type: 'object', properties: {
+    taskId: { type: 'string', minLength: 1, maxLength: 128 },
+    attemptNumber: { type: 'integer', minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
+    bindingVersion: { type: 'integer', minimum: 1, maximum: Number.MAX_SAFE_INTEGER },
+  }, required: ['taskId'], additionalProperties: false };
   const empty = { type: 'object', properties: {}, additionalProperties: false };
   const workbench = { type: 'object', properties: {
     sourceRef: { type: 'string', minLength: 36, maxLength: 36 }, title: { type: 'string', minLength: 1, maxLength: 120 },

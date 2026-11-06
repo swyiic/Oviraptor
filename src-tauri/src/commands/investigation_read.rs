@@ -220,7 +220,7 @@ pub fn set_investigation_mutation_approval(
     if input.hypothesis_id <= 0 {
         return Err("调查假设 ID 无效".into());
     }
-    let max_attempts = input.max_attempts.unwrap_or(1).clamp(1, 3);
+    let max_attempts = input.max_attempts.unwrap_or(6).clamp(1, 8);
     let expires_minutes = input.expires_minutes.unwrap_or(30).clamp(5, 240);
     let note = input.note.unwrap_or_default();
     if note.chars().count() > 500 {

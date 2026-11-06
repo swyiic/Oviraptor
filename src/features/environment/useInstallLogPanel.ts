@@ -2,6 +2,7 @@ import { onMounted, onBeforeUnmount, ref } from "vue";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { environmentApi } from "./api";
 import type { InstallLogPage, InstallLogRow } from "./types";
+import { useI18n } from "../../i18n";
 
 const streams = new Set(["status", "stdout", "stderr", "success", "error"]);
 const PAGE_SIZE = 300;
@@ -26,6 +27,7 @@ function validPage(value: InstallLogPage, after?: number): value is InstallLogPa
 
 // Events wake the reader; only committed, redacted journal rows enter the view.
 export function useInstallLogPanel(changed: () => void = () => {}) {
+  const { tr } = useI18n();
   const logs = ref<InstallLogRow[]>([]), evicted = ref(0);
   const connectionUnavailable = ref(false), gapPossible = ref(false);
   let mounted = false, subscribing = false, reading = false, rerun = false;
@@ -86,7 +88,7 @@ export function useInstallLogPanel(changed: () => void = () => {}) {
       if (reading) rerun = true;
     } catch {
       if (mounted && current === generation) { readFailed = true; updateConnection(); }
-      throw Error("无法确认安装日志起点，请稍后重试");
+      throw Error(tr("无法确认安装日志起点，请稍后重试", "Could not determine where the install log starts. Try again later."));
     }
   }
 

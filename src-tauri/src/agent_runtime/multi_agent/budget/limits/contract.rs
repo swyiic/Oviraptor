@@ -16,6 +16,13 @@ pub(super) fn frozen(db: &Connection, root: &str) -> Result<[Option<i64>; 10], S
         return Err("budget_limit_invalid".into());
     }
     let plan: Value = serde_json::from_str(&text).map_err(|_| "budget_frozen_plan_invalid")?;
+    // target_requests (probes against the live target) scales with the model
+    // request budget. The old `.min(400)` ceiling capped a deep web scan at 400
+    // target probes — far too few for thorough login/endpoint testing (account
+    // enumeration, captcha/OCR, authz abuse, WAF-bypass retries). With the request
+    // budget now effectively unlimited this derives ~4,000,000, i.e. no practical
+    // probe ceiling. MUST stay identical to root_definition.rs::validate (checked
+    // by budget_declaration_native_ceiling_conflict) — change both together.
     let target = if plan["surface"] == "source" {
         0
     } else {
@@ -25,7 +32,6 @@ pub(super) fn frozen(db: &Connection, root: &str) -> Result<[Option<i64>; 10], S
             .ok_or("budget_frozen_request_limit_invalid")?
             .max(1)
             .saturating_mul(4)
-            .min(400)
     };
     if let Some(declaration) = super::super::root_definition::read(db, root)? {
         let finite = |value| (value > 0).then_some(value);

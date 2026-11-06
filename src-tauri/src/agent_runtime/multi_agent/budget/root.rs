@@ -23,6 +23,22 @@ pub(crate) struct RootOwner {
     coordinator: Option<CoordinatorLease>,
 }
 
+#[cfg(test)]
+impl RootOwner {
+    // B3.3c step ① harness: a minimal owner for characterizing the settlement
+    // cost path (`Tick::cost_rows`). That path reads only `root` and `id`;
+    // `contract`/`coordinator` are inert here. Test-only — never built in
+    // production, and it creates no owner/dispatch/budget row.
+    pub(crate) fn for_test(root: &str, id: &str) -> Self {
+        Self {
+            root: root.to_string(),
+            id: id.to_string(),
+            contract: Value::Null,
+            coordinator: None,
+        }
+    }
+}
+
 fn contract(db: &Connection, root: &str) -> Result<Value, String> {
     let mut value = db.query_row("SELECT scan_id,attempt_number,target_url,plan_hash,plan_json,created_at,
         hard_token_budget,hard_request_budget,orchestration_policy,root_run_id FROM agent_runs
@@ -68,10 +84,6 @@ impl RootOwner {
     }
     // Deliberate lower-level financial fixture issuer, excluded from production.
     // Live SDK/control/claim code never calls this or contains a test fallback.
-    #[cfg(test)]
-    pub(crate) fn initialize_financial_fixture_for_test(tx:&Transaction<'_>,root:&str)->Result<Self,String> {
-        transaction::protect(tx, || Self::initialize_on(tx,root,true))
-    }
     pub(crate) fn initialize_new_native_root(fresh:&crate::agent_runtime::store::NewlyInsertedNativeRoot<'_, '_>)->Result<Self,String> {
         crate::agent_runtime::web_mode::root::read(fresh.transaction(),fresh.id())?
             .ok_or("web_finance_private_mode_missing")?;

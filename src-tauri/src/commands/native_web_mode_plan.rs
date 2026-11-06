@@ -12,16 +12,6 @@ fn ordinary_web_recovery_scope_on(db: &rusqlite::Connection, scan: &str) -> Resu
 include!("native_web_root_budget.rs");
 
 // Ordinary Web entry only. Source's old plan publisher never calls this helper.
-#[cfg(test)]
-fn persist_frozen_web_execution_plan(
-    db_path: &Path,
-    scan: &str,
-    attempt: i64,
-    target: &str,
-    plan: &AgentExecutionPlan,
-) -> Result<(), String> {
-    persist_frozen_web_execution_plan_with_tool_configuration(db_path,scan,attempt,target,plan,None)
-}
 
 fn persist_frozen_web_execution_plan_with_tool_configuration(
     db_path: &Path, scan: &str, attempt: i64, target: &str,
@@ -52,20 +42,8 @@ fn persist_frozen_web_execution_plan_with_tool_configuration(
         ids
     };
     if existing.is_empty() {
-        #[cfg(test)]
-        let prepared_plan = AgentExecutionPlan::from_json(
-            &agent_tests::native_frozen_tool_supply_plan_for_test(
-                db_path, scan, attempt, target, plan.as_json(),
-            )?,
-        ).ok_or("tool_supply_test_original_plan_invalid")?;
-        #[cfg(test)]
-        let plan = &prepared_plan;
         let declaration =
             root::NewRootModeDeclaration::from_verified(&proof, target, &plan.hash())?.with_local_deliberation()?.with_new_evidence_supervision()?.with_lease_expiry_supervision()?.with_protection_supervision()?;
-        #[cfg(test)]
-        let declaration = agent_tests::native_mapper_physical_new_birth_for_test(
-            &db, db_path, scan, attempt, target, plan, declaration,
-        )?;
         let budget = fresh_web_root_budget_declaration(&proof, target, plan)?;
         let native_plan = plan.as_json();
         return store::record_attempt_plan_with_declarations_and_tool_configuration(

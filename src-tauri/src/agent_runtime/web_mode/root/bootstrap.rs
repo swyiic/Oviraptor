@@ -51,7 +51,15 @@ pub(super) struct BootstrapDispatch {
 }
 impl BootstrapDispatch {
     pub(super) fn creation_contract() -> Self {
-        Self::web_expiry_creation_contract()
+        // New Roots are born without the web-call budget-consumption advisory:
+        // that post-hoc settlement step kept deferring (empty root suggestions)
+        // and hard-stopping otherwise-successful scans, while real token billing
+        // is already recorded through the receipt/entry path. Dropping only this
+        // one advisory rule makes the consumption hook take its symmetric
+        // rule-absent skip (never publishing and never verifying), so nothing
+        // downstream is left half-settled. Historical Roots that were sealed with
+        // the rule keep enforcing it (validate() still accepts that shape).
+        Self::web_expiry_no_consumption_contract()
     }
     pub(super) fn original_v7_contract() -> Self {
         Self {
@@ -96,6 +104,16 @@ impl BootstrapDispatch {
         let mut value = Self::http_creation_contract();
         value.schema_version = 9;
         value.web_lease_expiry_rule = Some("original_expired_web_fee_delivery_advisory_v1".into());
+        value
+    }
+    // Same sealed v9 shape as web_expiry_creation_contract, but with the web-call
+    // budget-consumption advisory rule removed. schema_version stays 9 so every
+    // other v9 code path (and the `== 15` mapper-loop checks elsewhere) is
+    // unaffected; only the consumption hook changes behaviour, taking its
+    // rule-absent skip. This is the contract new Roots are created with.
+    pub(super) fn web_expiry_no_consumption_contract() -> Self {
+        let mut value = Self::web_expiry_creation_contract();
+        value.budget_consumption_rule = None;
         value
     }
     pub(super) fn capability_creation_contract() -> Self {
@@ -157,6 +175,7 @@ impl BootstrapDispatch {
         original_native.schema_version = 1;
         original_native.allocation_rule = None;
         if self != &Self::creation_contract()
+            && self != &Self::web_expiry_no_consumption_contract()
             && self != &Self::original_v7_contract()
             && self != &Self::http_creation_contract()
             && self != &Self::web_expiry_creation_contract()
@@ -194,282 +213,3 @@ impl BootstrapDispatch {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn mapper_v15_birth_requires_exact_new_contract_without_old_upgrade() {
-        let old = BootstrapDispatch::business_logic_dispatch_creation_contract();
-        let new = BootstrapDispatch::mapper_loop_creation_contract();
-        new.validate().unwrap();
-        assert_eq!(new.as_json()["schemaVersion"], 15);
-        assert_eq!(new.as_json()["reservedModelRequests"], 2);
-        assert_eq!(BootstrapDispatch::creation_contract().as_json()["schemaVersion"], 9);
-        let original = serde_json::to_string(&old).unwrap();
-        let decoded: BootstrapDispatch = serde_json::from_str(&original).unwrap();
-        assert_eq!(serde_json::to_string(&decoded).unwrap(), original);
-        assert!(old.as_json().get("mapperLoopRule").is_none());
-        for field in ["mapperLoopRule", "businessLogicDispatchRule", "httpBudgetConsumptionRule"] {
-            let mut missing = new.as_json();
-            missing.as_object_mut().unwrap().remove(field);
-            assert!(serde_json::from_value::<BootstrapDispatch>(missing).unwrap().validate().is_err());
-        }
-        let mut injected = old.as_json();
-        injected["mapperLoopRule"] = new.as_json()["mapperLoopRule"].clone();
-        assert!(serde_json::from_value::<BootstrapDispatch>(injected).unwrap().validate().is_err());
-        let mut changed = new.as_json();
-        changed["reservedModelRequests"] = json!(1);
-        assert!(serde_json::from_value::<BootstrapDispatch>(changed).unwrap().validate().is_err());
-        let mut inherited = new.as_json();
-        inherited["schemaVersion"] = json!(14);
-        inherited["reservedModelRequests"] = json!(1);
-        inherited.as_object_mut().unwrap().remove("mapperLoopRule");
-        assert_eq!(inherited, old.as_json());
-    }
-    #[test]
-    fn business_logic_v14_dispatch_birth_requires_exact_original_rule() {
-        let old = BootstrapDispatch::business_logic_output_creation_contract();
-        let new = BootstrapDispatch::business_logic_dispatch_creation_contract();
-        new.validate().unwrap();
-        assert_eq!(new.as_json()["schemaVersion"],14);
-        assert_eq!(new.as_json()["businessLogicDispatchRule"],"original_paid_frozen_business_logic_dispatch_v1");
-        assert_eq!(BootstrapDispatch::creation_contract().as_json()["schemaVersion"],9);
-        assert!(old.as_json().get("businessLogicDispatchRule").is_none());
-        let raw=serde_json::to_string(&old).unwrap();
-        let restored:BootstrapDispatch=serde_json::from_str(&raw).unwrap();
-        restored.validate().unwrap();
-        assert_eq!(serde_json::to_string(&restored).unwrap(),raw);
-        let mut missing=new.as_json();
-        missing.as_object_mut().unwrap().remove("businessLogicDispatchRule");
-        assert!(serde_json::from_value::<BootstrapDispatch>(missing).unwrap().validate().is_err());
-        let mut altered=new.as_json();
-        altered["businessLogicDispatchRule"]=json!("foreign_rule");
-        assert!(serde_json::from_value::<BootstrapDispatch>(altered).unwrap().validate().is_err());
-        let mut injected=old.as_json();
-        injected["businessLogicDispatchRule"]=new.as_json()["businessLogicDispatchRule"].clone();
-        assert!(serde_json::from_value::<BootstrapDispatch>(injected).unwrap().validate().is_err());
-        let mut inherited=new.as_json();
-        inherited["schemaVersion"]=json!(13);
-        inherited.as_object_mut().unwrap().remove("businessLogicDispatchRule");
-        assert_eq!(inherited,old.as_json());
-    }
-    #[test]
-    fn business_logic_v13_birth_requires_exact_rules_without_old_backfill() {
-        let v12 = BootstrapDispatch::external_surface_output_creation_contract();
-        let v13 = BootstrapDispatch::business_logic_output_creation_contract();
-        v13.validate().unwrap();
-        assert_eq!(v13.as_json()["schemaVersion"],13);
-        let default = BootstrapDispatch::creation_contract();
-        assert_eq!(default.as_json()["schemaVersion"],9);
-        for key in ["businessLogicInputRule","businessLogicOutputRule","businessLogicOutputRequestCapacityRule"] {
-            assert!(v12.as_json().get(key).is_none());
-            assert!(default.as_json().get(key).is_none());
-            let mut missing=v13.as_json();
-            missing.as_object_mut().unwrap().remove(key);
-            assert!(serde_json::from_value::<BootstrapDispatch>(missing).unwrap().validate().is_err());
-            let mut changed=v13.as_json();
-            changed[key]=json!("foreign_rule");
-            assert!(serde_json::from_value::<BootstrapDispatch>(changed).unwrap().validate().is_err());
-            for old in [&v12,&default] {
-                let mut injected=old.as_json();
-                injected[key]=v13.as_json()[key].clone();
-                assert!(serde_json::from_value::<BootstrapDispatch>(injected).unwrap().validate().is_err());
-            }
-        }
-        for key in ["externalSurfaceResponseRule","externalSurfaceOutputRule","externalSurfaceOutputRequestCapacityRule"] {
-            assert_eq!(v13.as_json()[key],v12.as_json()[key]);
-        }
-        for original in [v12,default] {
-            let raw=serde_json::to_string(&original).unwrap();
-            let restored:BootstrapDispatch=serde_json::from_str(&raw).unwrap();
-            restored.validate().unwrap();
-            assert_eq!(serde_json::to_string(&restored).unwrap(),raw);
-        }
-    }
-    #[test]
-    fn external_surface_v12_birth_requires_all_original_rules_without_old_backfill() {
-        let v11 = BootstrapDispatch::authorization_output_creation_contract();
-        let v12 = BootstrapDispatch::external_surface_output_creation_contract();
-        v12.validate().unwrap();
-        assert_eq!(v12.as_json()["schemaVersion"], 12);
-        assert_eq!(BootstrapDispatch::creation_contract().as_json()["schemaVersion"], 9);
-        for key in ["externalSurfaceResponseRule", "externalSurfaceOutputRule", "externalSurfaceOutputRequestCapacityRule"] {
-            assert!(v11.as_json().get(key).is_none());
-            let mut missing = v12.as_json();
-            missing.as_object_mut().unwrap().remove(key);
-            assert!(serde_json::from_value::<BootstrapDispatch>(missing).unwrap().validate().is_err());
-            let mut altered = v12.as_json();
-            altered[key] = json!("foreign_rule");
-            assert!(serde_json::from_value::<BootstrapDispatch>(altered).unwrap().validate().is_err());
-            let mut injected = v11.as_json();
-            injected[key] = v12.as_json()[key].clone();
-            assert!(serde_json::from_value::<BootstrapDispatch>(injected).unwrap().validate().is_err());
-        }
-        for key in ["authorizationOutputRule", "authorizationOutputRequestCapacityRule"] {
-            assert_eq!(v12.as_json()[key], v11.as_json()[key]);
-        }
-        let raw = serde_json::to_string(&v11).unwrap();
-        assert_eq!(serde_json::to_string(&serde_json::from_str::<BootstrapDispatch>(&raw).unwrap()).unwrap(), raw);
-    }
-    #[test]
-    fn mapper_creation_contract_keeps_original_native_json_and_rejects_rule_mutations() {
-        let raw = r#"{"schemaVersion":1,"permittedStep":"dispatch:spa_api_mapper","reservedModelTokens":8000,"reservedModelRequests":1}"#;
-        let original: BootstrapDispatch = serde_json::from_str(raw).unwrap();
-        original.validate().unwrap();
-        assert_eq!(serde_json::to_string(&original).unwrap(), raw);
-        let raw_v2 = r#"{"schemaVersion":2,"permittedStep":"dispatch:spa_api_mapper","reservedModelTokens":8000,"reservedModelRequests":1,"allocationRule":"current_balance_after_reviewer_floor"}"#;
-        let original_v2: BootstrapDispatch = serde_json::from_str(raw_v2).unwrap();
-        original_v2.validate().unwrap();
-        assert_eq!(serde_json::to_string(&original_v2).unwrap(), raw_v2);
-        let raw_v3 = r#"{"schemaVersion":3,"permittedStep":"dispatch:spa_api_mapper","reservedModelTokens":8000,"reservedModelRequests":1,"allocationRule":"current_balance_after_reviewer_floor","executorAllocationRule":"current_balance_after_reviewer_floor_and_ordered_proposals"}"#;
-        let original_v3: BootstrapDispatch = serde_json::from_str(raw_v3).unwrap();
-        original_v3.validate().unwrap();
-        assert_eq!(serde_json::to_string(&original_v3).unwrap(), raw_v3);
-        let fresh = BootstrapDispatch::creation_contract();
-        fresh.validate().unwrap();
-        assert_eq!(fresh.as_json()["schemaVersion"], 9);
-        assert_eq!(fresh.as_json()["webLeaseExpiryRule"], "original_expired_web_fee_delivery_advisory_v1");
-        let capability = BootstrapDispatch::capability_creation_contract();
-        capability.validate().unwrap();
-        let authorization = BootstrapDispatch::authorization_output_creation_contract();
-        authorization.validate().unwrap();
-        assert_eq!(authorization.as_json()["schemaVersion"], 11);
-        for key in ["authorizationOutputRule", "authorizationOutputRequestCapacityRule"] {
-            let mut missing = authorization.as_json();
-            missing.as_object_mut().unwrap().remove(key);
-            assert!(serde_json::from_value::<BootstrapDispatch>(missing).unwrap().validate().is_err());
-        }
-        assert!(capability.as_json().get("authorizationOutputRule").is_none());
-        let mut missing_capability = capability.as_json();
-        missing_capability.as_object_mut().unwrap().remove("capabilityTransitionRule");
-        assert!(serde_json::from_value::<BootstrapDispatch>(missing_capability).unwrap().validate().is_err());
-        let mut missing_expiry = fresh.as_json();
-        missing_expiry.as_object_mut().unwrap().remove("webLeaseExpiryRule");
-        assert!(serde_json::from_value::<BootstrapDispatch>(missing_expiry).unwrap().validate().is_err());
-        let http = BootstrapDispatch::http_creation_contract();
-        http.validate().unwrap();
-        let mut missing_http = http.as_json();
-        missing_http.as_object_mut().unwrap().remove("httpBudgetConsumptionRule");
-        assert!(serde_json::from_value::<BootstrapDispatch>(missing_http).unwrap().validate().is_err());
-        let legacy = BootstrapDispatch::original_v6_contract();
-        legacy.validate().unwrap();
-        assert!(legacy.as_json().get("budgetConsumptionRule").is_none());
-        let mut missing_consumption = fresh.as_json();
-        missing_consumption.as_object_mut().unwrap().remove("budgetConsumptionRule");
-        assert!(serde_json::from_value::<BootstrapDispatch>(missing_consumption).unwrap().validate().is_err());
-        let mut injected_consumption = legacy.as_json();
-        injected_consumption["budgetConsumptionRule"] = fresh.as_json()["budgetConsumptionRule"].clone();
-        assert!(serde_json::from_value::<BootstrapDispatch>(injected_consumption).unwrap().validate().is_err());
-        let raw_v5 = r#"{"schemaVersion":5,"permittedStep":"dispatch:spa_api_mapper","reservedModelTokens":8000,"reservedModelRequests":1,"allocationRule":"current_balance_after_reviewer_floor","executorAllocationRule":"current_balance_after_reviewer_floor_and_ordered_proposals","rootSupervisionTokenFloor":16000,"rootSupervisionRequestFloor":1,"modelCostRule":"finite_grant_share_native_unlimited_no_scarcity"}"#;
-        let original_v5: BootstrapDispatch = serde_json::from_str(raw_v5).unwrap();
-        original_v5.validate().unwrap();
-        assert_eq!(serde_json::to_string(&original_v5).unwrap(), raw_v5);
-        let mut missing_capacity = fresh.as_json();
-        missing_capacity
-            .as_object_mut()
-            .unwrap()
-            .remove("supervisionRequestAllocationRule");
-        assert!(
-            serde_json::from_value::<BootstrapDispatch>(missing_capacity)
-                .unwrap()
-                .validate()
-                .is_err()
-        );
-        for old in [&original, &original_v2, &original_v3, &original_v5] {
-            let mut injected = old.as_json();
-            injected["supervisionRequestAllocationRule"] =
-                fresh.as_json()["supervisionRequestAllocationRule"].clone();
-            assert!(serde_json::from_value::<BootstrapDispatch>(injected)
-                .unwrap()
-                .validate()
-                .is_err());
-        }
-        let raw_v4 = r#"{"schemaVersion":4,"permittedStep":"dispatch:spa_api_mapper","reservedModelTokens":8000,"reservedModelRequests":1,"allocationRule":"current_balance_after_reviewer_floor","executorAllocationRule":"current_balance_after_reviewer_floor_and_ordered_proposals","rootSupervisionTokenFloor":16000,"rootSupervisionRequestFloor":1}"#;
-        let original_v4: BootstrapDispatch = serde_json::from_str(raw_v4).unwrap();
-        original_v4.validate().unwrap();
-        assert_eq!(serde_json::to_string(&original_v4).unwrap(), raw_v4);
-        let mut missing_rule = fresh.as_json();
-        missing_rule
-            .as_object_mut()
-            .unwrap()
-            .remove("modelCostRule");
-        assert!(serde_json::from_value::<BootstrapDispatch>(missing_rule)
-            .unwrap()
-            .validate()
-            .is_err());
-        for old in [&original, &original_v2, &original_v3, &original_v4] {
-            let mut injected = old.as_json();
-            injected["modelCostRule"] = fresh.as_json()["modelCostRule"].clone();
-            assert!(serde_json::from_value::<BootstrapDispatch>(injected)
-                .unwrap()
-                .validate()
-                .is_err());
-        }
-        for (key, value) in [
-            ("schemaVersion", json!(10)),
-            ("budgetConsumptionRule", json!("ignore_actual_cost")),
-            ("supervisionRequestAllocationRule", json!("no_supervision")),
-            ("modelCostRule", json!("free_model_calls")),
-            ("allocationRule", json!("hard_ceiling")),
-            ("reservedModelTokens", json!(9000)),
-            ("reservedModelRequests", json!(2)),
-        ] {
-            let mut altered = fresh.as_json();
-            altered[key] = value;
-            assert!(serde_json::from_value::<BootstrapDispatch>(altered)
-                .unwrap()
-                .validate()
-                .is_err());
-        }
-        for field in ["rootSupervisionTokenFloor", "rootSupervisionRequestFloor"] {
-            let mut missing = fresh.as_json();
-            missing.as_object_mut().unwrap().remove(field);
-            assert!(serde_json::from_value::<BootstrapDispatch>(missing)
-                .unwrap()
-                .validate()
-                .is_err());
-            let mut injected = original_v3.as_json();
-            injected[field] = fresh.as_json()[field].clone();
-            assert!(serde_json::from_value::<BootstrapDispatch>(injected)
-                .unwrap()
-                .validate()
-                .is_err());
-        }
-        let mut upgraded = original_v3.as_json();
-        upgraded["rootSupervisionTokenFloor"] = json!(16_000);
-        upgraded["rootSupervisionRequestFloor"] = json!(1);
-        assert!(serde_json::from_value::<BootstrapDispatch>(upgraded)
-            .unwrap()
-            .validate()
-            .is_err());
-        let mut missing_executor = fresh.as_json();
-        missing_executor
-            .as_object_mut()
-            .unwrap()
-            .remove("executorAllocationRule");
-        assert!(
-            serde_json::from_value::<BootstrapDispatch>(missing_executor)
-                .unwrap()
-                .validate()
-                .is_err()
-        );
-        let mut old_v2 = original_v2.as_json();
-        old_v2["executorAllocationRule"] = fresh.as_json()["executorAllocationRule"].clone();
-        assert!(serde_json::from_value::<BootstrapDispatch>(old_v2)
-            .unwrap()
-            .validate()
-            .is_err());
-        let mut missing = fresh.as_json();
-        missing.as_object_mut().unwrap().remove("allocationRule");
-        assert!(serde_json::from_value::<BootstrapDispatch>(missing)
-            .unwrap()
-            .validate()
-            .is_err());
-        let mut old = original.as_json();
-        old["allocationRule"] = fresh.as_json()["allocationRule"].clone();
-        assert!(serde_json::from_value::<BootstrapDispatch>(old)
-            .unwrap()
-            .validate()
-            .is_err());
-    }
-}

@@ -1,4 +1,8 @@
 /** Session model presets + provider resolution (mirrors agent-host normalizeProviderModel). */
+import { useI18n } from "../../i18n";
+
+const { tr } = useI18n();
+
 export const DEEPSEEK_BASE_URL = "https://api.deepseek.com";
 export const XAI_BASE_URL = "https://api.x.ai/v1";
 
@@ -29,6 +33,6 @@ export function resolveProviderForModel(raw: string, provider?: SessionProviderI
 
 export function providerDisplayName(provider?: string, baseUrl?: string): string {
   if (/deepseek/i.test(baseUrl || "")) return "DeepSeek";
-  if (provider === "openai-compatible") return "OpenAI 兼容";
+  if (provider === "openai-compatible") return tr("OpenAI 兼容", "OpenAI-compatible");
   return "xAI Grok";
 }

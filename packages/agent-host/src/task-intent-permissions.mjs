@@ -27,6 +27,9 @@ export function requestedBusinessTools(text,{applications=[],certificateAvailabl
   }
   if(cert&&certificateAvailable){want(ASSETS,'certificate_task_status');if(cert.action!=='status')want(ASSETS,'certificate_task_'+cert.action);}
   if(scan&&scanAvailable){want(SCANNING,'scan_status');want(SCANNING,'scan_list');if(scan.action==='resume')want(SCANNING,'scan_recovery');if(scan.action!=='status')want(SCANNING,'scan_'+scan.action);}
+  if(scanAvailable&&/指纹|fingerprint/i.test(String(text))) {
+    for(const name of ['scan_list','scan_status','scan_fingerprint_search','scan_fingerprint_read'])want(SCANNING,name);
+  }
   const handoff=scanningHandoffIntent(text);
   if(!readOnly&&handoff&&scanAvailable&&find(ASSETS)) {
     const read=find(ASSETS).manifest.tools.find(tool=>tool.permission==='inventory.read');

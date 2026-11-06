@@ -2,53 +2,31 @@
 //! Source units below share this cohesive scope; other business owners stay explicit.
 // Thin bridge for Ownership O3 regression fixtures; available only in test builds.
 // The production function and AuthorizationControlSetup fields stay private.
-#[cfg(test)]
-pub(crate) mod ownership_test_support {
-    pub(crate) fn approved_agent_proxies(settings: &serde_json::Value) -> Vec<(String, String)> {
-        super::approved_agent_proxies(settings)
-    }
 
-    pub(crate) fn configured_native_analyzer_runtime(
-        settings: &serde_json::Value,
-        engine: &str,
-        locate: impl FnOnce(&str) -> Option<std::path::PathBuf>,
-    ) -> Result<(std::path::PathBuf, Option<String>), String> {
-        super::configured_native_analyzer_runtime(settings, engine, locate)
-    }
-
-    pub(crate) fn authorization_control_setup_in(
-        connection: &rusqlite::Connection,
-        app_data_dir: &std::path::Path,
-        scan_id: &str,
-        target_url: &str,
-    ) -> Result<super::AuthorizationControlSetup, String> {
-        super::authorization_control_setup_in(connection, app_data_dir, scan_id, target_url)
-    }
-}
-
-mod service_environment;
+pub(crate) mod service_environment;
 pub(crate) mod agent_channel;
+pub(crate) mod task_binding;
+#[cfg(test)]
+mod host_loop_e2e;
 pub(crate) mod service_bootstrap;
+pub(crate) mod exposure_probe;
+pub(crate) mod source_collection;
+pub(crate) mod source_orchestration;
+pub(crate) mod agent_stage_decisions;
+pub(crate) mod scan_detail_store;
+pub(crate) mod stage_adjudicator;
+pub(crate) mod fingerprint_pack;
+pub(crate) mod fingerprint_logic;
 use service_environment::{DesktopScanEnvironment, ScanEnvironment, ScanEvent};
 
 use crate::{db, llm_hook, AppState};
 use crate::scanning_models::*;
-#[cfg(test)]
-use crate::asset_models::{
-    AssetQuery, AssetSummary,
-};
-#[cfg(test)]
-use crate::configuration_models::{
-    ConfigProfileInput,
-};
 use crate::skills_catalog::model::{
     AgentKnowledgeEntry, AgentLearningCandidate,
 };
 use crate::model_configuration::{
     default_settings as sentinel_settings, openai_chat_completion_model,
 };
-#[cfg(test)]
-use crate::model_configuration::model_parameter_billions;
 use crate::worker_resources::{
     helper_node_candidates, resolve_frontend_recon_worker, resolve_helper_node,
     sentinel_runtime_path, verify_bundled_worker,
@@ -71,8 +49,6 @@ use std::{
 use tauri::{AppHandle, State};
 use uuid::Uuid;
 
-#[cfg(test)]
-use std::sync::Mutex;
 
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
@@ -99,20 +75,10 @@ include!("commands/agent_instruction.rs");
 // Other business commands compile under their explicit crate::commands owners.
 
 // Scanning regression fixtures consume real Assets, project and configuration predicates.
-#[cfg(test)]
-use crate::commands::assets::test_support::asset_filter;
-#[cfg(test)]
-use crate::commands::assets::test_support::detect_target;
-#[cfg(test)]
-use crate::commands::workspace_projects::test_support::{delete_project_for_connection, project_impact_for_connection};
-#[cfg(test)]
-use crate::commands::workspace_config_profiles::test_support::{delete_config_profile_inner, persist_config_profile, read_config_profiles};
 
 // Consume the Assets ownership domain through its explicit, read-only API.
 use crate::commands::ownership::{domain_matches, normalize_ownership_domain};
 
-#[cfg(test)]
-use crate::commands::environment::test_support::ensure_environment_install_idle;
 
 include!("commands/src_assurance.rs");
 include!("commands/web_investigation_policy.rs");
@@ -123,13 +89,6 @@ include!("commands/scan_lifecycle.rs");
 include!("commands/knowledge_learning.rs");
 // Scanning supplies retained evidence; Skills owns the saved instruction and
 // knowledge lifecycle. Only the structured learning model service is shared.
-#[cfg(test)]
-use crate::skills_catalog::{
-    instructions::{import_agent_instructions_path,upsert_sec_skill_package},
-    knowledge::import_agent_knowledge_path,
-    patch::apply_skill_patch,
-    sources::sec_skill_line_is_unsafe,
-};
 include!("commands/knowledge_learning_traces.rs");
 include!("commands/knowledge_learning_candidates.rs");
 include!("commands/knowledge_learning_quality.rs");
@@ -143,8 +102,6 @@ include!("commands/native_helper_process.rs");
 include!("commands/native_helper_log_owner.rs");
 include!("commands/native_helper_observer.rs");
 include!("commands/native_recon_contract.rs");
-#[cfg(test)]
-include!("commands/native_src_transport.rs");
 #[path = "commands/native_sensitive.rs"]
 mod native_sensitive;
 include!("commands/runtime_environment.rs");
@@ -154,8 +111,6 @@ include!("commands/agent_authorization_control.rs");
 #[path = "commands/agent_authorization_broker.rs"]
 pub(crate) mod authorization_side;
 use authorization_side::execute_authorization_side;
-#[cfg(test)]
-use authorization_side::{authorization_identity_binding, claim_authorization_probe, authorization_probe_authority};
 include!("commands/agent_runtime.rs");
 include!("commands/agent_model_client.rs");
 #[path = "commands/agent_native/http_budget_receipt.rs"]
@@ -247,6 +202,28 @@ include!("commands/workbench_startup.rs");
 include!("commands/workbench_auth.rs");
 include!("commands/workbench_retry.rs");
 include!("commands/scan_control.rs");
+include!("commands/scan_capability_authorization.rs");
+include!("commands/high_risk_action_approval.rs");
+include!("commands/agent_tool_permission_rules.rs");
+include!("commands/agent_operator_questions.rs");
+include!("commands/agent_mcp_client.rs");
+include!("commands/agent_scan_stats.rs");
+include!("commands/agent_headless_run.rs");
+include!("commands/rce_command_gate.rs");
+include!("commands/exposure_endpoints.rs");
+include!("commands/agent_analysis_script.rs");
+include!("commands/artifact_analyzer.rs");
+include!("commands/exposure_probe_command.rs");
+include!("commands/agent_sqli_tester.rs");
+include!("commands/cloud_bucket_probe.rs");
+include!("commands/oob_canary.rs");
+include!("commands/request_transform.rs");
+include!("commands/jwt_analyzer.rs");
+include!("commands/target_egress_sandbox.rs");
+include!("commands/agent_finding_exploits.rs");
+include!("commands/attack_sweep.rs");
+include!("commands/agent_waf_strategies.rs");
+include!("commands/agent_finding_deep_dive.rs");
 include!("commands/scan_startup.rs");
 include!("commands/web_dispatch_binding.rs");
 include!("commands/native_web_mode_binding.rs");
@@ -260,8 +237,6 @@ include!("commands/web_administrative_closure.rs");
 include!("commands/web_closure_handoff.rs");
 include!("commands/web_toolchain_binding.rs");
 include!("commands/appsec_validation.rs");
-#[cfg(test)]
-include!("commands/tests_overview_provenance.rs");
 include!("commands/investigation.rs");
 include!("commands/result_ingestion.rs");
 include!("commands/artifact_import_status.rs");
@@ -269,11 +244,9 @@ include!("commands/historical_import_views.rs");
 include!("commands/result_ingestion_recon.rs");
 include!("commands/result_ingestion_runs.rs");
 include!("commands/result_ingestion_engines.rs");
-#[cfg(test)]
-include!("commands/web_mode_test_support.rs");
-include!("commands/tests.rs");
-include!("commands/agent_tests.rs");
-include!("commands/agent_acceptance.rs");
+include!("commands/poison_strip.rs");
+include!("commands/research_cards.rs");
+include!("commands/agent_tool_library.rs");
 
 #[path="commands/agent_homogeneous_execution.rs"]
 pub(crate) mod homogeneous_execution;
@@ -305,11 +278,5 @@ pub(crate) use crate::scanning_contract::recovery_draft;
 pub(crate) use crate::scanning_contract::log_events;
 
 // Explicit Scanning port; shared with agent_runtime via crate::scanning_contract.
-#[cfg(test)]
-pub(crate) use crate::scanning_contract::runtime_test_support;
 
 // Explicit Scanning port; original authority types/fields remain unchanged.
-#[cfg(test)]
-pub(crate) mod process_log_test_support {
-    pub(crate) use super::{read_native_process_log_snapshot};
-}

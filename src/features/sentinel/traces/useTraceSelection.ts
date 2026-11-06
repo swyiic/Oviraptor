@@ -2,12 +2,14 @@ import { onUnmounted, readonly, ref, type Ref } from "vue";
 import { sentinelApi } from "../api";
 import type { AgentTraceDetail, AgentTraceSummary } from "../types";
 import { isTraceDetailForTask } from "./traceDetailContract";
+import { useI18n } from "../../../i18n";
 
 // Manual reads and polling share one selection revision, including A -> B -> A.
 export function useTraceSelection(
   traces: Ref<AgentTraceSummary[]>,
   reportError: (error: unknown) => void,
 ) {
+  const { tr } = useI18n();
   const selectedId = ref("");
   const detail = ref<AgentTraceDetail>();
   const detailLoading = ref(false);
@@ -44,7 +46,7 @@ export function useTraceSelection(
       const latest = await sentinelApi.getAgentTrace(scanId);
       if (current(requestRevision)) publish(latest, scanId);
     } catch {
-      if (current(requestRevision)) reportError("运行轨迹读取失败，请重试");
+      if (current(requestRevision)) reportError(tr("运行轨迹读取失败，请重试", "Failed to load the run trace; try again"));
     } finally {
       if (current(requestRevision)) {
         detailLoading.value = false;

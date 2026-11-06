@@ -17,7 +17,6 @@ const { scanTypeLabel } = createSentinelLabels(tr);
   <section class="panel sentinel-token-overview">
     <div class="token-overview-heading">
       <div>
-        <span class="eyebrow">TOKEN ACCOUNTING</span>
         <h3>{{ tr("模型 Token 用量", "Model token usage") }}</h3>
       </div>
       <div class="token-scope-switch segmented" role="group" :aria-label="tr('模型部署范围', 'Model deployment scope')">
@@ -52,7 +51,7 @@ const { scanTypeLabel } = createSentinelLabels(tr);
     </div>
     <div class="cost-decision-grid">
       <article>
-        <span>缓存命中率</span><strong>{{ usage.cacheHitRate }}%</strong>
+        <span>{{ tr("缓存命中率", "Cache hit rate") }}</span><strong>{{ usage.cacheHitRate }}%</strong>
         <small>{{ tr("缓存输入 / 输入总计；不作为执行质量结论", "Cached input / total input; not an execution-quality verdict") }}</small>
       </article>
       <article>
@@ -64,9 +63,9 @@ const { scanTypeLabel } = createSentinelLabels(tr);
         <small>{{ formatNumber(usage.zeroYieldTokenUsage) }} Token · {{ tr("已消耗 Token 的结束状态任务；当前索引未关联记录，不代表无漏洞或执行完整。", "Ended tasks with token usage but no records in the current association index; not proof of no vulnerabilities or complete execution.") }}</small>
       </article>
       <article v-if="usage.highestCostScan" class="highest-cost">
-        <span>最高成本任务</span><strong>{{ formatCompactNumber(scanTokenTotal(usage.highestCostScan)) }}</strong>
+        <span>{{ tr("最高成本任务", "Highest-cost task") }}</span><strong>{{ formatCompactNumber(scanTokenTotal(usage.highestCostScan)) }}</strong>
         <small>{{ scanTitle(usage.highestCostScan) }}</small>
-        <button type="button" class="text-button" @click="emit('open', usage.highestCostScan)">查看任务证据</button>
+        <button type="button" class="text-button" @click="emit('open', usage.highestCostScan)">{{ tr("查看任务证据", "View task evidence") }}</button>
       </article>
     </div>
     <div class="token-type-grid">

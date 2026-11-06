@@ -9,7 +9,7 @@ const { tr } = useI18n();
 
 <template>
   <ModalShell :title="tr(`Oviraptor v${version} 更新说明`, `Oviraptor v${version} release notes`)" @close="$emit('close')">
-    <template #eyebrow><span class="eyebrow">RELEASE NOTES · NATIVE</span></template>
+    <template #eyebrow></template>
     <div class="release-notes">
       <article>
         <strong>{{tr('资产复核与规则管理','Asset review and rule management')}}</strong>

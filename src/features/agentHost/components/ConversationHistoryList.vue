@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
-import { Ellipsis, FolderOpen, MessageSquare, Pencil, Pin, PinOff, Trash2, X } from '@lucide/vue';
+import { Ellipsis, FolderInput, FolderOpen, MessageSquare, Pencil, Pin, PinOff, Trash2, X } from '@lucide/vue';
 import { useI18n } from '../../../i18n';
+import { confirmInPlace } from '../../../shared/confirmInPlace';
 import type { AgentHostConversation } from '../chatClient';
 import { conversationActivityAt, conversationHistoryTime } from '../conversationHistory';
 
@@ -10,12 +11,17 @@ const props = defineProps<{
   updateConversation: (id: string, patch: { title?: string; pinned?: boolean }) => Promise<void>;
   revealConversation: (id: string) => Promise<string>;
   removeConversation: (id: string) => Promise<boolean>;
+  /** Direct-chat (personal) space only: these chats can be re-homed to a named workspace. */
+  personal?: boolean;
+  attachConversation?: (id: string, projectId: number) => Promise<void>;
+  attachTargets?: () => Promise<Array<{ id: number; name: string; kind?: string }>>;
 }>();
 const emit = defineEmits<{ select: [id: string] }>();
 const { tr, locale } = useI18n();
 const menu = ref<{ id: string; x: number; y: number }>();
-const dialog = ref<{ id: string; kind: 'rename' | 'delete'; title: string }>();
-const titleDraft = ref(''), notice = ref(''), saving = ref(false), menuElement = ref<HTMLElement>(), dialogElement = ref<HTMLElement>(), renameInput = ref<HTMLInputElement>();
+const dialog = ref<{ id: string; kind: 'rename' | 'delete' | 'attach'; title: string }>();
+const titleDraft = ref(''), notice = ref(''), saving = ref(false), menuElement = ref<HTMLElement>(), listElement = ref<HTMLElement>(), dialogElement = ref<HTMLElement>(), renameInput = ref<HTMLInputElement>();
+const attachOptions = ref<Array<{ id: number; name: string }>>([]), attachTargetId = ref<number>(), attachOptionsLoading = ref(false), attachSelect = ref<HTMLSelectElement>();
 let scopeGeneration = 0, disposed = false;
 let menuTrigger: HTMLElement | undefined, previousFocus: HTMLElement | undefined;
 const groups = computed(() => [
@@ -23,7 +29,7 @@ const groups = computed(() => [
   { label: tr('最近对话', 'Recent chats'), items: props.items.filter(item => !item.pinned) },
 ].filter(group => group.items.length));
 const menuItem = computed(() => props.items.find(item => item.id === menu.value?.id));
-function label(item?: AgentHostConversation) { return !item?.title || ['New conversation', '新对话', '新對話'].includes(item.title) ? tr('新对话', 'New conversation') : item.title; }
+function label(item?: AgentHostConversation) { return !item?.title || ['New conversation', '新对话', '新對話'].includes(item.title) ? tr('新对话', 'New conversation') : item.title; } // i18n-ignore: matches stored default titles
 function time(item: AgentHostConversation) { return conversationHistoryTime(conversationActivityAt(item), locale?.value || 'zh'); }
 function closeMenu(restore = false) { menu.value = undefined; if (restore && menuTrigger?.isConnected) menuTrigger.focus(); }
 async function openMenu(event: MouseEvent | KeyboardEvent, item: AgentHostConversation) {
@@ -50,11 +56,23 @@ function menuKey(event: KeyboardEvent) {
   const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length;
   buttons[next]?.focus();
 }
-async function openDialog(kind: 'rename' | 'delete') {
-  const item = menuItem.value; if (!item || saving.value || kind === 'delete' && props.deletingDisabled) return;
+async function openDialog(kind: 'rename' | 'delete' | 'attach') {
+  const item = menuItem.value; if (!item || saving.value || kind !== 'rename' && props.deletingDisabled) return;
   previousFocus = menuTrigger; dialog.value = { id: item.id, kind, title: label(item) }; titleDraft.value = item.title || ''; notice.value = ''; closeMenu();
-  const generation = scopeGeneration; await nextTick(); if (disposed || generation !== scopeGeneration || !dialog.value) return;
-  if (kind === 'rename') { renameInput.value?.focus(); renameInput.value?.select(); } else dialogElement.value?.querySelector<HTMLButtonElement>('button')?.focus();
+  const generation = scopeGeneration;
+  if (kind === 'attach') {
+    attachOptions.value = []; attachTargetId.value = undefined; attachOptionsLoading.value = true;
+    try {
+      const items = (await props.attachTargets?.() ?? []).filter(option => option.kind !== 'personal');
+      if (disposed || generation !== scopeGeneration || dialog.value?.id !== item.id || dialog.value.kind !== 'attach') return;
+      attachOptions.value = items; attachTargetId.value = items[0]?.id;
+    } catch (error) { if (!disposed && generation === scopeGeneration && dialog.value?.id === item.id) notice.value = describeError(error, tr('加载工作空间列表', 'Load workspaces')); }
+    finally { if (generation === scopeGeneration) attachOptionsLoading.value = false; }
+  }
+  await nextTick(); if (disposed || generation !== scopeGeneration || !dialog.value) return;
+  if (kind === 'rename') { renameInput.value?.focus(); renameInput.value?.select(); }
+  else if (kind === 'attach') attachSelect.value?.focus();
+  else dialogElement.value?.querySelector<HTMLButtonElement>('button')?.focus();
 }
 function closeDialog() {
   if (saving.value) return; dialog.value = undefined; notice.value = '';
@@ -64,7 +82,7 @@ function dialogKey(event: KeyboardEvent) {
   if (event.isComposing) return;
   if (event.key === 'Escape') { event.preventDefault(); closeDialog(); }
   if (event.key === 'Tab') {
-    const controls = Array.from(dialogElement.value?.querySelectorAll<HTMLElement>('input:not([disabled]),button:not([disabled])') || []), first = controls[0], last = controls[controls.length - 1];
+    const controls = Array.from(dialogElement.value?.querySelectorAll<HTMLElement>('input:not([disabled]),select:not([disabled]),button:not([disabled])') || []), first = controls[0], last = controls[controls.length - 1];
     if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
     else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
   }
@@ -77,13 +95,41 @@ async function saveDialog() {
   const target = dialog.value, generation = scopeGeneration; if (!target || saving.value || !props.items.some(item => item.id === target.id)) return;
   const title = titleDraft.value.trim(); if (target.kind === 'rename' && (!title || new TextEncoder().encode(title).length > 256)) { notice.value = tr('请输入标题，最多 256 字节。', 'Enter a title of at most 256 bytes.'); return; }
   if (target.kind === 'delete' && props.deletingDisabled) return;
+  if (target.kind === 'attach' && (props.deletingDisabled || !attachTargetId.value)) return;
   saving.value = true; notice.value = '';
   try {
     if (target.kind === 'rename') await props.updateConversation(target.id, { title });
+    else if (target.kind === 'attach') { if (!attachTargetId.value) throw Error(tr('请选择目标工作空间', 'Choose a target workspace')); await props.attachConversation?.(target.id, attachTargetId.value); }
     else if (!await props.removeConversation(target.id)) throw Error(tr('删除未完成', 'Deletion did not complete'));
-    if (!disposed && generation === scopeGeneration && dialog.value?.id === target.id) { saving.value = false; closeDialog(); notice.value = target.kind === 'rename' ? tr('标题已保存', 'Title saved') : tr('对话已删除，工作区文件保留', 'Chat deleted. Workspace files retained'); }
-  } catch (error) { if (!disposed && generation === scopeGeneration && dialog.value?.id === target.id) notice.value = describeError(error, target.kind === 'rename' ? tr('重命名', 'Rename') : tr('删除', 'Delete')); }
+    if (!disposed && generation === scopeGeneration && dialog.value?.id === target.id) {
+      saving.value = false; closeDialog();
+      notice.value = target.kind === 'rename' ? tr('标题已保存', 'Title saved') : target.kind === 'attach' ? tr('已挂到目标工作空间；此后使用该空间的记忆与预算', 'Attached to the target workspace; it now uses that workspace’s memory and budget') : tr('对话已删除，工作区文件保留', 'Chat deleted. Workspace files retained');
+    }
+  } catch (error) { if (!disposed && generation === scopeGeneration && dialog.value?.id === target.id) notice.value = describeError(error, target.kind === 'rename' ? tr('重命名', 'Rename') : target.kind === 'attach' ? tr('挂到工作空间', 'Attach to workspace') : tr('删除', 'Delete')); }
   finally { if (generation === scopeGeneration) saving.value = false; }
+}
+// Delete confirms in place, right under the chat's row (no modal).
+async function confirmDelete() {
+  const item = menuItem.value, generation = scopeGeneration;
+  if (!item || saving.value || props.deletingDisabled) return;
+  const row = listElement.value?.querySelector(`[data-chat-id="${CSS.escape(item.id)}"]`) || null;
+  closeMenu();
+  const title = label(item);
+  await confirmInPlace({
+    after: row,
+    title: tr(`删除“${title}”的聊天记录？`, `Delete the chat history for “${title}”?`),
+    detail: tr('项目资产和工作区文件会保留。', 'Project assets and workspace files will be retained.'),
+    confirmText: tr('删除', 'Delete'), busyText: tr('删除中…', 'Deleting…'), cancelText: tr('取消', 'Cancel'),
+    run: async () => {
+      if (props.deletingDisabled || !props.items.some(entry => entry.id === item.id)) return;
+      saving.value = true; notice.value = '';
+      try {
+        if (!await props.removeConversation(item.id)) throw Error(tr('删除未完成', 'Deletion did not complete'));
+        if (!disposed && generation === scopeGeneration) notice.value = tr('对话已删除，工作区文件保留', 'Chat deleted; workspace files kept');
+      } catch (error) { if (!disposed && generation === scopeGeneration) notice.value = describeError(error, tr('删除', 'Delete')); }
+      finally { if (generation === scopeGeneration) saving.value = false; }
+    },
+  });
 }
 async function togglePin() {
   const item = menuItem.value, generation = scopeGeneration; if (!item || saving.value) return;
@@ -109,10 +155,10 @@ onBeforeUnmount(() => { disposed = true; ++scopeGeneration; if (typeof window !=
 </script>
 
 <template>
-  <div class="chat-history-list" data-testid="conversation-history-list">
+  <div ref="listElement" class="chat-history-list" data-testid="conversation-history-list">
     <section v-for="group in groups" :key="group.label" class="chat-history-group" :aria-label="group.label">
       <h3>{{group.label}}</h3>
-      <div v-for="item in group.items" :key="item.id" class="chat-history-row" :class="{selected:item.id===selectedId}" @contextmenu="openMenu($event,item)" @keydown="rowKey($event,item)">
+      <div v-for="item in group.items" :key="item.id" class="chat-history-row" :data-chat-id="item.id" :class="{selected:item.id===selectedId}" @contextmenu="openMenu($event,item)" @keydown="rowKey($event,item)">
         <button type="button" class="chat-history-select" :title="label(item)" :aria-current="item.id===selectedId?'page':undefined" @click="emit('select',item.id)"><Pin v-if="item.pinned" :size="14"/><MessageSquare v-else :size="14"/><span><strong>{{label(item)}}</strong><time v-if="time(item).short" :datetime="conversationActivityAt(item)" :title="tr('最近活动：','Last activity: ')+time(item).full">{{time(item).short}}</time></span></button>
         <button type="button" class="chat-history-more" :disabled="loading||saving" :aria-label="tr(`会话操作：${label(item)}`,`Chat actions: ${label(item)}`)" :aria-expanded="menu?.id===item.id" aria-haspopup="menu" @click="openMenu($event,item)"><Ellipsis :size="17"/></button>
       </div>
@@ -125,22 +171,31 @@ onBeforeUnmount(() => { disposed = true; ++scopeGeneration; if (typeof window !=
       <button type="button" role="menuitem" :disabled="saving" @click="openDialog('rename')"><Pencil :size="15"/>{{tr('重命名','Rename')}}</button>
       <button type="button" role="menuitem" :disabled="saving" @click="togglePin"><PinOff v-if="menuItem.pinned" :size="15"/><Pin v-else :size="15"/>{{menuItem.pinned?tr('取消置顶','Unpin'):tr('置顶','Pin')}}</button>
       <button type="button" role="menuitem" :disabled="saving" :title="tr('显示此项目共享的 Agent 工作区','Reveal the Agent workspace shared by this project')" @click="reveal"><FolderOpen :size="15"/>{{saving?tr('正在处理…','Working…'):tr('在 Finder 中显示工作区','Reveal workspace in Finder')}}</button>
-      <button type="button" role="menuitem" class="danger" :disabled="saving||deletingDisabled" @click="openDialog('delete')"><Trash2 :size="15"/>{{tr('删除对话…','Delete chat…')}}</button>
+      <button v-if="personal" type="button" role="menuitem" :disabled="saving||deletingDisabled" :title="tr('向前重挂：之后使用目标工作空间的记忆与预算；历史证据留在原处','Forward-only: it will use the target workspace’s memory and budget from here on; past evidence stays put')" @click="openDialog('attach')"><FolderInput :size="15"/>{{tr('挂到工作空间…','Attach to workspace…')}}</button>
+      <button type="button" role="menuitem" class="danger" :disabled="saving||deletingDisabled" @click="confirmDelete"><Trash2 :size="15"/>{{tr('删除对话…','Delete chat…')}}</button>
     </div>
     <div v-if="dialog" class="chat-history-dialog-backdrop" @click.self="closeDialog">
-      <form ref="dialogElement" class="chat-history-dialog" role="dialog" aria-modal="true" :aria-label="dialog.kind==='rename'?tr('重命名会话','Rename chat'):tr('删除会话','Delete chat')" @keydown="dialogKey" @submit.prevent="saveDialog">
-        <header><strong>{{dialog.kind==='rename'?tr('重命名会话','Rename chat'):tr('删除会话','Delete chat')}}</strong><button type="button" :disabled="saving" :aria-label="tr('关闭','Close')" @click="closeDialog"><X :size="17"/></button></header>
+      <form ref="dialogElement" class="chat-history-dialog" role="dialog" aria-modal="true" :aria-label="dialog.kind==='rename'?tr('重命名会话','Rename chat'):dialog.kind==='attach'?tr('挂到工作空间','Attach to workspace'):tr('删除会话','Delete chat')" @keydown="dialogKey" @submit.prevent="saveDialog">
+        <header><strong>{{dialog.kind==='rename'?tr('重命名会话','Rename chat'):dialog.kind==='attach'?tr('挂到工作空间','Attach to workspace'):tr('删除会话','Delete chat')}}</strong><button type="button" :disabled="saving" :aria-label="tr('关闭','Close')" @click="closeDialog"><X :size="17"/></button></header>
         <input v-if="dialog.kind==='rename'" ref="renameInput" v-model="titleDraft" :disabled="saving" :aria-label="tr('会话标题','Chat title')" autocomplete="off"/>
+        <template v-else-if="dialog.kind==='attach'">
+          <p>{{tr(`把“${dialog.title}”重挂到具名工作空间？之后将使用目标空间的工作区、记忆与预算；历史证据留在原处，不会迁移。`,`Attach “${dialog.title}” to a named workspace? It will use the target space’s workspace, memory and budget from here on; past evidence stays where it is and is not moved.`)}}</p>
+          <select v-if="attachOptions.length" ref="attachSelect" v-model.number="attachTargetId" :disabled="saving" :aria-label="tr('目标工作空间','Target workspace')">
+            <option v-for="option in attachOptions" :key="option.id" :value="option.id">{{option.name}}</option>
+          </select>
+          <p v-else-if="attachOptionsLoading" class="chat-history-dialog-notice" role="status">{{tr('正在加载工作空间列表…','Loading workspaces…')}}</p>
+          <p v-else class="chat-history-dialog-notice" role="status">{{tr('还没有具名工作空间，请先新建一个。','No named workspace yet — create one first.')}}</p>
+        </template>
         <p v-else>{{tr(`删除“${dialog.title}”的聊天记录？项目资产和工作区文件会保留。`,`Delete the chat history for “${dialog.title}”? Project assets and workspace files will be retained.`)}}</p>
         <p v-if="notice" class="chat-history-dialog-notice" role="status">{{notice}}</p>
-        <footer><button type="button" :disabled="saving" @click="closeDialog">{{tr('取消','Cancel')}}</button><button type="submit" :disabled="saving||(dialog.kind==='rename'&&!titleDraft.trim())||(dialog.kind==='delete'&&deletingDisabled)" :class="{danger:dialog.kind==='delete',primary:dialog.kind==='rename'}">{{saving?tr('保存中…','Saving…'):dialog.kind==='rename'?tr('保存标题','Save title'):tr('删除对话','Delete chat')}}</button></footer>
+        <footer><button type="button" :disabled="saving" @click="closeDialog">{{tr('取消','Cancel')}}</button><button type="submit" :disabled="saving||(dialog.kind==='rename'&&!titleDraft.trim())||(dialog.kind==='delete'&&deletingDisabled)||(dialog.kind==='attach'&&(deletingDisabled||!attachTargetId))" :class="{danger:dialog.kind==='delete',primary:dialog.kind==='rename'||dialog.kind==='attach'}">{{saving?tr('保存中…','Saving…'):dialog.kind==='rename'?tr('保存标题','Save title'):dialog.kind==='attach'?tr('挂到工作空间','Attach'):tr('删除对话','Delete chat')}}</button></footer>
       </form>
     </div>
   </Teleport>
 </template>
 
 <style scoped>
-.chat-history-list{flex:1;min-height:0;overflow:auto;scrollbar-width:thin;overscroll-behavior:contain}.chat-history-group h3{margin:9px 10px 5px;color:var(--app-muted,#72746f);font-size:10px;font-weight:500}.chat-history-row{display:flex;align-items:center;min-width:0;margin-bottom:3px;border-radius:8px}.chat-history-row.selected,.chat-history-row:hover{background:color-mix(in srgb,var(--app-ink,#252624) 7%,transparent)}.chat-history-select{display:flex;gap:8px;align-items:flex-start;flex:1;min-width:0;padding:9px 6px 9px 10px;border:0;background:transparent;text-align:left;color:var(--app-ink,#252624);font:inherit;cursor:pointer}.chat-history-select>svg{flex-shrink:0;margin-top:3px}.chat-history-select>span{display:flex;flex-direction:column;gap:3px;min-width:0}.chat-history-select strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;font-weight:500;line-height:1.5}.chat-history-select time{font-size:10px;line-height:1.3;color:var(--app-muted,#72746f)}.chat-history-more{display:grid;place-items:center;flex-shrink:0;width:28px;height:28px;margin-right:4px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--app-muted,#72746f);cursor:pointer}.chat-history-more:hover,.chat-history-more[aria-expanded=true]{background:color-mix(in srgb,var(--app-ink,#252624) 8%,transparent);color:var(--app-ink,#252624)}.chat-history-more:disabled{opacity:.4;cursor:default}.chat-history-empty,.chat-history-notice{user-select:text;margin:8px 10px;color:var(--app-muted,#72746f);font-size:11px;line-height:1.5;overflow-wrap:anywhere}
+.chat-history-list{flex:1;min-height:0;overflow:auto;scrollbar-width:thin;overscroll-behavior:contain}.chat-history-group h3{margin:9px 10px 5px;color:var(--app-muted,#72746f);font-size:var(--text-micro);font-weight:500}.chat-history-row{display:flex;align-items:center;min-width:0;margin-bottom:3px;border-radius:8px}.chat-history-row.selected,.chat-history-row:hover{background:color-mix(in srgb,var(--app-ink,#252624) 7%,transparent)}.chat-history-select{display:flex;gap:8px;align-items:flex-start;flex:1;min-width:0;padding:9px 6px 9px 10px;border:0;background:transparent;text-align:left;color:var(--app-ink,#252624);font:inherit;cursor:pointer}.chat-history-select>svg{flex-shrink:0;margin-top:3px}.chat-history-select>span{display:flex;flex-direction:column;gap:3px;min-width:0}.chat-history-select strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;font-weight:500;line-height:1.5}.chat-history-select time{font-size:var(--text-micro);line-height:1.3;color:var(--app-muted,#72746f)}.chat-history-more{display:grid;place-items:center;flex-shrink:0;width:28px;height:28px;margin-right:4px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--app-muted,#72746f);cursor:pointer}.chat-history-more:hover,.chat-history-more[aria-expanded=true]{background:color-mix(in srgb,var(--app-ink,#252624) 8%,transparent);color:var(--app-ink,#252624)}.chat-history-more:disabled{opacity:.4;cursor:default}.chat-history-empty,.chat-history-notice{user-select:text;margin:8px 10px;color:var(--app-muted,#72746f);font-size:11px;line-height:1.5;overflow-wrap:anywhere}
 .chat-history-menu{position:fixed;z-index:1400;display:flex;flex-direction:column;width:224px;max-width:calc(100vw - 16px);max-height:calc(100dvh - 16px);overflow:auto;padding:5px;border:1px solid var(--line,#ddd);border-radius:10px;background:var(--app-surface,#fff);box-shadow:0 10px 32px #0002;color:var(--app-ink,#252624)}.chat-history-menu button{display:flex;align-items:center;gap:9px;padding:10px;border:0;border-radius:6px;background:transparent;text-align:left;color:inherit;font:inherit;font-size:12px;cursor:pointer}.chat-history-menu button:hover,.chat-history-menu button:focus-visible{background:color-mix(in srgb,var(--blue,#2878ff) 9%,transparent);outline:0}.chat-history-menu .danger{margin-top:4px;border-top:1px solid var(--line,#ddd);border-radius:0 0 6px 6px;color:var(--red,#b63f3f)}.chat-history-menu button:disabled{opacity:.4;cursor:default}
-.chat-history-dialog-backdrop{position:fixed;inset:0;z-index:1450;display:flex;align-items:center;justify-content:center;padding:16px;background:#0005;color:var(--app-ink,#252624)}.chat-history-dialog{box-sizing:border-box;width:min(440px,100%);max-height:calc(100dvh - 32px);overflow:auto;padding:18px;border:1px solid var(--line,#ddd);border-radius:14px;background:var(--app-surface,#fff);box-shadow:0 20px 60px #0003}.chat-history-dialog header{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}.chat-history-dialog header strong{font-size:15px}.chat-history-dialog header button{display:grid;place-items:center;width:26px;height:26px;padding:0;border:0;background:transparent;color:var(--app-muted,#72746f)}.chat-history-dialog input{box-sizing:border-box;width:100%;padding:10px;border:1px solid var(--line,#ddd);border-radius:8px;background:transparent;color:inherit;font:inherit;font-size:13px}.chat-history-dialog p{font-size:13px;line-height:1.7;overflow-wrap:anywhere}.chat-history-dialog .chat-history-dialog-notice{color:var(--red,#b63f3f);font-size:12px}.chat-history-dialog footer{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}.chat-history-dialog footer button{padding:8px 12px;border:1px solid var(--line,#ddd);border-radius:7px;background:transparent;color:inherit;font:inherit;font-size:12px;cursor:pointer}.chat-history-dialog footer .primary{border-color:var(--blue,#2878ff);background:var(--blue,#2878ff);color:#fff}.chat-history-dialog footer .danger{border-color:var(--red,#b63f3f);background:var(--red,#b63f3f);color:#fff}.chat-history-dialog button:disabled{opacity:.5;cursor:default}
+.chat-history-dialog-backdrop{position:fixed;inset:0;z-index:1450;display:flex;align-items:center;justify-content:center;padding:16px;background:#0005;color:var(--app-ink,#252624)}.chat-history-dialog{box-sizing:border-box;width:min(440px,100%);max-height:calc(100dvh - 32px);overflow:auto;padding:18px;border:1px solid var(--line,#ddd);border-radius:14px;background:var(--app-surface,#fff);box-shadow:0 20px 60px #0003}.chat-history-dialog header{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}.chat-history-dialog header strong{font-size:15px}.chat-history-dialog header button{display:grid;place-items:center;width:26px;height:26px;padding:0;border:0;background:transparent;color:var(--app-muted,#72746f)}.chat-history-dialog input,.chat-history-dialog select{box-sizing:border-box;width:100%;padding:10px;border:1px solid var(--line,#ddd);border-radius:8px;background:transparent;color:inherit;font:inherit;font-size:13px}.chat-history-dialog p{font-size:13px;line-height:1.7;overflow-wrap:anywhere}.chat-history-dialog .chat-history-dialog-notice{color:var(--red,#b63f3f);font-size:12px}.chat-history-dialog footer{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}.chat-history-dialog footer button{padding:8px 12px;border:1px solid var(--line,#ddd);border-radius:7px;background:transparent;color:inherit;font:inherit;font-size:12px;cursor:pointer}.chat-history-dialog footer .primary{border-color:var(--blue,#2878ff);background:var(--blue,#2878ff);color:#fff}.chat-history-dialog footer .danger{border-color:var(--red,#b63f3f);background:var(--red,#b63f3f);color:#fff}.chat-history-dialog button:disabled{opacity:.5;cursor:default}
 </style>

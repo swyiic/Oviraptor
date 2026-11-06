@@ -353,9 +353,6 @@ pub(crate) struct Manager {
     watcher: Arc<(Mutex<bool>, Condvar)>,
 }
 impl Manager {
-    pub(crate) fn new(path: &Path, enrichment: enrichment::Manager) -> Result<Self, String> {
-        Self::build(path,enrichment,None)
-    }
     pub(crate) fn new_with_jobs(path:&Path,enrichment:enrichment::Manager,jobs:crate::jobs::AssetJobContext)->Result<Self,String>{
         Self::build(path,enrichment,Some(jobs))
     }
@@ -819,9 +816,6 @@ pub async fn seed_review_assist_status(
         .map_err(err)?
 }
 
-#[cfg(test)]
-#[path = "discovery_assist_tests.rs"]
-mod tests;
 
 #[path = "discovery_pipeline.rs"]
 mod pipeline;

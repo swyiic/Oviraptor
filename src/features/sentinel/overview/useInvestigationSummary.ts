@@ -1,5 +1,6 @@
 import { onUnmounted, ref, watch } from "vue";
 import type { InvestigationOverview } from "../types";
+import { useI18n } from "../../../i18n";
 
 export type InvestigationSummaryState = "idle" | "loading" | "ready" | "error";
 const emptySummary = (): InvestigationOverview => ({
@@ -24,6 +25,7 @@ export function useInvestigationSummary(options: {
   scope: () => number | undefined;
   read: (project?: number) => Promise<InvestigationOverview>;
 }) {
+  const { tr } = useI18n();
   const stats = ref<InvestigationOverview>(emptySummary());
   const state = ref<InvestigationSummaryState>("idle");
   let generation = 0;
@@ -50,7 +52,7 @@ export function useInvestigationSummary(options: {
     } catch {
       if (!current()) return;
       state.value = "error";
-      throw new Error("调查摘要读取失败，请重试");
+      throw new Error(tr("调查摘要读取失败，请重试", "Failed to load the investigation summary; try again"));
     }
   }
 

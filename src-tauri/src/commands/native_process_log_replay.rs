@@ -127,8 +127,3 @@ fn read_native_process_log_snapshot_in(
     })
 }
 
-#[cfg(test)]
-mod native_process_log_replay_tests {
-    use super::*;
-    include!("native_process_log_replay_tests.rs");
-}

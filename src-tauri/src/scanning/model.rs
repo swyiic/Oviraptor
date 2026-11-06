@@ -231,6 +231,10 @@ pub struct SentinelScan {
     pub task_path: String,
     pub previous_scan_id: String,
     pub llm_requests: i64,
+    #[serde(default)]
+    pub attempt_model_requests: i64,
+    #[serde(default)]
+    pub attempt_usage_reason: String,
     pub input_tokens: i64,
     pub output_tokens: i64,
     pub cached_tokens: i64,
@@ -255,6 +259,33 @@ pub struct SentinelScan {
     pub administrative_closure_recorded: bool,
     #[serde(default)]
     pub closure_handoff_recorded: bool,
+    #[serde(default)]
+    pub last_command_state: String,
+    #[serde(default)]
+    pub last_command_verified: bool,
+    #[serde(default)]
+    pub last_command_review_state: String,
+    #[serde(default)]
+    pub last_command_kind: String,
+    #[serde(default)]
+    pub last_command_failure_reason: String,
+    #[serde(default)]
+    pub pending_command_count: i64,
+    /// Ordinary pending rows on this attempt: accepted, or a result delivery
+    /// still pending / delivery_failed. Also one executed parent resume while
+    /// the child is scanning and that execution result is still pending or
+    /// delivery_failed. Not a verification-conclusion delivery.
+    #[serde(default)]
+    pub pending_instruction_count: i64,
+    /// Posted execution whose verification conclusion is still pending or
+    /// delivery_failed. Also one executed parent resume while the child is
+    /// scanning, the execution result is already posted, and that conclusion
+    /// is still pending or delivery_failed. Together with
+    /// `pending_instruction_count` the two sum to `pending_command_count`.
+    #[serde(default)]
+    pub pending_verification_count: i64,
+    #[serde(default)]
+    pub pending_commands: Vec<Value>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

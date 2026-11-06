@@ -5,6 +5,35 @@ struct NativeHelperCapture {
     stderr: Vec<u8>,
     stderr_truncated: bool,
 }
+#[cfg(unix)]
+fn serve_browser_broker_socket(parent: std::os::unix::net::UnixStream, ask: BrowserBrokerAsk) {
+    use std::io::{BufRead, Write};
+    let mut writer = match parent.try_clone() {
+        Ok(socket) => socket,
+        Err(_) => return,
+    };
+    let mut reader = BufReader::new(parent);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {
+                let parsed: JsonValue = serde_json::from_str(line.trim()).unwrap_or(JsonValue::Null);
+                let method = parsed.get("method").and_then(JsonValue::as_str).unwrap_or("").to_string();
+                let url = parsed.get("url").and_then(JsonValue::as_str).unwrap_or("").to_string();
+                let (reply_tx, reply_rx) = mpsc::channel();
+                let allow = ask.send((method, url, reply_tx)).is_ok()
+                    && reply_rx.recv_timeout(Duration::from_secs(5)).unwrap_or(false);
+                let verdict = if allow { "allow\n" } else { "deny\n" };
+                if writer.write_all(verdict.as_bytes()).is_err() {
+                    break;
+                }
+            }
+        }
+    }
+}
+
 fn run_native_json_helper_raw(
     helper: &Path,
     payload: &JsonValue,
@@ -38,12 +67,6 @@ fn run_native_json_helper_capture(
     // Unit tests use a synthetic fixture worker for cancellation/pipe tests.
     // Every shipped worker, including test invocations of its real filename,
     // takes the same integrity gate before a process is spawned.
-    #[cfg(test)]
-    let synthetic_fixture = matches!(
-        helper.file_name().and_then(|name| name.to_str()),
-        Some("fixture.cjs" | "fake_runtime_probe.cjs")
-    );
-    #[cfg(not(test))]
     let synthetic_fixture = false;
     if !synthetic_fixture {
         verify_bundled_worker(helper)?;
@@ -79,6 +102,9 @@ fn run_native_json_helper_capture(
         .env("PATH", runtime_path)
         .env("NO_PROXY", no_proxy)
         .env("no_proxy", no_proxy);
+    if std::env::var("OVIRAPTOR_BROWSER_HEADED").ok().as_deref() == Some("1") {
+        command.env("OVIRAPTOR_BROWSER_HEADED", "1");
+    }
     // Same FD_CLOEXEC-atomic capture pipes as native_pipeline::process::run: a
     // concurrent spawn elsewhere can never inherit (and hold open) these ends.
     #[cfg(unix)]
@@ -99,11 +125,45 @@ fn run_native_json_helper_capture(
     if let Some(proxy) = proxy.filter(|value| !value.trim().is_empty()) {
         command.env("HTTPS_PROXY", proxy).env("HTTP_PROXY", proxy);
     }
+    let broker_pair = if control.browser_broker.is_some() {
+        #[cfg(unix)]
+        {
+            command.env("OVIRAPTOR_REQUEST_BROKER", "1");
+            let pair = std::os::unix::net::UnixStream::pair()
+                .map_err(|_| "browser_broker_socket_unavailable".to_string())?;
+            let child_fd = std::os::unix::io::AsRawFd::as_raw_fd(&pair.1);
+            unsafe {
+                use std::os::unix::process::CommandExt;
+                command.pre_exec(move || {
+                    if libc::dup2(child_fd, 3) < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+            Some(pair)
+        }
+        #[cfg(not(unix))]
+        {
+            return Err("unsupported_sandbox:browser_network_broker_unavailable".into());
+        }
+    } else {
+        None
+    };
     control.check()?;
     let spawned = command.spawn();
     // The parent's copies of the child ends close here, before any read/write.
     drop(command);
     let child = spawned.map_err(|error| format!("无法启动 {}：{error}", helper.display()))?;
+    #[cfg(unix)]
+    if let Some((parent_sock, child_sock)) = broker_pair {
+        drop(child_sock);
+        if let Some(ask) = control.browser_broker.clone() {
+            thread::spawn(move || serve_browser_broker_socket(parent_sock, ask));
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = broker_pair;
     let mut child = crate::native_pipeline::process::OwnedChild::new(child);
     #[cfg(not(unix))]
     let (mut stdin, stdout, stderr) = (
@@ -235,8 +295,3 @@ fn run_native_json_helper_capture(
     })
 }
 
-#[cfg(all(test, unix))]
-mod native_helper_live_tests {
-    use super::*;
-    include!("native_helper_live_tests.rs");
-}

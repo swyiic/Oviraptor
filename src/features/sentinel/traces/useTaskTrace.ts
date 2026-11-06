@@ -1,6 +1,7 @@
 import { onUnmounted, ref, watch } from "vue";
 import type { AgentTraceDetail } from "../types";
 import { isTraceDetailForTask } from "./traceDetailContract";
+import { useI18n } from "../../../i18n";
 
 // Read-only Board state. No execution, polling or automatic retry is added.
 export function useTaskTrace(options: {
@@ -9,6 +10,7 @@ export function useTaskTrace(options: {
   read: (scanId: string) => Promise<AgentTraceDetail>;
   notify: (message: string) => void;
 }) {
+  const { tr } = useI18n();
   const detail = ref<AgentTraceDetail>();
   const busy = ref(false);
   let generation = 0;
@@ -36,7 +38,7 @@ export function useTaskTrace(options: {
     } catch {
       if (current()) {
         detail.value = undefined;
-        if (notify) options.notify("运行轨迹读取失败，请重试");
+        if (notify) options.notify(tr("运行轨迹读取失败，请重试", "Failed to load the run trace; try again"));
       }
     } finally {
       if (current()) busy.value = false;

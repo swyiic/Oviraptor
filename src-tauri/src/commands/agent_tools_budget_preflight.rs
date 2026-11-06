@@ -41,12 +41,13 @@ fn agent_target_budget_preflight(
     if usage.executor_recorded != runtime_count {
         return Err("http_journal_checkpoint_requires_reconciliation".into());
     }
+    // No `.min(400)` cap — match the declared target_requests budget so recon does
+    // not starve the executor's probes (see agent_target_request_ceiling).
     let ceiling = context
         .execution_plan
         .hard_model_requests
         .max(1)
-        .saturating_mul(4)
-        .min(400);
+        .saturating_mul(4);
     let prospective = usage
         .budget_committed
         .checked_add(required)

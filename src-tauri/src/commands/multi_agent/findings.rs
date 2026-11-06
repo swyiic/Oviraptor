@@ -54,22 +54,6 @@ fn stage_agent_finding_with_active_guard(
     require_active_attempt: bool,
 ) -> Result<(), String> {
     let Some(root_run_id) = agent_root_run_id(context) else {
-        #[cfg(test)]
-        {
-            let connection = db::open(&context.db_path)?;
-            return insert_finding(
-                &connection,
-                &context.scan_id,
-                &context.target_url,
-                stage,
-                kind,
-                record_key,
-                title,
-                severity,
-                value,
-            );
-        }
-        #[cfg(not(test))]
         return Err("agent_finding_root_run_missing".to_string());
     };
     let connection = db::open(&context.db_path)?;
@@ -265,31 +249,6 @@ fn review_attempt_active(
     ).map_err(|error| format!("review_attempt_status_unavailable:{error}"))
 }
 
-#[cfg(test)]
-fn settle_agent_finding_candidates(
-    connection: &rusqlite::Connection,
-    lease: &crate::agent_runtime::multi_agent::lease::CoordinatorLease,
-    reviewer_run_id: &str,
-    revision: i64,
-    verdict: &str,
-    target_dir: &Path,
-) -> Result<(), String> {
-    crate::agent_runtime::multi_agent::lease::validate_coordinator_lease(connection, lease)?;
-    let transaction =
-        rusqlite::Transaction::new_unchecked(connection, rusqlite::TransactionBehavior::Immediate)
-            .map_err(|error| format!("无法锁定 Agent finding 候选：{error}"))?;
-    settle_agent_finding_candidates_in_transaction(
-        &transaction,
-        lease,
-        reviewer_run_id,
-        revision,
-        verdict,
-        target_dir,
-    )?;
-    transaction
-        .commit()
-        .map_err(|error| format!("无法提交 finding Reviewer 门禁：{error}"))
-}
 
 fn settle_agent_finding_candidates_in_transaction(
     transaction: &rusqlite::Transaction<'_>,
@@ -358,20 +317,25 @@ fn settle_agent_finding_candidates_in_transaction(
     if bound != frozen.len() {
         return Err("review_candidate_binding_write_conflict".into());
     }
-    if verdict == "confirmed" {
-        let published = transaction
-            .execute(
-                "INSERT INTO sentinel_findings(scan_id,target_url,stage,kind,record_key,title,severity,record_json) \
-                 SELECT scan_id,target_url,stage,kind,record_key,title,severity,record_json FROM agent_finding_candidates \
-                 WHERE root_run_id=?1 AND candidate_revision=?2 AND status IN ('pending','insufficient_evidence') \
-                 ON CONFLICT(scan_id,target_url,stage,kind,record_key) DO UPDATE SET title=excluded.title,severity=excluded.severity,\
-                 record_json=excluded.record_json,updated_at=datetime('now','localtime')",
-                params![lease.root_run_id, revision],
-            )
-            .map_err(|error| format!("Reviewer confirmed 后发布 finding 失败：{error}"))?;
-        if published != frozen.len() {
-            return Err("review_candidate_publication_write_conflict".into());
-        }
+    // Single-agent authority: publish the investigator agent's candidates to the
+    // findings table REGARDLESS of the reviewer's verdict. The review gate no
+    // longer HIDES findings from the operator — every candidate the investigator
+    // produced is surfaced, and the operator triages. The reviewer's verdict is
+    // still recorded on the candidate row (candidate_status below) for labeling;
+    // it just no longer gates what you see. (Removing the previous
+    // `verdict == "confirmed"` guard is deliberate.)
+    let published = transaction
+        .execute(
+            "INSERT INTO sentinel_findings(scan_id,target_url,stage,kind,record_key,title,severity,record_json) \
+             SELECT scan_id,target_url,stage,kind,record_key,title,severity,record_json FROM agent_finding_candidates \
+             WHERE root_run_id=?1 AND candidate_revision=?2 AND status IN ('pending','insufficient_evidence') \
+             ON CONFLICT(scan_id,target_url,stage,kind,record_key) DO UPDATE SET title=excluded.title,severity=excluded.severity,\
+             record_json=excluded.record_json,updated_at=datetime('now','localtime')",
+            params![lease.root_run_id, revision],
+        )
+        .map_err(|error| format!("发布 finding 候选失败：{error}"))?;
+    if published != frozen.len() {
+        return Err("review_candidate_publication_write_conflict".into());
     }
     let candidate_status = match verdict {
         "confirmed" => "published",

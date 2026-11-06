@@ -36,8 +36,8 @@ const items = computed(() => [
 .advanced-layout{display:grid;grid-template-columns:132px minmax(0,1fr);gap:16px;align-items:start}
 .advanced-subnav{display:flex;flex-direction:column;gap:1px}
 .advanced-subnav button{
-  height:30px;padding:0 10px;border:0;border-radius:6px;background:transparent;
-  color:var(--muted);font-size:12px;font-weight:550;text-align:left;cursor:pointer;
+  height:30px;padding:0 10px;border:0;border-radius:var(--radius-sm);background:transparent;
+  color:var(--muted);font-size:var(--text-body);font-weight:550;text-align:left;cursor:pointer;
 }
 .advanced-subnav button:hover{color:var(--app-ink,#172033);background:color-mix(in srgb,var(--app-ink,#172033) 5%,transparent)}
 .advanced-subnav button.active{color:var(--app-ink,#172033);background:color-mix(in srgb,var(--app-ink,#172033) 8%,transparent)}

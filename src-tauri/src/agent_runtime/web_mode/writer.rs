@@ -48,14 +48,6 @@ impl<'tx, 'db> ModeRootWriter<'tx, 'db> {
     ) -> Result<Self, String> {
         Self::install_on(tx, mode, budget, true)
     }
-    #[cfg(test)]
-    pub(crate) fn install_historical_for_test(
-        tx: &'tx Transaction<'db>,
-        mode: &NewRootModeDeclaration,
-        budget: Option<&NewRootBudgetDeclaration>,
-    ) -> Result<Self, String> {
-        Self::install_on(tx, mode, budget, false)
-    }
     fn install_on(
         tx: &'tx Transaction<'db>,
         mode: &NewRootModeDeclaration,

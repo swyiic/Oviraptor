@@ -249,6 +249,3 @@ pub async fn get_asset_discovery_page(
     .await
     .map_err(err)?
 }
-#[cfg(test)]
-#[path = "discovery_local_tests.rs"]
-mod tests;

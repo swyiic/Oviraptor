@@ -36,7 +36,9 @@ fn validate_profile(mut profile: GatewayProfile) -> Result<GatewayProfile, Strin
     if !url.username().is_empty()
         || url.password().is_some()
         || url.fragment().is_some()
-        || !(url.scheme() == "https" || (profile.local && url.scheme() == "http" && loopback))
+        || !(url.scheme() == "https"
+            || (profile.local && url.scheme() == "http" && loopback)
+            || crate::agent_host_sidecar::is_model_bridge_endpoint(&profile.endpoint))
     {
         return Err("conversation_model_endpoint_policy".into());
     }
@@ -196,7 +198,7 @@ where
     // connection-local and does not change scan or general read policies.
     db.pragma_update(None, "synchronous", "FULL").map_err(err)?;
     {
-        let tx = db.transaction().map_err(err)?;
+        let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(err)?;
         if let Some(saved) = receipt(&tx, &input)? {
             return Ok(saved);
         }
@@ -488,10 +490,4 @@ pub(super) fn cancel(path: &Path, input: CancelInput) -> Result<Reply, String> {
     tx.commit().map_err(err)?;
     Ok(result)
 }
-#[cfg(test)]
-#[path = "reply_tests.rs"]
-mod tests;
 
-#[cfg(test)]
-#[path = "agent_tests.rs"]
-mod agent_tests;

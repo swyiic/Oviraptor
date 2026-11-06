@@ -280,10 +280,20 @@ impl Catalogue {
         }
         Ok(tables)
     }
-    pub(super) fn protected_cascades(
+    /// `allow_foreign` is set only by the operator hard-override. A crashed scan
+    /// can leave rows in a FOREIGN (non-native) table that the `sentinel_scans`
+    /// cascade would delete but the native-only audit does not capture. Normal
+    /// deletion REFUSES so nothing is lost unrecorded; the override instead lets
+    /// those rows be cascade-deleted by including them in the returned allow-set
+    /// (the deletion authorizer consults it), so the ordinary cascade removes
+    /// them — correctly ordered with their own triggers — rather than this path
+    /// deleting them early while the parent scan still exists. Native, retained
+    /// and financial tables are unaffected: only foreign cascade orphans.
+    pub(super) fn protected_cascades_mode(
         &self,
         db: &Connection,
         scan: &str,
+        allow_foreign: bool,
     ) -> Result<BTreeSet<String>, String> {
         let mut deleting = BTreeSet::from([
             "sentinel_scans".into(),
@@ -322,7 +332,7 @@ impl Catalogue {
                     |r| r.get(0),
                 )
                 .map_err(|e| e.to_string())?;
-            if affected {
+            if affected && !allow_foreign {
                 return Err("deleted_audit_protected_record_requires_preservation".into());
             }
             empty.insert(name.clone());

@@ -101,8 +101,6 @@ fn finish_pending_source_exhausted_root(
     if !pending {
         return Ok(false);
     }
-    #[cfg(test)]
-    source_failure_cutover_for_test();
     finish_owned_source_failure(
         db,
         context,

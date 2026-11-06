@@ -19,8 +19,9 @@ import {
   kindTone,
 } from "../presentation";
 
+const { tr } = useI18n();
 const { severityLabel, statusLabel, verdictLabel } =
-  createSentinelLabels(useI18n().tr);
+  createSentinelLabels(tr);
 
 const fuseFilter = defineModel<string>("fuseFilter", { required: true });
 const fuseCategoryFilter = defineModel<string>("fuseCategoryFilter", {
@@ -56,36 +57,35 @@ defineProps<{
   <section class="panel fuse-zone-panel">
     <div class="panel-heading">
       <div>
-        <span class="eyebrow">STOP &amp; DISPOSITION</span>
-        <h3>停止与 URL 处置队列</h3>
+        <h3>{{ tr('停止与 URL 处置队列', 'Stopped URLs and dispositions') }}</h3>
         <p>
-          这里处理“为什么停止、是否恢复”，不是判断漏洞真假。原生 Agent 遇到拦截、成本失控或无进展时只停止当前 URL，其余队列继续执行。
+          {{ tr('这里处理“为什么停止、是否恢复”，不是判断漏洞真假。原生 Agent 遇到拦截、成本失控或无进展时只停止当前 URL，其余队列继续执行。', 'Decide here why a URL stopped and whether to resume it, not whether a vulnerability is real. When the native Agent is blocked, overruns cost or stops making progress, it stops only the current URL and the rest of the queue keeps running.') }}
         </p>
       </div>
       <div class="fuse-filters">
-        <select v-model="fuseCategoryFilter" class="toolbar-select"><option value="all">全部停止原因</option><option value="budget">成本 / 无进展</option><option value="access">缺少访问条件</option><option value="blocked">遭到拦截</option><option value="failure">网络 / 执行异常</option><option value="low_value">价值不足</option></select>
-        <select v-model="fuseFilter" class="toolbar-select"><option value="active">待处置</option><option value="archived">已归档</option><option value="all">全部</option></select>
+        <select v-model="fuseCategoryFilter" class="toolbar-select"><option value="all">{{ tr('全部停止原因', 'All stop reasons') }}</option><option value="budget">{{ tr('成本 / 无进展', 'Cost / no progress') }}</option><option value="access">{{ tr('缺少访问条件', 'Missing access') }}</option><option value="blocked">{{ tr('遭到拦截', 'Blocked') }}</option><option value="failure">{{ tr('网络 / 执行异常', 'Network / run error') }}</option><option value="low_value">{{ tr('价值不足', 'Low value') }}</option></select>
+        <select v-model="fuseFilter" class="toolbar-select"><option value="active">{{ tr('待处置', 'Pending') }}</option><option value="archived">{{ tr('已归档', 'Archived') }}</option><option value="all">{{ tr('全部', 'All') }}</option></select>
       </div>
     </div>
     <div class="fuse-zone-stats">
       <article class="attention">
-        <span>待决定是否恢复</span
+        <span>{{ tr('待决定是否恢复', 'Awaiting resume decision') }}</span
         ><strong>{{
           fuseEntries.filter((item) => !item.archived && item.verdict === 'pending').length
         }}</strong>
       </article>
       <article>
-        <span>补充条件后重试</span
+        <span>{{ tr('补充条件后重试', 'Retry after adding conditions') }}</span
         ><strong>{{ fuseEntries.filter((item) => !item.archived && item.verdict === 'needs_followup').length }}</strong>
       </article>
       <article>
-        <span>已完成归档</span
+        <span>{{ tr('已完成归档', 'Archived') }}</span
         ><strong>{{
           fuseEntries.filter((item) => item.archived).length
         }}</strong>
       </article>
       <article>
-        <span>当前显示</span
+        <span>{{ tr('当前显示', 'Showing') }}</span
         ><strong>{{ visibleFuseEntries.length }}</strong>
       </article>
     </div>
@@ -98,12 +98,12 @@ defineProps<{
         <header>
           <span class="fuse-icon"><ShieldAlert :size="16" /></span>
           <div>
-            <strong>{{ item.company || "未提供公司" }}</strong>
+            <strong>{{ item.company || tr("未提供公司", "No company provided") }}</strong>
             <div class="long-value-cell">
               <code :title="item.url">{{ item.url }}</code
               ><button
                 class="icon-button compact"
-                title="复制 URL"
+                :title="tr('复制 URL', 'Copy URL')"
                 @click="copyText(item.url)"
               >
                 <ClipboardCopy :size="13" />
@@ -116,11 +116,11 @@ defineProps<{
         </header>
         <div class="fuse-disposition-callout">
           <span :class="`fuse-category category-${fuseReasonCategory(item)}`">{{ fuseCategoryLabel(fuseReasonCategory(item)) }}</span>
-          <p><b>建议动作</b>{{ fuseRecommendedAction(item) }}</p>
+          <p><b>{{ tr('建议动作', 'Recommended action') }}</b>{{ fuseRecommendedAction(item) }}</p>
         </div>
         <dl>
           <div class="fuse-reason-column">
-            <dt>熔断原因</dt>
+            <dt>{{ tr('停止原因', 'Stop reason') }}</dt>
             <dd>
               <div class="fuse-reason-parts">
                 <span
@@ -134,19 +134,19 @@ defineProps<{
             </dd>
           </div>
           <div>
-            <dt>来源任务</dt>
+            <dt>{{ tr('来源任务', 'Source task') }}</dt>
             <dd>
               <code>{{ item.sourceScanId }}</code>
             </dd>
           </div>
           <div>
-            <dt>更新时间</dt>
+            <dt>{{ tr('更新时间', 'Updated') }}</dt>
             <dd>{{ item.updatedAt }}</dd>
           </div>
         </dl>
         <div v-if="item.note || item.evidence" class="fuse-review-summary">
-          <p>{{ item.note || "无备注" }}</p>
-          <pre>{{ item.evidence || "无证据记录" }}</pre>
+          <p>{{ item.note || tr("无备注", "No note") }}</p>
+          <pre>{{ item.evidence || tr("无证据记录", "No evidence recorded") }}</pre>
         </div>
         <footer>
           <button
@@ -154,11 +154,11 @@ defineProps<{
             @click="toggleFuseDetail(item)"
           >
             <Eye :size="13" />{{
-              fuseState(item).open ? "收起完整情报" : "查看完整情报"
+              fuseState(item).open ? tr("收起完整情报", "Hide full intel") : tr("查看完整情报", "View full intel")
             }}</button
           ><button class="button primary compact" @click="editFuse(item)">
             <ClipboardCheck :size="13" />{{
-              item.verdict === "pending" ? "记录处置决定" : "编辑处置记录"
+              item.verdict === "pending" ? tr("记录处置决定", "Record decision") : tr("编辑处置记录", "Edit disposition")
             }}</button
           ><button
             v-if="!item.archived && item.verdict !== 'pending'"
@@ -168,16 +168,16 @@ defineProps<{
               saveFuse(true);
             "
           >
-            <Archive :size="13" />完成并归档</button
+            <Archive :size="13" />{{ tr('完成并归档', 'Complete and archive') }}</button
           ><button
             class="button warning compact"
             @click="pendingFuseRemoval = item"
           >
-            <RefreshCw :size="13" />恢复并自动重试
+            <RefreshCw :size="13" />{{ tr('恢复并自动重试', 'Resume and auto-retry') }}
           </button>
         </footer>
         <section v-if="fuseState(item).open" class="fuse-intel-panel">
-          <nav class="fuse-intel-tabs" aria-label="熔断目标情报分类">
+          <nav class="fuse-intel-tabs" :aria-label="tr('已停止目标情报分类', 'Stopped target intel categories')">
             <button
               v-for="entry in fuseDetailTabs"
               :key="entry[0]"
@@ -188,7 +188,7 @@ defineProps<{
             </button>
           </nav>
           <div v-if="fuseState(item).loading" class="empty-inline">
-            正在加载该 URL 的完整情报…
+            {{ tr('正在加载该 URL 的完整情报…', 'Loading full intel for this URL…') }}
           </div>
           <template v-else>
             <div
@@ -201,23 +201,23 @@ defineProps<{
                   <dd class="scroll-value">{{ item.url }}</dd>
                 </div>
                 <div>
-                  <dt>执行状态</dt>
+                  <dt>{{ tr('执行状态', 'Run status') }}</dt>
                   <dd>
                     {{ statusLabel(fuseTarget(item)?.status || "limited") }}
                   </dd>
                 </div>
                 <div>
-                  <dt>前端价值</dt>
+                  <dt>{{ tr('前端价值', 'Frontend value') }}</dt>
                   <dd>{{ fuseTarget(item)?.valueScore ?? "—" }} / 100</dd>
                 </div>
                 <div>
-                  <dt>扫描模式</dt>
+                  <dt>{{ tr('扫描模式', 'Scan mode') }}</dt>
                   <dd>
                     {{ (fuseTarget(item)?.scanMode || "—").toUpperCase() }}
                   </dd>
                 </div>
                 <div class="fuse-summary-reason">
-                  <dt>熔断原因</dt>
+                  <dt>{{ tr('停止原因', 'Stop reason') }}</dt>
                   <dd>
                     <div class="fuse-reason-parts compact">
                       <span
@@ -231,7 +231,7 @@ defineProps<{
                   </dd>
                 </div>
                 <div>
-                  <dt>记录总数</dt>
+                  <dt>{{ tr('记录总数', 'Total records') }}</dt>
                   <dd>
                     {{
                       fuseState(item).findings.filter((row: any) =>
@@ -299,7 +299,7 @@ defineProps<{
                 "
                 class="empty-inline"
               >
-                没有指纹配置记录
+                {{ tr('没有指纹配置记录', 'No fingerprint records') }}
               </div>
             </div>
             <div
@@ -344,7 +344,7 @@ defineProps<{
                 "
                 class="empty-inline"
               >
-                没有 JS / API 情报
+                {{ tr('没有 JS / API 情报', 'No JS / API intel') }}
               </div>
             </div>
             <div
@@ -399,7 +399,7 @@ defineProps<{
                 "
                 class="empty-inline"
               >
-                没有端点验证记录
+                {{ tr('没有端点验证记录', 'No endpoint validation records') }}
               </div>
             </div>
             <div v-else class="fuse-intel-records">
@@ -430,11 +430,11 @@ defineProps<{
                 class="fuse-intel-record validation"
               >
                 <header>
-                  <span>人工验证 · {{ verdictLabel(row.verdict) }}</span
+                  <span>{{ tr(`人工验证 · ${verdictLabel(row.verdict)}`, `Manual validation · ${verdictLabel(row.verdict)}`) }}</span
                   ><strong>{{ row.findingKind }}</strong>
                 </header>
-                <p>{{ row.note || "无备注" }}</p>
-                <pre>{{ row.evidence || "无证据记录" }}</pre>
+                <p>{{ row.note || tr("无备注", "No note") }}</p>
+                <pre>{{ row.evidence || tr("无证据记录", "No evidence recorded") }}</pre>
               </div>
               <div
                 v-if="
@@ -447,66 +447,66 @@ defineProps<{
                 "
                 class="empty-inline"
               >
-                没有漏洞或证明记录
+                {{ tr('没有漏洞或证明记录', 'No vulnerability or proof records') }}
               </div>
             </div>
           </template>
         </section>
         <div v-if="fuseEditor?.id === item.id" class="fuse-review-editor">
           <label class="field"
-            ><span>URL 处置状态</span
+            ><span>{{ tr('URL 处置状态', 'URL disposition') }}</span
             ><select v-model="fuseForm.verdict">
-              <option value="pending">暂不决定</option>
-              <option value="manual_verified">已人工接管</option>
-              <option value="needs_followup">补充条件后重试</option>
-              <option value="not_reproducible">保持排除</option>
+              <option value="pending">{{ tr('暂不决定', 'Decide later') }}</option>
+              <option value="manual_verified">{{ tr('已人工接管', 'Taken over manually') }}</option>
+              <option value="needs_followup">{{ tr('补充条件后重试', 'Retry after adding conditions') }}</option>
+              <option value="not_reproducible">{{ tr('保持排除', 'Keep excluded') }}</option>
             </select></label
           >
           <label class="field"
-            ><span>处置说明</span
+            ><span>{{ tr('处置说明', 'Disposition note') }}</span
             ><textarea
               v-model="fuseForm.note"
               rows="3"
-              placeholder="为什么停止、缺少什么条件、是否值得恢复"
+              :placeholder="tr('为什么停止、缺少什么条件、是否值得恢复', 'Why it stopped, what is missing, whether it is worth resuming')"
             ></textarea>
           </label>
           <label class="field span-two"
-            ><span>补充上下文 / 请求响应 / 证据路径</span
+            ><span>{{ tr('补充上下文 / 请求响应 / 证据路径', 'Extra context / requests and responses / evidence paths') }}</span
             ><textarea
               v-model="fuseForm.evidence"
               rows="5"
-              placeholder="记录关键请求响应或本地证据文件"
+              :placeholder="tr('记录关键请求响应或本地证据文件', 'Record key requests and responses or local evidence files')"
             ></textarea>
           </label>
           <footer>
             <button class="button ghost" @click="fuseEditor = undefined">
-              取消</button
+              {{ tr('取消', 'Cancel') }}</button
             ><button
               class="button primary"
               :disabled="fuseBusy"
               @click="saveFuse(false)"
             >
-              <Save :size="14" />保存处置</button
+              <Save :size="14" />{{ tr('保存处置', 'Save disposition') }}</button
             ><button
               class="button secondary"
               :disabled="fuseBusy"
               @click="saveFuse(true)"
             >
-              <Archive :size="14" />完成并归档
+              <Archive :size="14" />{{ tr('完成并归档', 'Complete and archive') }}
             </button>
           </footer>
         </div>
         <InlineConfirm
           v-if="pendingFuseRemoval?.id === item.id"
-          title="恢复该 URL 并立即重试？"
-          detail="会在原任务工作流中创建只包含该 URL 的续跑执行，复用已保存的前端证据；历史记录与累计成本都会保留。"
+          :title="tr('恢复该 URL 并立即重试？', 'Resume this URL and retry now?')"
+          :detail="tr('会在原任务工作流中创建只包含该 URL 的续跑执行，复用已保存的前端证据；历史记录与累计成本都会保留。', 'Creates a resume run with only this URL in the original task workflow, reusing the saved frontend evidence. History and accumulated cost are kept.')"
           :busy="fuseBusy"
           @cancel="pendingFuseRemoval = undefined"
           @confirm="removeFuse"
         />
       </article>
       <div v-if="!visibleFuseEntries.length" class="empty-state">
-        当前没有匹配的熔断目标。
+        {{ tr('当前没有匹配的已停止目标。', 'No matching stopped targets.') }}
       </div>
     </div>
   </section>

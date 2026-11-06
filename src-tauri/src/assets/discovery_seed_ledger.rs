@@ -4,8 +4,6 @@
 use super::*;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-#[cfg(test)]
-thread_local! {static GATE_CALLS:std::cell::RefCell<HashMap<String,usize>>=std::cell::RefCell::new(HashMap::new());}
 const BATCH: usize = 500;
 const PROOF_TTL_SECONDS: i64 = 15 * 60;
 const SCHEMA: &str = "
@@ -722,13 +720,6 @@ fn refresh_trust(
         let paid = if reuse_gates && gate_revision == revision {
             previous_gate
         } else {
-            #[cfg(test)]
-            GATE_CALLS.with(|calls| {
-                *calls
-                    .borrow_mut()
-                    .entry(format!("{p}:{kind}:{value}"))
-                    .or_insert(0) += 1
-            });
             let started = std::time::Instant::now();
             // These are mandatory rejection conditions of evidence_anchor,
             // evaluated from the same transaction once per batch. An admitted
@@ -751,14 +742,6 @@ fn refresh_trust(
                     },
                 )
                 .is_ok();
-            #[cfg(test)]
-            if kind == "fingerprint" && std::env::var_os("OVIRAPTOR_SEED_LEDGER_SNAPSHOT").is_some()
-            {
-                eprintln!(
-                    "SEED_LEDGER_PAID_GATE {}",
-                    json!({"kind":kind,"elapsedMs":started.elapsed().as_millis()})
-                );
-            }
             let _ = started;
             admitted
         };
@@ -1180,9 +1163,6 @@ pub(crate) fn detail(
     )
 }
 
-#[cfg(test)]
-#[path = "discovery_seed_ledger_tests.rs"]
-mod tests;
 
 // One bounded set query for full filtered selection; never loops UI pages.
 pub(super) fn selected_ids(c:&Connection,p:i64,ids:&[i64],query:Option<&Query>)->Result<Vec<i64>,String>{

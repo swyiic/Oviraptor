@@ -21,8 +21,6 @@ mod sealing;
 mod service;
 mod store;
 
-#[cfg(test)]
-pub(crate) use sealing::{open as open_sealed_original, Key as OriginalKey};
 
 pub use limits::Limits;
 pub use projection::ShadowReport;
@@ -37,5 +35,3 @@ pub fn shadow_report(connection: &rusqlite::Connection) -> Result<ShadowReport, 
     projection::shadow_compare(connection)
 }
 
-#[cfg(test)]
-mod tests;

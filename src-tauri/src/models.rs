@@ -5,5 +5,4 @@ pub use crate::workspace_models::*;
 pub use crate::configuration_models::*;
 pub use crate::application_models::*;
 pub use crate::environment_models::*;
-pub use crate::hackerone_models::*;
 pub use crate::skills_catalog::model::*;

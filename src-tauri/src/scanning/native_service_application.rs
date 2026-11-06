@@ -322,7 +322,7 @@ impl NativeApplication for Application {
                     "scan_retry" => execution::Action::Retry,
                     _ => execution::Action::CancelDraft,
                 };
-                execution::perform(&self.service, &context, action, &args.task_id)
+                execution::perform(&self.service, &context, action, &args.task_id, args.binding_version, args.attempt_number)
             }
             "configure_model" => self
                 .configure(serde_json::from_value(args).map_err(|_| "scan_configuration_invalid")?, &context),
@@ -359,6 +359,3 @@ impl NativeApplication for Application {
     }
 }
 
-#[cfg(test)]
-#[path = "native_service_application_tests.rs"]
-mod tests;

@@ -229,6 +229,8 @@ CREATE TABLE IF NOT EXISTS sentinel_scan_attempts (
     finished_at TEXT NOT NULL DEFAULT '',
     updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
     backend_plan_json TEXT NOT NULL DEFAULT '',
+    capability_snapshot_json TEXT NOT NULL DEFAULT '',
+    parent_attempt_number INTEGER,
     PRIMARY KEY(scan_id,attempt_number)
 );
 -- Local operator presentation state only. It never grants execution authority.
@@ -285,6 +287,59 @@ CREATE TABLE IF NOT EXISTS sentinel_findings (
 CREATE INDEX IF NOT EXISTS idx_sentinel_findings_scan ON sentinel_findings(scan_id,stage,kind);
 CREATE INDEX IF NOT EXISTS idx_sentinel_findings_scan_cursor ON sentinel_findings(scan_id,id);
 CREATE INDEX IF NOT EXISTS idx_sentinel_findings_scan_kind_cursor ON sentinel_findings(scan_id,kind,id);
+-- Per-finding deep-dive (exploitation) record. One row per (scan, finding): the
+-- focused deep-dive phase (after the breadth attack sweep) reproduces each non-info
+-- finding, confirms it and records SRC-grade evidence here, always attributed to the
+-- finding_id so the process UI can hang the tool tests / PoC / impact off the exact
+-- vulnerability. deep_status drives the deep-exploit convergence (see
+-- agent_finding_deep_dive.rs): the phase is done when no finding is left 'pending'.
+-- 'waf_blocked' is reserved for the later WAF-bypass phase; the MVP never sets it.
+CREATE TABLE IF NOT EXISTS agent_finding_exploits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scan_id TEXT NOT NULL REFERENCES sentinel_scans(id) ON DELETE CASCADE,
+    finding_id INTEGER NOT NULL REFERENCES sentinel_findings(id) ON DELETE CASCADE,
+    deep_status TEXT NOT NULL DEFAULT 'pending'
+        CHECK(deep_status IN ('pending','in_progress','exploited','not_exploitable','waf_blocked','error')),
+    severity TEXT NOT NULL DEFAULT '',
+    reproduction_request TEXT NOT NULL DEFAULT '',
+    poc_script TEXT NOT NULL DEFAULT '',
+    poc_output TEXT NOT NULL DEFAULT '',
+    exploit_trace TEXT NOT NULL DEFAULT '[]',
+    impact TEXT NOT NULL DEFAULT '',
+    requests_used INTEGER NOT NULL DEFAULT 0,
+    iterations_used INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    UNIQUE(scan_id,finding_id)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_finding_exploits_scan ON agent_finding_exploits(scan_id,deep_status);
+CREATE TABLE IF NOT EXISTS agent_operator_questions (
+    question_id TEXT PRIMARY KEY,
+    scan_id TEXT NOT NULL REFERENCES sentinel_scans(id) ON DELETE CASCADE,
+    attempt_number INTEGER NOT NULL CHECK(attempt_number > 0),
+    run_id TEXT NOT NULL DEFAULT '',
+    question TEXT NOT NULL,
+    options_json TEXT NOT NULL DEFAULT '[]',
+    context_note TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK(status IN ('pending','answered','dismissed')),
+    answer TEXT NOT NULL DEFAULT '',
+    selected_option TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    answered_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_agent_operator_questions_scan ON agent_operator_questions(scan_id, status, created_at);
+CREATE TABLE IF NOT EXISTS agent_mcp_servers (
+    server_id TEXT PRIMARY KEY,
+    label TEXT NOT NULL DEFAULT '',
+    transport TEXT NOT NULL DEFAULT 'stdio' CHECK(transport IN ('stdio','http','sse')),
+    command TEXT NOT NULL,
+    args_json TEXT NOT NULL DEFAULT '[]',
+    env_json TEXT NOT NULL DEFAULT '[]',
+    enabled INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+);
 CREATE TABLE IF NOT EXISTS sentinel_opportunities (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id INTEGER REFERENCES projects(id) ON DELETE CASCADE,

@@ -5,8 +5,6 @@
 
 use super::analyzer::AnalyzerOutcome;
 use super::snapshot::{DiffBaseState, RepositorySnapshot};
-#[cfg(test)]
-use crate::agent_runtime::review::list_review_decisions;
 use crate::agent_runtime::review::{ReviewDecision, ReviewVerdict};
 use serde_json::{json, Value as JsonValue};
 
@@ -334,18 +332,6 @@ impl GateReport {
 /// not here — so they cannot block (§10.4, CI-004).
 // Threshold fixtures may inject review decisions. Production source CI must
 // not use this unqualified root-wide reader as proof of review eligibility.
-#[cfg(test)]
-pub fn evaluate(
-    connection: &rusqlite::Connection,
-    root_run_id: &str,
-    freeze: &CiFreeze,
-    coverage_gaps: &[String],
-    infra_failure: Option<&str>,
-    policy: GatePolicy,
-) -> Result<GateReport, String> {
-    let decisions = list_review_decisions(connection, root_run_id)?;
-    evaluate_decisions(decisions, freeze, coverage_gaps, infra_failure, policy)
-}
 
 /// Analyzer completion is not independent review. Until the source review
 /// delivery is bound to this attempt, no historical decision is eligible and

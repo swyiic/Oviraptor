@@ -1,5 +1,8 @@
 import type { SentinelScan } from './types';
 import type { DiscoveryChatRequest } from '../assets/discoveryAnalysis';
+import { useI18n } from '../../i18n';
+
+const { tr } = useI18n();
 
 /** Desktop project identity. Host project mapping remains owned by the chat client. */
 export interface ScanAgentHandoff { projectId: number; taskId: string; attemptNumber: number }
@@ -19,10 +22,13 @@ export function scanAgentHandoff(projectId: number | undefined, scan?: SentinelS
 /** Shell revalidates after navigation; a stale child event must not open another project's chat. */
 export function scanAgentChatRequest(projectId: number | undefined, id: number, value: ScanAgentHandoff): DiscoveryChatRequest | undefined {
   if (!valid(value) || value.projectId !== projectId || !Number.isSafeInteger(id) || id < 1) return;
-  return { id, projectId: value.projectId, prompt: scanAgentPrompt(value) };
+  return { id, projectId: value.projectId, prompt: scanAgentPrompt(value), taskId: value.taskId };
 }
 
 /** Deliberately passes identifiers only: no target URLs, credentials, logs or local paths. */
 export function scanAgentPrompt(value: ScanAgentHandoff): string {
-  return `请只读核对当前项目的 Nest 扫描任务 taskId=${value.taskId}。打开工作台时看到的是第 ${value.attemptNumber} 次尝试，这只是界面快照，请以工具读取的最新记录为准。\n\n先用 scan_status 核对同一 taskId，再用 scan_results 读取目标状态、调查决策、运行时诊断及其选定证据字段；按原 taskId 和筛选条件逐页读取，空页仍有游标时读取下一页。仅使用本轮实际列出的可用工具，不猜工具名或记录 ID。\n\n请告诉我：实际完成了什么、哪些目标尚未完成、停止原因及下一步。区分历史记录、独立复核与本次实际执行。不要新建、启动、暂停、恢复或重新执行任务，不改变范围、预算或权限，不重复付费请求。若后续需要执行，我会在此对话中明确提出。`;
+  return tr(
+    `请只读核对当前项目的 Nest 扫描任务 taskId=${value.taskId}。打开工作台时看到的是第 ${value.attemptNumber} 次尝试，这只是界面快照，请以工具读取的最新记录为准。\n\n先用 scan_status 核对同一 taskId，再用 scan_results 读取目标状态、调查决策、运行时诊断及其选定证据字段；按原 taskId 和筛选条件逐页读取，空页仍有游标时读取下一页。仅使用本轮实际列出的可用工具，不猜工具名或记录 ID。\n\n请告诉我：实际完成了什么、哪些目标尚未完成、停止原因及下一步。区分历史记录、独立复核与本次实际执行。不要新建、启动、暂停、恢复或重新执行任务，不改变范围、预算或权限，不重复付费请求。若后续需要执行，我会在此对话中明确提出。`,
+    `Do a read-only check of the Nest scan task taskId=${value.taskId} in the current project. The workbench showed attempt ${value.attemptNumber} when opened; that is only a UI snapshot, so rely on the latest records the tools return.\n\nFirst check the same taskId with scan_status, then use scan_results to read target states, investigation decisions, runtime diagnostics and their selected evidence fields. Read page by page with the original taskId and filters; if an empty page still has a cursor, read the next page. Use only the tools actually listed in this turn; do not guess tool names or record IDs.\n\nTell me what was actually completed, which targets are still incomplete, the stop reason and the next step. Distinguish historical records, independent review and what actually ran this time. Do not create, start, pause, resume or re-run tasks; do not change scope, budget or permissions; do not repeat paid requests. If anything needs to run later, I will ask for it explicitly in this conversation.`
+  );
 }

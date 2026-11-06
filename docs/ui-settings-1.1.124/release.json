@@ -1,0 +1,40 @@
+{
+  "version": "1.1.124",
+  "platform": "macos-arm64",
+  "artifact": "/Users/swyiic/Desktop/Rust/Oviraptor/src-tauri/target/release/bundle/Oviraptor-1.1.124-macos-arm64.zip",
+  "bytes": 31163767,
+  "sha256": "aaa01a2c7c5050f83233502c9c1d3347ccba1710eee181ceddf56936149d6fd8",
+  "frontendTypecheckAndBuild": "passed",
+  "nativeReleaseBuild": "passed",
+  "adHocCodesignDeepStrict": "passed",
+  "notarized": false,
+  "embeddedCurrentEntryChunks": [
+    "index-TLoPpvxx.js",
+    "index-kBErz9GD.js"
+  ],
+  "archiveCRC": "passed",
+  "archiveEntries": 172,
+  "archiveFilesCompared": 125,
+  "hostDistribution": {
+    "version": "1.1.124",
+    "files": 118
+  },
+  "fingerprints": {
+    "packs": 3,
+    "uniqueIDs": 832,
+    "sourceAndBundleByteIdentical": true
+  },
+  "sourceSHA256": {
+    "src/features/configuration/components/ProfileSectionEditor.vue": "7faf03206676215d9166cadce3d372c6c1198f9671d314c02710d146365a0706",
+    "src/features/configuration/sections/ConfigDomainSettingsSection.vue": "8d96d18ee9139dae5c95668f8d42dbcc3444e9acfc5b681d7cce08c91706e480",
+    "src-tauri/src/commands/rule_packs.rs": "a297a767ecc285fe98711eaf65cfe8f5efc74291e42890727c1498ed031b8f47",
+    "src-tauri/src/db_initialize_columns.rs": "ee365030335076c8c7352292c5ca5b184b9fbce5bea9604ab751b5a96361b054",
+    "tools/test_rule_pack_sync.py": "99503061aeaf2f7caceaf58eaff5fc0b54f7a0079ad390b7ed2c61526e688dea"
+  },
+  "boundaries": {
+    "installedOrLaunchedNewApp": false,
+    "realDatabaseOrCASAccessed": false,
+    "realRuleCacheAccessed": false,
+    "fullUpstreamCloneVerification": false
+  }
+}

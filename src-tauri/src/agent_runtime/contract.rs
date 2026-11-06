@@ -6,7 +6,14 @@ use serde::{Deserialize, Serialize};
 
 /// The coverage families every target owes. Single canonical definition; the
 /// `commands` layer re-exports this instead of keeping its own copy.
-pub const COVERAGE_FAMILIES: [&str; 7] = [
+// Coverage families the executor MUST address (test or validly mark not-applicable)
+// before it may finish — see premature_finish_target. The first seven are the
+// original passive/logic families; the rest are the active OWASP attack classes
+// added to turn the executor from a passive verifier into a hunter, each mapped to
+// a probe it can actually drive: injection_sqli → probe_sql_injection,
+// injection_command → probe_command_execution, access_control_idor / file_upload →
+// replay_http with swapped ids / crafted uploads, ssrf → replay_http + OAST.
+pub const COVERAGE_FAMILIES: [&str; 12] = [
     "information_disclosure",
     "error_handling",
     "authentication_session",
@@ -14,6 +21,11 @@ pub const COVERAGE_FAMILIES: [&str; 7] = [
     "input_reflection_xss",
     "hidden_interface_discovery",
     "business_flow",
+    "injection_sqli",
+    "injection_command",
+    "ssrf",
+    "access_control_idor",
+    "file_upload",
 ];
 
 pub const RUNTIME_SCHEMA_VERSION: i64 = 1;
@@ -546,6 +558,23 @@ pub mod terminal_code {
     /// This is not an authorization to retry or refund a request.
     pub const REQUEST_RECONCILIATION_REQUIRED: &str = "request_reconciliation_required";
     pub const EXECUTION_AUTHORIZATION_DENIED: &str = "execution_authorization_denied";
+    /// §9.0 tier-1 gate release: a brittle, non-integrity stage-shape wobble
+    /// (e.g. a `*_schema_invalid` stop) that must not hard-fail the whole scan.
+    /// The attempt stays recoverable (`Incomplete`) instead of `Failed`, so the
+    /// run can be continued/retried. Never produced for an evidence-integrity
+    /// error, a safety stop, or a budget stop — only for the brittle family the
+    /// adjudicator (`scanning::stage_adjudicator`) classifies as tier 1.
+    pub const BRITTLE_STAGE_ABSORBED: &str = "brittle_stage_absorbed";
+}
+
+/// §9.0 tier-1 predicate, mirrored from `scanning::stage_adjudicator`'s
+/// `TIER1_ABSORB_SIGNALS` brittle family. Kept inline here (rather than calling
+/// across into the `scanning` module) so the reducer stays dependency-free and
+/// pure. Only the schema-shape wobble family is absorbable *as a configuration
+/// error*: a confirmed WAF/challenge already reduces to the non-fatal `Limited`,
+/// and every budget/safety signal travels on its own field, never here.
+pub(crate) fn is_brittle_configuration_signal(reason: &str) -> bool {
+    reason.contains("_schema_invalid")
 }
 
 /// Which outbound decision is being made. Every one of them goes through the same

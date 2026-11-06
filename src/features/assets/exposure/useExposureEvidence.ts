@@ -15,6 +15,7 @@ import {
   type ExposurePage,
   type ExposurePending,
 } from "./contracts";
+import { useI18n } from "../uiPorts";
 
 export interface ExposureEvidenceApi {
   pageExposurePendingDiscoveries?: (
@@ -38,6 +39,7 @@ export interface ExposureEvidenceDeps {
 const PENDING_PAGE_SIZE = 50;
 
 export function useExposureEvidence(deps: ExposureEvidenceDeps) {
+  const { tr } = useI18n();
   const pending = ref<ExposurePage<ExposurePending> | null>(null);
   const pendingLoading = ref(false);
   const pendingLoadingMore = ref(false);
@@ -62,11 +64,11 @@ export function useExposureEvidence(deps: ExposureEvidenceDeps) {
   }
 
   const pendingNotice = computed(() => {
-    if (!deps.projectId()) return "请先选择工作空间";
-    if (!pagedPending.value) return "待归并队列接口尚未注册，读取被跳过而不是当作空队列";
+    if (!deps.projectId()) return tr("请先选择工作空间", "Select a workspace first");
+    if (!pagedPending.value) return tr("待归并队列接口尚未注册，读取被跳过而不是当作空队列", "The pending merge queue endpoint is not registered yet; the read was skipped, not treated as an empty queue");
     const current = pending.value;
-    if (!current) return "尚未读取待归并队列";
-    return `待归并 ${current.total} 条，已显示 ${current.items.length} 条${current.hasMore ? "，仍有更多" : "，已到底"}`;
+    if (!current) return tr("尚未读取待归并队列", "Pending merge queue not loaded yet");
+    return tr(`待归并 ${current.total} 条，已显示 ${current.items.length} 条${current.hasMore ? "，仍有更多" : "，已到底"}`, `${current.total} pending merge, ${current.items.length} shown${current.hasMore ? ", more available" : ", end of list"}`);
   });
   const headline = computed(() => evidenceHeadline(evidence.value));
   const reviewNeeded = computed(() => evidence.value?.reviewNeeded ?? null);
@@ -95,7 +97,7 @@ export function useExposureEvidence(deps: ExposureEvidenceDeps) {
         "",
       );
       if (discarded(claimed, projectId) || ticket !== pendingTicket) return;
-      pending.value = readExposurePage(raw, isPendingRow, "待归并队列");
+      pending.value = readExposurePage(raw, isPendingRow, tr("待归并队列", "Pending merge queue"));
       pagedPending.value = true;
       pendingError.value = "";
     } catch (error) {
@@ -124,7 +126,7 @@ export function useExposureEvidence(deps: ExposureEvidenceDeps) {
         current.nextCursor,
       );
       if (discarded(claimed, projectId) || ticket !== pendingTicket) return;
-      const next = readExposurePage(raw, isPendingRow, "待归并队列");
+      const next = readExposurePage(raw, isPendingRow, tr("待归并队列", "Pending merge queue"));
       const seen = new Set(current.items.map((row) => row.id));
       pending.value = {
         ...next,
@@ -143,7 +145,7 @@ export function useExposureEvidence(deps: ExposureEvidenceDeps) {
     const projectId = deps.projectId();
     if (!projectId) return;
     if (!deps.api.readExposureEvidence) {
-      evidenceError.value = "证据包接口尚未注册，无法读取来源与版本";
+      evidenceError.value = tr("证据包接口尚未注册，无法读取来源与版本", "The evidence package endpoint is not registered yet; sources and versions cannot be read");
       return;
     }
     const claimed = generation;
@@ -156,7 +158,7 @@ export function useExposureEvidence(deps: ExposureEvidenceDeps) {
       const raw = await deps.api.readExposureEvidence(findingId, projectId);
       if (discarded(claimed, projectId) || ticket !== evidenceTicket) return;
       const view = readEvidence(raw);
-      if (view.finding.id !== findingId) throw new Error("证据与所选线索不一致");
+      if (view.finding.id !== findingId) throw new Error(tr("证据与所选线索不一致", "The evidence does not match the selected lead"));
       evidence.value = view;
       evidenceFor.value = findingId;
       evidenceError.value = "";
@@ -182,7 +184,7 @@ export function useExposureEvidence(deps: ExposureEvidenceDeps) {
     const projectId = deps.projectId();
     if (!projectId || resuming.value !== null) return false;
     if (!deps.api.resumeExposureScan) {
-      deps.notify("info", "恢复采集接口尚未注册");
+      deps.notify("info", tr("恢复采集接口尚未注册", "The resume collection endpoint is not registered yet"));
       return false;
     }
     const claimed = generation;
@@ -192,7 +194,7 @@ export function useExposureEvidence(deps: ExposureEvidenceDeps) {
       if (discarded(claimed, projectId)) return false;
       await deps.onResumed?.();
       if (discarded(claimed, projectId)) return false;
-      deps.notify("success", `任务 #${runId} 已提交恢复请求；请查看任务进度`);
+      deps.notify("success", tr(`任务 #${runId} 已提交恢复请求；请查看任务进度`, `Resume requested for job #${runId}; check the job progress`));
       return true;
     } catch (error) {
       if (discarded(claimed, projectId)) return false;

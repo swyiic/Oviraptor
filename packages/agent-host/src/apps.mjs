@@ -247,7 +247,9 @@ export class AppManager {
       return tools.filter(tool => grant.permissions.includes(tool.permission) && (!EXPOSURE_TOOLS.has(tool.name) || app.id===ASSETS_APP_ID && this.exposureTasks.available && tool.permission===EXPOSURE_PERMISSIONS.get(tool.name)) && (!DISCOVERY_ASSIST_TOOLS.has(tool.name) || app.id===ASSETS_APP_ID && this.discoveryAssist.available && (!DISCOVERY_CLEANUP_PERMISSIONS.has(tool.name) || tool.permission===DISCOVERY_CLEANUP_PERMISSIONS.get(tool.name))) && (!ENRICHMENT_TOOLS.has(tool.name) || app.id===ASSETS_APP_ID && this.discoveryEnrichment.available) && (!CERTIFICATE_TOOLS.has(tool.name) || app.id === ASSETS_APP_ID && this.certificateTasks.available) && (app.manifest.schemaVersion===2 || !SCANNING_TOOLS.has(tool.name) || app.id===SCANNING_APP_ID && this.scanningTasks.available)).map(tool => ({ ...tool, appId: app.id, name: qualifiedToolName(app.id, tool.name), grantRevision: grant.revision, ...(grant.accessPolicyRevision!==undefined?{accessPolicyRevision:grant.accessPolicyRevision}:{}) }));
     });
   }
-  async call(id, name, projectId, args, expectedGrantRevision, operationId = randomUUID(), pageContext, agentRuntimeIdentity) {
+  // `trustedContext.conversationId` is the conversation of the verified MCP run
+  // making the call; it is never read from tool arguments.
+  async call(id, name, projectId, args, expectedGrantRevision, operationId = randomUUID(), pageContext, agentRuntimeIdentity, trustedContext = {}) {
     if (this.closing) throw hostError('host_app_manager_closing', 409);
     const scope = positiveId(projectId); this.store.project(scope);
     const app = this.store.application(id); const grant = this.effectiveGrant(app, scope, agentRuntimeIdentity);
@@ -330,7 +332,7 @@ export class AppManager {
         catch(error){throw hostError('host_scan_asset_identity_unavailable',409,{reason:error.code,retryable:false,outcomeUnknown:false});}
         nativeArgs={assetIds:binding.desktopAssetIds,...(args.scanMode?{scanMode:args.scanMode}:{}),...(args.maxModelRequests!==undefined?{maxModelRequests:args.maxModelRequests}:{}),...(args.maxModelTokens!==undefined?{maxModelTokens:args.maxModelTokens}:{})};
       }
-      const result=await this.scanningTasks.call(this.store,scope,name,nativeArgs,operationId);
+      const result=await this.scanningTasks.call(this.store,scope,name,nativeArgs,operationId,{hostConversationId:trustedContext.conversationId});
       this.#current(id,scope,app.revision,grant.revision,grant.accessPolicyRevision,grant.accessRuntimeIdentity);
       if(binding){const structuredContent={...result.structuredContent,assetBinding:binding};return{...result,structuredContent,content:[{type:'text',text:JSON.stringify(structuredContent)}]};}
       return result;

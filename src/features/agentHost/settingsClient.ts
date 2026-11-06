@@ -27,9 +27,9 @@ export type HostSettingsClient = {
     clearApiKey?: boolean;
     connectionRef?: { policyId: string; revision: number; kind: "models"; modelProfileId: string } | null;
   }): Promise<AgentHostSettings>;
-  startOAuth(input?: { referrer?: string; background?: boolean }): Promise<AgentOAuthStartResult>;
+  startOAuth(input?: { referrer?: string; background?: boolean; activate?: boolean }): Promise<AgentOAuthStartResult>;
   pollOAuth(): Promise<AgentOAuthStartResult>;
-  selectOAuth(): Promise<AgentHostSettings>;
+  selectOAuth(input?: { model?: string; connectionRef?: { policyId: string; revision: number; kind: "models"; modelProfileId: string } | null }): Promise<AgentHostSettings>;
   logoutOAuth(): Promise<AgentHostSettings>;
 };
 
@@ -113,8 +113,11 @@ export function createHostSettingsClient(options: {
       );
     },
     async setProvider(input) {
-      // Never hard-code xai: derive provider/baseUrl from the model so runtime and model stay consistent.
-      const resolved = input.model?.trim()
+      // Catalog connections carry an explicit endpoint. Do not infer a different
+      // recipient from the model name; legacy presets keep their old routing.
+      const resolved = input.connectionRef
+        ? { provider: input.provider ?? "openai-compatible", baseUrl: input.baseUrl?.trim(), model: input.model?.trim() || "" }
+        : input.model?.trim()
         ? resolveProviderForModel(input.model, input.provider, input.baseUrl?.trim() || undefined)
         : { provider: input.provider ?? "xai", baseUrl: input.baseUrl?.trim() || undefined, model: "" };
       const body: Record<string, unknown> = { provider: resolved.provider };
@@ -144,8 +147,8 @@ export function createHostSettingsClient(options: {
       });
       return value as AgentOAuthStartResult;
     },
-    async selectOAuth() {
-      return assertSettings(await request('/api/settings/provider/oauth/select', { method: 'POST', body: '{}' }));
+    async selectOAuth(input = {}) {
+      return assertSettings(await request('/api/settings/provider/oauth/select', { method: 'POST', body: JSON.stringify(input) }));
     },
     async logoutOAuth() {
       return assertSettings(

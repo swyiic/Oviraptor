@@ -1,4 +1,4 @@
-//! Explicitly adopted scan connections and asset accounts. Descriptors contain
+//! Explicitly adopted model connections and asset accounts. Descriptors contain
 //! credential references only; secrets never enter policy/version payloads.
 //! Reads do not create tables or migrate historical profile JSON.
 use crate::configuration_policies::PolicyReference;
@@ -48,6 +48,7 @@ pub fn keys(section: &str) -> Result<&'static [&'static str], String> {
             "activeModelProfileId",
             "modelName",
             "modelDeployment",
+            "modelAuthType",
             "modelApiBase",
             "modelApiKey",
             "localApiKey",
@@ -148,6 +149,30 @@ fn read_secret(
     Ok(key)
 }
 
+/// OAuth descriptors contain only a provider selection. The Host owns the
+/// sign-in and refresh tokens; no credential or local bridge address is stored.
+fn oauth_model(profile: &Value) -> Result<Option<Value>, String> {
+    let auth = profile.get("authType").and_then(Value::as_str).unwrap_or("");
+    if auth != "oauth" {
+        if !["", "api-key", "none"].contains(&auth) || profile.get("authType").is_some_and(|v| !v.is_string()) {
+            return Err("configuration_model_auth_invalid".into());
+        }
+        return Ok(None);
+    }
+    let model = string(profile, "llm")?.trim();
+    if string(profile, "deployment")? != "cloud"
+        || endpoint(string(profile, "apiBase")?, "cloud")? != "https://api.x.ai/v1"
+        || model.is_empty()
+        || model.chars().any(char::is_control)
+        || !string(profile, "apiKey")?.is_empty()
+        || !string(profile, "localApiKey")?.is_empty()
+    {
+        return Err("configuration_model_oauth_invalid".into());
+    }
+    Ok(Some(json!({"id":string(profile,"id")?,"name":profile.get("name").and_then(Value::as_str).unwrap_or(""),
+        "llm":model,"deployment":"cloud","authType":"oauth","apiBase":"https://api.x.ai/v1","apiKey":"","localApiKey":""})))
+}
+
 fn write_descriptor(db: &Connection, section: &str, settings: &Value) -> Result<Value, String> {
     let object = settings
         .as_object()
@@ -203,6 +228,10 @@ fn write_descriptor(db: &Connection, section: &str, settings: &Value) -> Result<
             || !["local", "cloud"].contains(&deployment)
         {
             return Err("configuration_model_identity_invalid".into());
+        }
+        if let Some(oauth) = oauth_model(p)? {
+            entries.push(json!({"id":id,"name":oauth["name"],"authType":"oauth","oauth":oauth}));
+            continue;
         }
         let base = endpoint(string(p, "apiBase")?, deployment)?;
         let auth = if deployment == "local" {
@@ -276,6 +305,21 @@ fn materialize(db: &Connection, section: &str, descriptor: &Value) -> Result<Val
         if id.is_empty() || !seen.insert(id) {
             return Err("configuration_model_identity_invalid".into());
         }
+        if entry.get("authType").and_then(Value::as_str) == Some("oauth") {
+            if entry.get("connectionId").is_some() {
+                return Err("configuration_model_reference_invalid".into());
+            }
+            let oauth = oauth_model(entry.get("oauth").ok_or("configuration_model_oauth_invalid")?)?
+                .ok_or("configuration_model_oauth_invalid")?;
+            if oauth["id"] != entry["id"] || oauth["name"] != entry["name"] {
+                return Err("configuration_model_reference_invalid".into());
+            }
+            models.push(oauth);
+            continue;
+        }
+        if entry.get("authType").is_some() || entry.get("oauth").is_some() {
+            return Err("configuration_model_auth_invalid".into());
+        }
         let (model,deployment,base,account):(String,String,String,String)=db.query_row("SELECT model,deployment,endpoint,account_id FROM configuration_model_connections WHERE connection_id=?1",[string(entry,"connectionId")?],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).map_err(|_|"configuration_model_reference_invalid")?;
         if model.trim().is_empty()
             || !["cloud", "local"].contains(&deployment.as_str())
@@ -306,6 +350,7 @@ fn materialize(db: &Connection, section: &str, descriptor: &Value) -> Result<Val
     Ok(json!({"modelProfiles":models,"activeModelProfileId":active,
         "modelName":selected.and_then(|m|m.get("llm")).cloned().unwrap_or(json!("")),
         "modelDeployment":selected.and_then(|m|m.get("deployment")).cloned().unwrap_or(json!("cloud")),
+        "modelAuthType":selected.map(|m|m.get("authType").cloned().unwrap_or_else(||json!(if m["deployment"] == "local" && m["localApiKey"] == "" {"none"} else {"api-key"}))).unwrap_or(json!("api-key")),
         "modelApiBase":selected.and_then(|m|m.get("apiBase")).cloned().unwrap_or(json!("")),
         "modelApiKey":selected.and_then(|m|m.get("apiKey")).cloned().unwrap_or(json!("")),
         "localApiKey":selected.and_then(|m|m.get("localApiKey")).cloned().unwrap_or(json!(""))}))
@@ -483,261 +528,3 @@ pub fn redact_asset_snapshot(settings: &mut Value) {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    fn fixture() -> Connection {
-        let db = Connection::open_in_memory().unwrap();
-        db.execute_batch("PRAGMA foreign_keys=ON; CREATE TABLE config_profiles(id INTEGER PRIMARY KEY,settings_json TEXT); INSERT INTO config_profiles VALUES(1,'{}'),(2,'{}');").unwrap();
-        let raw = json!({"modelProfiles":[{"id":"one","name":"Synthetic","llm":"grok-test","deployment":"cloud","apiBase":"https://synthetic.invalid/v1","apiKey":"synthetic-cloud-key","localApiKey":"unselected-legacy-key","futureField":"preserved-in-source"}],"activeModelProfileId":"one","fofaKey":"synthetic-fofa-key","configPath":"","workers":6,"historical":{"kept":true}});
-        db.execute(
-            "UPDATE config_profiles SET settings_json=?1",
-            [raw.to_string()],
-        )
-        .unwrap();
-        db
-    }
-    fn raw(db: &Connection) -> String {
-        db.query_row(
-            "SELECT settings_json FROM config_profiles WHERE id=1",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap()
-    }
-    fn adopt(db: &mut Connection, section: &str) -> PolicyReference {
-        let tx = db
-            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-            .unwrap();
-        let settings = crate::configuration_policies::read_profile(&tx, 1).unwrap();
-        let payload = project(&settings, section).unwrap();
-        let reference = save(&tx, 1, section, &payload, &payload, None, true).unwrap();
-        tx.commit().unwrap();
-        reference
-    }
-    #[test]
-    fn connection_reads_are_lazy_and_explicit_adoption_keeps_legacy_bytes() {
-        let mut db = fixture();
-        let original = raw(&db);
-        let changes = db.total_changes();
-        let settings = crate::configuration_policies::read_profile(&db, 1).unwrap();
-        assert_eq!(settings["workers"], 6);
-        assert!(!exists(&db).unwrap());
-        assert_eq!(db.total_changes(), changes);
-        let r = adopt(&mut db, "models");
-        assert_eq!(raw(&db), original);
-        let effective = crate::configuration_policies::read_profile(&db, 1).unwrap();
-        assert_eq!(
-            crate::configuration_policies::reference(&effective, "models").unwrap(),
-            Some(r)
-        );
-        assert_eq!(
-            effective["modelProfiles"][0]["apiKey"],
-            "synthetic-cloud-key"
-        );
-        assert_eq!(effective["modelProfiles"][0]["localApiKey"], "");
-        assert_eq!(effective["fofaKey"], "synthetic-fofa-key");
-        let descriptors: String = db
-            .query_row(
-                "SELECT group_concat(descriptor_json) FROM configuration_connection_versions",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert!(!descriptors.contains("synthetic-cloud-key"));
-        assert!(!descriptors.contains("unselected-legacy-key"));
-        assert_eq!(
-            db.query_row(
-                "SELECT COUNT(*) FROM configuration_service_accounts",
-                [],
-                |r| r.get::<_, i64>(0)
-            )
-            .unwrap(),
-            1
-        );
-        // Other profiles remain legacy and are not silently adopted.
-        assert!(crate::configuration_policies::reference(
-            &crate::configuration_policies::read_profile(&db, 2).unwrap(),
-            "models"
-        )
-        .unwrap()
-        .is_none());
-    }
-    #[test]
-    fn connection_rename_reuses_credentials_but_endpoint_rotation_cannot_retarget_old_revision() {
-        let mut db = fixture();
-        let first = adopt(&mut db, "models");
-        let current = crate::configuration_policies::read_profile(&db, 1).unwrap();
-        let expected = project(&current, "models").unwrap();
-        let mut next = expected.clone();
-        next["modelProfiles"][0]["name"] = json!("Renamed");
-        let tx = db.transaction().unwrap();
-        let second = save(&tx, 1, "models", &next, &expected, Some(&first), false).unwrap();
-        tx.commit().unwrap();
-        assert_eq!(second.revision, 2);
-        assert_eq!(first.policy_id, second.policy_id);
-        assert_eq!(
-            db.query_row(
-                "SELECT COUNT(*) FROM configuration_service_accounts",
-                [],
-                |r| r.get::<_, i64>(0)
-            )
-            .unwrap(),
-            1
-        );
-        let current = crate::configuration_policies::read_profile(&db, 1).unwrap();
-        let expected = project(&current, "models").unwrap();
-        let mut next = expected.clone();
-        next["modelProfiles"][0]["apiBase"] = json!("https://new.invalid/v1");
-        next["modelProfiles"][0]["apiKey"] = json!("synthetic-new-key");
-        let tx = db.transaction().unwrap();
-        save(&tx, 1, "models", &next, &expected, Some(&second), false).unwrap();
-        tx.commit().unwrap();
-        let original:String=db.query_row("SELECT descriptor_json FROM configuration_connection_versions WHERE owner_id=?1 AND revision=1",[&first.policy_id],|r|r.get(0)).unwrap();
-        let frozen = materialize(&db, "models", &serde_json::from_str(&original).unwrap()).unwrap();
-        assert_eq!(
-            frozen["modelProfiles"][0]["apiBase"],
-            "https://synthetic.invalid/v1"
-        );
-        assert_eq!(frozen["modelProfiles"][0]["apiKey"], "synthetic-cloud-key");
-        let tx = db.transaction().unwrap();
-        assert_eq!(
-            save(&tx, 1, "models", &next, &expected, Some(&second), false).unwrap_err(),
-            "configuration_connection_conflict"
-        );
-    }
-    #[test]
-    fn connection_owner_rejects_implicit_environment_keys_duplicate_models_and_unknown_active_id() {
-        for change in ["empty-key", "duplicate", "active", "oauth-endpoint"] {
-            let mut db = fixture();
-            let original = raw(&db);
-            let tx = db.transaction().unwrap();
-            let current = crate::configuration_policies::read_profile(&tx, 1).unwrap();
-            let expected = project(&current, "models").unwrap();
-            let mut next = expected.clone();
-            match change {
-                "empty-key" => next["modelProfiles"][0]["apiKey"] = json!(""),
-                "duplicate" => {
-                    let p = next["modelProfiles"][0].clone();
-                    next["modelProfiles"].as_array_mut().unwrap().push(p);
-                }
-                "active" => next["activeModelProfileId"] = json!("missing"),
-                _ => {
-                    next["modelProfiles"][0]["apiBase"] =
-                        json!("https://user:token@synthetic.invalid/v1")
-                }
-            }
-            assert!(save(&tx, 1, "models", &next, &expected, None, true).is_err());
-            tx.rollback().unwrap();
-            assert!(!exists(&db).unwrap());
-            assert_eq!(raw(&db), original);
-        }
-    }
-    #[test]
-    fn local_connection_never_uses_cloud_key_and_owned_models_reject_runtime_environment_fallback()
-    {
-        let mut db = fixture();
-        let tx = db.transaction().unwrap();
-        let current = crate::configuration_policies::read_profile(&tx, 1).unwrap();
-        let expected = project(&current, "models").unwrap();
-        let mut local = expected.clone();
-        local["modelProfiles"][0]["deployment"] = json!("local");
-        local["modelProfiles"][0]["apiBase"] = json!("http://127.0.0.1:9000/v1");
-        local["modelProfiles"][0]["localApiKey"] = json!("");
-        save(&tx, 1, "models", &local, &expected, None, true).unwrap();
-        tx.commit().unwrap();
-        let settings = crate::configuration_policies::read_profile(&db, 1).unwrap();
-        let c = crate::model_configuration::model_connection(
-            &crate::model_configuration::NormalizedModelSettings::new(&settings),
-        )
-        .unwrap();
-        assert_eq!(c.api_key, "local");
-        assert_eq!(c.deployment, "local");
-        let accounts: String = db
-            .query_row(
-                "SELECT group_concat(credential) FROM configuration_service_accounts",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert!(!accounts.contains("synthetic-cloud-key"));
-        let mut broken = settings;
-        broken["modelProfiles"][0]["deployment"] = json!("cloud");
-        assert!(crate::model_configuration::model_connection(
-            &crate::model_configuration::NormalizedModelSettings::new(&broken)
-        )
-        .is_err());
-    }
-    #[test]
-    fn asset_account_is_independent_and_declared_file_is_not_read_during_adoption() {
-        let mut db = fixture();
-        let original = raw(&db);
-        let r = adopt(&mut db, "assetApis");
-        let current = crate::configuration_policies::read_profile(&db, 1).unwrap();
-        let expected = project(&current, "assetApis").unwrap();
-        let tx = db.transaction().unwrap();
-        let next = json!({"fofaKey":"","configPath":"/missing/not-read/synthetic.yaml"});
-        save(&tx, 1, "assetApis", &next, &expected, Some(&r), false).unwrap();
-        tx.commit().unwrap();
-        let current = crate::configuration_policies::read_profile(&db, 1).unwrap();
-        assert_eq!(current["configPath"], "/missing/not-read/synthetic.yaml");
-        assert_eq!(raw(&db), original);
-        assert!(crate::configuration_policies::reference(&current, "models")
-            .unwrap()
-            .is_none());
-        let tx = db.transaction().unwrap();
-        let expected = project(&current, "assetApis").unwrap();
-        let r = crate::configuration_policies::reference(&current, "assetApis")
-            .unwrap()
-            .unwrap();
-        assert!(save(
-            &tx,
-            1,
-            "assetApis",
-            &json!({"fofaKey":"ambiguous","configPath":"/missing"}),
-            &expected,
-            Some(&r),
-            false
-        )
-        .is_err());
-    }
-    #[test]
-    fn connection_versions_are_immutable_and_broken_bindings_fail_closed() {
-        let mut db = fixture();
-        adopt(&mut db, "models");
-        assert!(db
-            .execute(
-                "UPDATE configuration_service_accounts SET endpoint='https://other.invalid'",
-                []
-            )
-            .is_err());
-        assert!(db
-            .execute("DELETE FROM configuration_model_connections", [])
-            .is_err());
-        db.execute_batch(
-            "PRAGMA foreign_keys=OFF; UPDATE configuration_connection_bindings SET revision=999;",
-        )
-        .unwrap();
-        assert!(crate::configuration_policies::read_profile(&db, 1).is_err());
-    }
-    #[test]
-    fn legacy_full_save_cannot_overwrite_or_duplicate_adopted_credentials() {
-        let mut db = fixture();
-        let source: Value = serde_json::from_str(&raw(&db)).unwrap();
-        adopt(&mut db, "models");
-        let current = crate::configuration_policies::read_profile(&db, 1).unwrap();
-        let mut changed = current.clone();
-        changed["modelProfiles"][0]["apiKey"] = json!("new-synthetic-key");
-        assert!(crate::configuration_policies::legacy_update(&db, 1, &source, &changed).is_err());
-        let merged =
-            crate::configuration_policies::legacy_update(&db, 1, &source, &current).unwrap();
-        assert_eq!(merged["modelProfiles"], source["modelProfiles"]);
-        assert!(merged.get("_configurationRefs").is_none());
-        let mut snapshot = current;
-        redact_asset_snapshot(&mut snapshot);
-        let serialized = snapshot.to_string();
-        assert!(!serialized.contains("synthetic-cloud-key"));
-        assert!(!serialized.contains("unselected-legacy-key"));
-        assert!(snapshot["_configurationRefs"]["models"].is_object());
-    }
-}

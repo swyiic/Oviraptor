@@ -26,23 +26,6 @@ fn multi_agent_input_parser_readonly(
         Ok(value) => value,
         Err(code) => return Err(failed_specialist_error(&db, lease, child, &code)),
     };
-    #[cfg(test)]
-    if INPUT_PARSER_EXPIRE_RECEIVED_ONCE.with(|flag|flag.replace(false)) {
-        let tx = db.unchecked_transaction().map_err(|e|e.to_string())?;
-        let original = crate::agent_runtime::multi_agent::specialist::received_for_local_delivery(&tx,lease,child)?;
-        if original.text != text || original.usage != usage || !original.rejection.is_empty() {
-            return Err("test_original_input_parser_received_mismatch".into());
-        }
-        tx.commit().map_err(|e|e.to_string())?;
-        let changed = db.execute("UPDATE agent_assignment_attempts SET expires_at=datetime('now','localtime','+1 second') WHERE child_run_id=?1 AND assignment_id=?2",params![child.run_id,child.assignment_id]).map_err(|e|e.to_string())?;
-        if changed!=1 {return Err("test_original_input_parser_worker_missing".into());}
-        let deadline = Instant::now()+Duration::from_secs(5);
-        while crate::agent_runtime::multi_agent::attempts::current(&db,lease,&child.assignment_id)?.state != "expired" {
-            context.supervision.as_ref().ok_or("test_original_supervisor_missing")?.check()?;
-            if Instant::now()>=deadline {return Err("test_original_input_parser_expiry_timeout".into());}
-            std::thread::sleep(Duration::from_millis(20));
-        }
-    }
     deliver_readonly_assessment(
         &db,
         lease,
@@ -107,15 +90,6 @@ fn multi_agent_input_parser(
 
 // Dispatch uses the real implemented-role gate in production and positive
 // tests alike. The only test hook can close that gate; it cannot open it.
-#[cfg(test)]
-thread_local! {
-    static INPUT_PARSER_TEST_FLAG_OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-#[cfg(test)]
-fn input_parser_test_flag_forced_off() -> bool {
-    INPUT_PARSER_TEST_FLAG_OFF.with(|cell| cell.get())
-}
-#[cfg(not(test))]
 fn input_parser_test_flag_forced_off() -> bool {
     false
 }
@@ -126,23 +100,4 @@ fn input_parser_dispatch_enabled() -> bool {
 
 // U181: test-only simulation of `native_root_role_prepare_implemented(InputParser) ==
 // false` (the pre-U181 production state), used by the honest flag-false negative.
-#[cfg(test)]
-struct InputParserProductionFlagOff;
-#[cfg(test)]
-impl InputParserProductionFlagOff {
-    fn enter() -> Self {
-        INPUT_PARSER_TEST_FLAG_OFF.with(|cell| cell.set(true));
-        Self
-    }
-}
-#[cfg(test)]
-impl Drop for InputParserProductionFlagOff {
-    fn drop(&mut self) {
-        INPUT_PARSER_TEST_FLAG_OFF.with(|cell| cell.set(false));
-    }
-}
 
-#[cfg(test)]
-thread_local! {
-    static INPUT_PARSER_EXPIRE_RECEIVED_ONCE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}

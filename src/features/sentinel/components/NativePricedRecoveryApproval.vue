@@ -6,6 +6,8 @@ import type { RecoveryFact, RecoveryScope, RecoverySelection } from "../recovery
 import { decimalUsdNanos, pricedApprovalMatches, pricedCancellationMatches, pricedProposalMatches,
   validPricedRecoveryOperation, validRecoveryPricing } from "../recovery/priced";
 import type { PricedRecoveryOperation, RecoveryPricingInput } from "../recovery/priced";
+import { useI18n } from "../../../i18n";
+const { tr } = useI18n();
 const props = defineProps<{ scanId: string; selection?: RecoverySelection; newScope: RecoveryScope | null; disabled?: boolean }>();
 const busy = ref(false), blocked = ref(false), error = ref("");
 const operation = ref<PricedRecoveryOperation>(), proposal = ref<RecoveryFact>(), approval = ref<RecoveryFact>(), cancellation = ref<RecoveryFact>();
@@ -67,7 +69,7 @@ async function recoverOriginal() {
     showOperation(op); approval.value = fact;
     cancellation.value = cancelled === null ? undefined : cancelled as RecoveryFact;
     proposal.value = undefined; consent.value = false; revokeConsent.value = false; blocked.value = false;
-  } catch { if (current(id, scan)) error.value = "无法找回该原来源的签名批准。已有操作记录保持不变。"; }
+  } catch { if (current(id, scan)) error.value = tr("无法找回该原来源的签名批准。已有操作记录保持不变。", "Couldn't recover the signed approval for this original source. Existing operation records are unchanged."); }
   finally { if (current(id, scan)) busy.value = false; }
 }
 async function load() {
@@ -92,7 +94,7 @@ async function load() {
     approval.value = a === null ? undefined : a as RecoveryFact;
     cancellation.value = c === null ? undefined : c as RecoveryFact;
     proposal.value = undefined; consent.value = false; revokeConsent.value = false;
-  } catch { if (current(id, scan)) { blocked.value = true; error.value = "无法核验原定价操作。保留原 requestId，请找回状态。"; } }
+  } catch { if (current(id, scan)) { blocked.value = true; error.value = tr("无法核验原定价操作。保留原 requestId，请找回状态。", "Couldn't verify the original priced operation. The original requestId is kept; recover its state."); } }
   finally { if (current(id, scan)) busy.value = false; }
 }
 async function review() {
@@ -112,8 +114,8 @@ async function review() {
     proposal.value = value;
   } catch (cause) {
     if (current(id, scan)) error.value = String(cause).includes("protection_recovery_fixed_call_exceeds_budget")
-      ? "单次固定请求费用超过全部费用预算，请核对金额和费率。本次核验未执行；已有操作请先找回状态。"
-      : "定价提案核验未通过。检查单个 URL、精确金额、费率版本与原范围。";
+      ? tr("单次固定请求费用超过全部费用预算，请核对金额和费率。本次核验未执行；已有操作请先找回状态。", "The fixed per-request cost exceeds the whole cost budget; check the amount and rates. This verification did not run; for an existing operation, recover its state first.")
+      : tr("定价提案核验未通过。检查单个 URL、精确金额、费率版本与原范围。", "Priced proposal verification failed. Check the single URL, exact amount, rate version, and original scope.");
   }
   finally { if (current(id, scan)) busy.value = false; }
 }
@@ -144,7 +146,7 @@ async function approve() {
     if (!current(id, scan)) return;
     if (!pricedApprovalMatches(value, op)) throw Error("approval_mismatch");
     approval.value = value; consent.value = false;
-  } catch { if (current(id, scan)) error.value = "批准结果未确认。找回原状态或沿用原 requestId 重试，未创建替代操作。"; }
+  } catch { if (current(id, scan)) error.value = tr("批准结果未确认。找回原状态或沿用原 requestId 重试，未创建替代操作。", "Approval result unconfirmed. Recover the original state or retry with the original requestId; no replacement operation was created."); }
   finally { if (current(id, scan)) busy.value = false; }
 }
 async function revoke() {
@@ -157,7 +159,7 @@ async function revoke() {
     if (!current(id, scan)) return;
     if (!pricedCancellationMatches(value, op, approved)) throw Error("cancellation_mismatch");
     cancellation.value = value; revokeConsent.value = false;
-  } catch { if (current(id, scan)) error.value = "撤销结果未确认，请找回原签名状态。原批准与历史保留。"; }
+  } catch { if (current(id, scan)) error.value = tr("撤销结果未确认，请找回原签名状态。原批准与历史保留。", "Revocation result unconfirmed; recover the original signed state. The original approval and history are kept."); }
   finally { if (current(id, scan)) busy.value = false; }
 }
 watch([usd, revision, inputRate, cacheRate, outputRate, requestRate, () => props.selection, () => props.newScope],
@@ -173,35 +175,35 @@ onUnmounted(() => { disposed = true; generation++; });
 </script>
 <template>
   <section class="priced-recovery">
-    <p>为上方单个 URL 与明确的新范围确认模型费率。保存批准后等待专属出生；当前不会启动扫描。</p>
-    <button type="button" :disabled="busy" @click="load">找回定价批准与撤销状态</button>
-    <button type="button" :disabled="busy || !selection" @click="recoverOriginal">按原保护来源找回签名批准（缓存丢失时）</button>
+    <p>{{ tr('为上方单个 URL 与明确的新范围确认模型费率。保存批准后等待专属出生；当前不会启动扫描。', 'Confirm model rates for the single URL and explicit new scope above. Once saved, the approval waits for its dedicated launch; no scan starts now.') }}</p>
+    <button type="button" :disabled="busy" @click="load">{{ tr('找回定价批准与撤销状态', 'Recover priced approval and revocation state') }}</button>
+    <button type="button" :disabled="busy || !selection" @click="recoverOriginal">{{ tr('按原保护来源找回签名批准（缓存丢失时）', 'Recover signed approval from the original protection source (if the cache was lost)') }}</button>
     <p v-if="error" role="alert">{{ error }}</p>
     <fieldset :disabled="locked">
-      <legend>本次精确定价合同</legend>
-      <label>本次费用上限 USD<input v-model="usd" inputmode="decimal" placeholder="例如 5.000000001" /></label>
-      <label>费率版本<input v-model="revision" placeholder="已核对的费率版本" /></label>
-      <label>非缓存输入 USD / 百万 token<input v-model="inputRate" inputmode="decimal" /></label>
-      <label>缓存输入 USD / 百万 token<input v-model="cacheRate" inputmode="decimal" /></label>
-      <label>输出 USD / 百万 token<input v-model="outputRate" inputmode="decimal" /></label>
-      <label>每次模型请求固定费用 USD<input v-model="requestRate" inputmode="decimal" /></label>
-      <p>逐原调用合计向上取整至 nano-USD；缓存输入属于输入子集。费用按确认费率计算，供应商实际美元账单另行核对。</p>
+      <legend>{{ tr('本次精确定价合同', 'Exact pricing contract') }}</legend>
+      <label>{{ tr('本次费用上限 USD', 'Cost cap (USD)') }}<input v-model="usd" inputmode="decimal" :placeholder="tr('例如 5.000000001', 'e.g. 5.000000001')" /></label>
+      <label>{{ tr('费率版本', 'Rate version') }}<input v-model="revision" :placeholder="tr('已核对的费率版本', 'Verified rate version')" /></label>
+      <label>{{ tr('非缓存输入 USD / 百万 token', 'Uncached input, USD per 1M tokens') }}<input v-model="inputRate" inputmode="decimal" /></label>
+      <label>{{ tr('缓存输入 USD / 百万 token', 'Cached input, USD per 1M tokens') }}<input v-model="cacheRate" inputmode="decimal" /></label>
+      <label>{{ tr('输出 USD / 百万 token', 'Output, USD per 1M tokens') }}<input v-model="outputRate" inputmode="decimal" /></label>
+      <label>{{ tr('每次模型请求固定费用 USD', 'Fixed cost per model request (USD)') }}<input v-model="requestRate" inputmode="decimal" /></label>
+      <p>{{ tr('逐原调用合计向上取整至 nano-USD；缓存输入属于输入子集。费用按确认费率计算，供应商实际美元账单另行核对。', "Each original call's total is rounded up to the nano-USD; cached input is a subset of input. Costs use the confirmed rates; check the provider's actual USD bill separately.") }}</p>
     </fieldset>
-    <button v-if="!approval && !cancellation" type="button" :disabled="busy || blocked || disabled" @click="review">核验完整定价提案</button>
-    <details v-if="proposal || operation" open><summary>本次完整范围与精确定价</summary>
+    <button v-if="!approval && !cancellation" type="button" :disabled="busy || blocked || disabled" @click="review">{{ tr('核验完整定价提案', 'Verify full priced proposal') }}</button>
+    <details v-if="proposal || operation" open><summary>{{ tr('本次完整范围与精确定价', 'Full scope and exact pricing') }}</summary>
       <pre>{{ canonical(operation || proposal) }}</pre>
     </details>
     <template v-if="proposal && !approval && !cancellation">
-      <label><input v-model="consent" type="checkbox" :disabled="busy || disabled" />我明确批准所显示的新范围、精确费用上限及费率；保留原停机和全部原费用。</label>
-      <button type="button" :disabled="busy || blocked || disabled || !consent" @click="approve">{{ operation ? '沿用原 requestId 重试定价批准' : '明确批准范围与定价' }}</button>
+      <label><input v-model="consent" type="checkbox" :disabled="busy || disabled" />{{ tr('我明确批准所显示的新范围、精确费用上限及费率；保留原停机和全部原费用。', 'I explicitly approve the new scope, exact cost cap, and rates shown, keeping the original halt and all original costs.') }}</label>
+      <button type="button" :disabled="busy || blocked || disabled || !consent" @click="approve">{{ operation ? tr('沿用原 requestId 重试定价批准', 'Retry priced approval with the original requestId') : tr('明确批准范围与定价', 'Approve scope and pricing') }}</button>
     </template>
-    <p v-if="operation">定价操作 requestId：{{ operation.requestId }}</p>
-    <p v-if="approval">已核验原签名定价批准，目标请求授权为 0，等待专属出生。</p>
+    <p v-if="operation">{{ tr(`定价操作 requestId：${operation.requestId}`, `Priced operation requestId: ${operation.requestId}`) }}</p>
+    <p v-if="approval">{{ tr('已核验原签名定价批准，目标请求授权为 0，等待专属出生。', 'Original signed priced approval verified; target request authorization is 0. Waiting for its dedicated launch.') }}</p>
     <template v-if="approval && !cancellation">
-      <label><input v-model="revokeConsent" type="checkbox" :disabled="busy" />撤销本次尚未出生的定价批准，并保留原批准与全部历史。</label>
-      <button type="button" :disabled="busy || blocked || !revokeConsent" @click="revoke">明确撤销定价批准</button>
+      <label><input v-model="revokeConsent" type="checkbox" :disabled="busy" />{{ tr('撤销本次尚未出生的定价批准，并保留原批准与全部历史。', 'Revoke this priced approval before it launches, keeping the original approval and all history.') }}</label>
+      <button type="button" :disabled="busy || blocked || !revokeConsent" @click="revoke">{{ tr('明确撤销定价批准', 'Revoke priced approval') }}</button>
     </template>
-    <p v-if="cancellation">原签名撤销已核验：{{ cancellation.cancellationId }}。此批准不能重试恢复授权。</p>
+    <p v-if="cancellation">{{ tr('原签名撤销已核验：', 'Original signed revocation verified: ') }}{{ cancellation.cancellationId }}{{ tr('。此批准不能重试恢复授权。', '. This approval cannot be retried to restore authorization.') }}</p>
   </section>
 </template>
 <style scoped>

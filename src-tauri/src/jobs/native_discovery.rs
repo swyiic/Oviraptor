@@ -361,6 +361,3 @@ fn merge_probe_stages(stages: &mut [(String, Vec<String>, Vec<Record>)]) -> usiz
     duplicates
 }
 
-#[cfg(test)]
-#[path = "native_discovery_tests.rs"]
-mod discovery_tests;

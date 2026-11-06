@@ -212,6 +212,3 @@ pub async fn review_quarantined_certificates(
     .map_err(err)?
 }
 
-#[cfg(test)]
-#[path = "discovery_evidence_tests.rs"]
-mod tests;

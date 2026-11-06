@@ -16,6 +16,7 @@ fn agent_security_relevant_headers(
         "x-framework",
         "x-runtime",
         "x-version",
+        "access-control-allow-origin",
     ];
     let mut out = Vec::new();
     for name in NAMES {

@@ -409,6 +409,7 @@ fn start_workbench_scan_publishing_with_environment(
                 agent_runtime.packet_budget,
                 auth_session_path,
                 None,
+                None,
             );
             record_workbench_spawn_result(db_path,&scan_id,attempt_number.into(),"web",spawned)?;
         }

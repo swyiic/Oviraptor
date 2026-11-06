@@ -7,6 +7,7 @@ export type AgentModelProfile = {
   apiKey: string;
   localApiKey: string;
   deployment: "cloud" | "local";
+  authType?: "api-key" | "none" | "oauth";
 };
 
 export function createAgentModelProfile(name = "", sequence = 1): AgentModelProfile {
@@ -58,6 +59,7 @@ export const CONFIG_PROFILE_SETTING_DEFAULTS = {
   interval: 6,
   collectionTimeout: 45,
   fullHistory: false,
+  incrementalCollection: false,
   enableCidr24: false,
   collectionCache: true,
   precisionFirst: true,
@@ -77,9 +79,9 @@ export const CONFIG_PROFILE_SETTING_DEFAULTS = {
   schemeFallback: true,
   perHostInterval: 1.5,
   contentThreshold: 12,
-  gamblingKeywords: ["在线赌博", "博彩平台", "真人视讯", "体育投注"],
-  pornKeywords: ["色情网站", "成人网站", "成人视频", "情色直播"],
-  negativeKeywords: ["打击赌博", "扫黄打非", "反诈", "公安", "法院"],
+  gamblingKeywords: ["在线赌博", "博彩平台", "真人视讯", "体育投注"], // i18n-ignore: persisted content-matching keywords
+  pornKeywords: ["色情网站", "成人网站", "成人视频", "情色直播"], // i18n-ignore: persisted content-matching keywords
+  negativeKeywords: ["打击赌博", "扫黄打非", "反诈", "公安", "法院"], // i18n-ignore: persisted content-matching keywords
   replaceDefaultContentRules: false,
   nativeAnalyzers: { semgrep: { image: "" }, codeql: { image: "" } },
 };

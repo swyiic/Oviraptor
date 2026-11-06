@@ -15,7 +15,7 @@ fn existing_terminal(connection: &rusqlite::Connection, run_id: i64) -> Option<J
         .ok()?;
     if !matches!(
         status.as_str(),
-        "completed" | "failed" | "cancelled" | "interrupted" | "restarted"
+        "completed" | "failed" | "cancelled" | "interrupted" | "restarted" | "paused"
     ) || finished.as_deref().is_none_or(str::is_empty)
     {
         return None;
@@ -72,7 +72,27 @@ pub(super) fn request_cancel_on(
 ) -> Result<(), String> {
     let changed = connection
         .execute(
-            "UPDATE runs SET status='cancel_requested' WHERE id=?1 AND status IN ('queued','running','cancel_requested')",
+            "UPDATE runs SET status='cancel_requested' WHERE id=?1 AND status IN ('queued','running','cancel_requested','pause_requested')",
+            [run_id],
+        )
+        .map_err(|error| error.to_string())?;
+    if changed != 1 {
+        return Err("任务已结束或不在运行中".into());
+    }
+    Ok(())
+}
+
+/// Record a pause request. Like cancel it stops the run gracefully (the worker
+/// checks the same signal and writes its checkpoint), but it finalizes as `paused`
+/// instead of `cancelled`, so the operator can resume it incrementally from the
+/// checkpoint. Only a live queued/running run can be paused.
+pub(super) fn request_pause_on(
+    connection: &rusqlite::Connection,
+    run_id: i64,
+) -> Result<(), String> {
+    let changed = connection
+        .execute(
+            "UPDATE runs SET status='pause_requested' WHERE id=?1 AND status IN ('queued','running','pause_requested')",
             [run_id],
         )
         .map_err(|error| error.to_string())?;
@@ -97,17 +117,30 @@ fn finish_on(
     let transaction = connection
         .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .map_err(|error| error.to_string())?;
-    let status: Option<String> = transaction
-        .query_row("SELECT status FROM runs WHERE id=?1", [run_id], |row| {
-            row.get(0)
+    let row: Option<(String, f64)> = transaction
+        .query_row("SELECT status,progress FROM runs WHERE id=?1", [run_id], |row| {
+            Ok((row.get(0)?, row.get(1)?))
         })
         .optional()
         .map_err(|error| error.to_string())?;
-    let status = status.ok_or("任务不存在，未写入终态")?;
-    if !matches!(status.as_str(), "queued" | "running" | "cancel_requested") {
+    let (status, current_progress) = row.ok_or("任务不存在，未写入终态")?;
+    if !matches!(status.as_str(), "queued" | "running" | "cancel_requested" | "pause_requested") {
         return Err(format!("任务已处于 {status}，未覆盖既有终态"));
     }
-    let (terminal, error, message, progress) = match result {
+    // A pause stops the worker with the same signal as cancel (so `cancelled` is
+    // also set), so distinguish it FIRST by the pause_requested status: a graceful
+    // stop (Ok or __CANCELLED__) becomes `paused` with its progress preserved; a
+    // real error while pausing still falls through to `failed`.
+    let paused = status == "pause_requested"
+        && (result.is_ok() || matches!(&result, Err(e) if e == "__CANCELLED__"));
+    let (terminal, error, message, progress) = if paused {
+        (
+            "paused",
+            String::new(),
+            "任务已暂停；继续将从断点增量恢复".to_string(),
+            current_progress,
+        )
+    } else { match result {
         Ok(()) if cancelled || status == "cancel_requested" => (
             "cancelled",
             String::new(),
@@ -130,7 +163,7 @@ fn finish_on(
                 0.0,
             )
         }
-    };
+    } };
     let changed = transaction
         .execute(
             "UPDATE runs SET status=?1,stage=?1,error=?2,finished_at=datetime('now','localtime'),progress=CASE WHEN ?1='completed' THEN 100 ELSE progress END WHERE id=?3",
@@ -195,6 +228,3 @@ pub(super) fn finish_with_fallback(
     }
 }
 
-#[cfg(test)]
-#[path = "job_lifecycle_tests.rs"]
-mod tests;

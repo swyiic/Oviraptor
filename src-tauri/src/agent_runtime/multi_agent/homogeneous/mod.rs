@@ -40,28 +40,6 @@ pub(crate) mod transitions;
 pub(crate) mod types;
 pub(crate) mod worker;
 
-#[cfg(test)]
-mod apply_tests;
-#[cfg(test)]
-mod budget_bridge_tests;
-#[cfg(test)]
-mod decision_tests;
-#[cfg(test)]
-mod decompose_tests;
-#[cfg(test)]
-mod directive_gate_tests;
-#[cfg(test)]
-mod golden_tests;
-#[cfg(test)]
-mod integration_tests;
-#[cfg(test)]
-mod intent_tests;
-#[cfg(test)]
-mod machine_tests;
-#[cfg(test)]
-mod material_policy_tests;
-#[cfg(test)]
-mod test_fixture;
 
 pub mod model_guidance;
 

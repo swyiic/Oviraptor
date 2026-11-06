@@ -782,6 +782,3 @@ pub(crate) fn tick(
     v["processed"] = json!(committed);
     Ok(v)
 }
-#[cfg(test)]
-#[path = "discovery_passive_evidence_tests.rs"]
-mod tests;

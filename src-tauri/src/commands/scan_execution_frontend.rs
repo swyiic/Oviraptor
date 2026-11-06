@@ -91,6 +91,13 @@ fn launch_frontend_recon_producer(
     }
     drop(route_db);
     let producer_owner = ScanWorkerOwner::claim(&db_path,&scan_id,attempt_number,"frontend_producer","web")?;
+    if let Ok(connection) = db::open(&db_path) {
+        authorize_bound_continuation_write(&connection, &scan_id, attempt_number)?;
+        let _ = connection.execute(
+            "UPDATE scan_target_continuation_fences SET launched=1 WHERE scan_id=?1 AND attempt_number=?2 AND launched=0",
+            params![scan_id, attempt_number],
+        );
+    }
     let (sender, receiver) = mpsc::channel();
     let (ack_sender, ack_receiver) = mpsc::sync_channel(0);
     thread::Builder::new().name("native-frontend-producer".into()).spawn(move || {
@@ -286,15 +293,18 @@ fn launch_frontend_recon_producer(
                             }
                         }
                     };
-                    let attempt_alive = native_web_attempt_active(&db_path, &scan_id, attempt_number)
-                        && !sentinel_scan_pause_requested(&db_path, &scan_id);
+                    let paused = sentinel_scan_pause_requested(&db_path, &scan_id);
+                    let attempt_active = native_web_attempt_active(&db_path, &scan_id, attempt_number);
                     let timed_out = control.check().is_err();
                     control.cancel();
-                    if !attempt_alive {
-                        return Err("本轮侦察已停止，晚到结果未发布到当前任务".into());
+                    // A user-requested pause is respected. Everything else — a watchdog
+                    // timeout included — must NOT discard the recon this attempt already
+                    // gathered or fail the scan: the watchdog now only bounds how long
+                    // recon runs, it no longer gates the scan. Publish whatever was
+                    // staged and let the next stage continue with it.
+                    if paused {
+                        return Err("本轮侦察已暂停".into());
                     }
-                    // A timeout must not throw away a file this attempt already wrote.
-                    // The next stage can use that evidence instead of failing the URL.
                     if staged_output.is_file() {
                         fs::rename(&staged_output, &recon_output)
                             .map_err(|error| format!("发布本轮侦察结果失败：{error}"))?;
@@ -306,6 +316,9 @@ fn launch_frontend_recon_producer(
                             );
                         }
                         return Ok(());
+                    }
+                    if !attempt_active {
+                        return Err("本轮侦察已停止，且无可发布的证据".into());
                     }
                     if result.is_ok() {
                         return Err("侦察线程结束但缺少本轮结果文件；未复用历史结果".into());
@@ -466,6 +479,14 @@ fn launch_frontend_recon_producer(
                 Some(&db_path),
                 &scan_id,
             );
+            // Code-driven attack sweep over the just-persisted recon endpoints: runs
+            // the deterministic SQLi / XSS / command-injection / mass-assignment /
+            // access passes right here, so a scan produces attack findings without
+            // depending on the LLM to drive the probes. Skips itself unless the scan
+            // authorized target_write (the mandatory high-risk switch); never fails
+            // the scan.
+            let sweep_summary = attack_sweep_for_scan(&db_path, &scan_id, &url);
+            append_runner_log(&log_path, &format!("attack sweep: {sweep_summary}"));
             native_web_attempt_progress(
                 &db_path,
                 &scan_id,

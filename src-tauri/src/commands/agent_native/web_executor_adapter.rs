@@ -496,6 +496,7 @@ impl WebControlledAdapter for NativeWebExecutorAdapter<'_> {
             &self.context.execution_plan,
             &mut self.state,
             &self.runtime,
+            &self.queue,
         ) {
             let outcome = native_exit(
                 self.context,
@@ -609,14 +610,14 @@ impl NativeWebExecutorAdapter<'_> {
                 )));
             }
             StallAction::Check => {
-                let next = queue
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| "没有剩余队列".to_string());
-                history.push(serde_json::json!({
-                    "role": "user",
-                    "content": format!("检查：上一轮没有新证据。下一项是 {next}。请继续这一项，不要重复已完成的请求，也不要因为一条 404 结束目标。"),
-                }));
+                let content = match queue.first() {
+                    Some(next) => format!("检查：上一轮没有新证据。下一项是 {next}。请继续这一项，不要重复已完成的请求，也不要因为一条 404 结束目标。"),
+                    // Empty queue does NOT mean "done": only that the obvious
+                    // surface is enumerated. Direct the model to generate deeper,
+                    // not-yet-tried probes for this surface before any finish.
+                    None => "检查：队列已空，但这不代表测试完成。请针对已发现的接口/登录面生成尚未尝试的更深入探测，例如：账号枚举（登录/找回/注册的存在性差异）、验证码复用/失效/是否仅前端校验、滑动或图形验证码的可预测性与 key、OCR 识别后爆破、短信/邮箱接口的频率与轰炸、鉴权与越权（水平/垂直、参数篡改、未授权直达）、以及被 WAF 拦截时的 XFF/头部绕过。确有把握已无可测项时再调用 finish_target 收口，不要因为队列空或一条 404 就结束目标。".to_string(),
+                };
+                history.push(serde_json::json!({ "role": "user", "content": content }));
             }
             StallAction::Continue => {}
         }

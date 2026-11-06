@@ -27,13 +27,13 @@ export interface WorkspaceNavItem {
   icon: ShellIcon;
   badge?: "runningJobs" | "blockedCount" | "fuse";
   cta?: boolean;
-  section?: "dialog" | "results" | "queue" | "workbench";
+  section?: "overview" | "dialog" | "results" | "fuse" | "queue" | "workbench" | "knowledge";
   result?: "summary";
   workbench?: "skills";
 }
 const decorations: Record<string, Pick<WorkspaceNavItem,"icon"|"badge"|"cta"|"result"|"workbench">> = {
   dashboard:{icon:"dashboard"},tasks:{icon:"tasks",badge:"runningJobs"},assets:{icon:"assets"},seeds:{icon:"seeds"},ownership:{icon:"ownership"},exposure:{icon:"exposure"},changes:{icon:"changes"},quarantine:{icon:"quarantine",badge:"blockedCount"},query:{icon:"query",cta:true},
-  dialog:{icon:"dialog"},urls:{icon:"results",result:"summary"},queue:{icon:"tasks",badge:"fuse"},skills:{icon:"skills",workbench:"skills"},
+  overview:{icon:"dashboard"},dialog:{icon:"dialog"},urls:{icon:"results",result:"summary"},fuse:{icon:"quarantine",badge:"fuse"},queue:{icon:"tasks"},skills:{icon:"skills",workbench:"skills"},new_scan:{icon:"query",cta:true},knowledge:{icon:"skills"},
 };
 const contributedNavigation=(id:"asset"|"sentinel"):readonly WorkspaceNavItem[]=>getBuiltinPlugin(id).pages.filter(page=>page.view!=="logs").map(page=>({key:page.id,view:page.view,label:page.label,section:page.section,...decorations[page.id]}));
 const ASSET_NAV=contributedNavigation("asset");

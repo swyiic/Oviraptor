@@ -24,6 +24,22 @@ pub(crate) struct RootModelCall {
     pub(crate) remaining: Duration,
 }
 
+#[cfg(test)]
+impl RootModelCall {
+    // B3.3c step ① harness. `Tick::cost_rows` reads owner, id and tokens; round
+    // and request are inert here. Test-only; claims no budget and no dispatch.
+    pub(crate) fn for_test(owner: RootOwner, id: &str, tokens: i64) -> Self {
+        Self {
+            owner,
+            id: id.to_string(),
+            round: 1,
+            request: String::new(),
+            tokens,
+            remaining: Duration::ZERO,
+        }
+    }
+}
+
 enum LocalHeadroom<'a> {
     Generic,
     VerifiedOneShot(&'a tick::authorization_admission::VerifiedOneShotAssessment),
@@ -38,16 +54,6 @@ impl RootModelCall {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn claim(
-        tx: &Transaction<'_>,
-        root: &str,
-        round: i64,
-        request: &str,
-        estimate: i64,
-    ) -> Result<Self, String> {
-        super::transaction::protect(tx, || Self::claim_on(tx, root, round, request, estimate))
-    }
 
     pub(crate) fn claim_single_transport(
         tx: &Transaction<'_>, root: &str, round: i64, request: &str, estimate: i64,

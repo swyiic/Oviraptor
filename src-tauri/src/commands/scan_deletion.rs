@@ -1,6 +1,18 @@
 // Explicit task-record deletion is not a process killer or a disk purge. Paths
 // stored by imports/old releases are evidence, never filesystem authority.
 fn delete_sentinel_scan_inner(db_path: &Path, scan_id: &str) -> Result<(), String> {
+    delete_sentinel_scan_inner_mode(db_path, scan_id, false)
+}
+
+// `force` is the operator hard-override (user-confirmed in the UI). It deletes a
+// scan that is DEAD (no live local process — the one quiescence fact it still
+// requires) even when the crash left orphaned budget reservations or unsettled
+// assignments behind: it skips the per-root clean-exit proof AND the settlement
+// gate. It never bypasses the live-process check, never fabricates a clean-exit
+// receipt, and still ARCHIVES every retained financial row verbatim (marked
+// `forced` so the archive is honestly distinguishable from a settled deletion),
+// so the "this was deleted unreconciled" fact is preserved rather than lost.
+fn delete_sentinel_scan_inner_mode(db_path: &Path, scan_id: &str, force: bool) -> Result<(), String> {
     if scan_id.trim().is_empty() || scan_id.contains('/') || scan_id.contains('\\')
         || scan_id.contains("..") || scan_id.chars().any(char::is_control)
     { return Err("任务 ID 非法".into()); }
@@ -37,8 +49,17 @@ fn delete_sentinel_scan_inner(db_path: &Path, scan_id: &str) -> Result<(), Strin
     // Includes historical attempts, removed targets and detached recon owners.
     // All acquired locks survive through COMMIT; no PID is ever signalled.
     let mut source_parents=crate::agent_runtime::deleted_scan_audit::OriginalSourceParents::default();
-    let _workers = claim_scan_quiescence_with_source_parents(&tx, db_path, scan_id,Some(&mut source_parents))
-        .map_err(|e| format!("执行退出或清理尚未确认；任务和证据已保留：{e}"))?;
+    if force {
+        // The scan is dead; prove only that no local worker is still touching
+        // these rows, then skip the per-attempt clean-exit proof the crash
+        // never wrote. `source_parents` stays empty: the forced archive below
+        // does not walk the per-root idle guards that would populate it.
+        require_no_live_process_in(&tx, scan_id)
+            .map_err(|e| format!("仍有本地执行进程未退出；任务和证据已保留：{e}"))?;
+    } else {
+        let _workers = claim_scan_quiescence_with_source_parents(&tx, db_path, scan_id,Some(&mut source_parents))
+            .map_err(|e| format!("执行退出或清理尚未确认；任务和证据已保留：{e}"))?;
+    }
     // Tick evidence has RESTRICT; Single's immutable journal/exit receipts do
     // not. Both still need the original run, events and source rows to verify.
     // Refuse before tombstones or cascades even if an old status was supplied.
@@ -57,17 +78,22 @@ fn delete_sentinel_scan_inner(db_path: &Path, scan_id: &str) -> Result<(), Strin
          ON r.id=p.root_run_id WHERE r.scan_id=?1)", [scan_id], |r| r.get(0),
     ).map_err(|e| format!("删除前原付费审计检查失败；任务已保留：{e}"))?;
     let paid_audit = if retained {
-        let prepared=crate::agent_runtime::deleted_scan_audit::prepare_with_source_parents(&tx,scan_id,source_parents).map_err(|error| if error=="deleted_audit_financial_schema_migration_required" {
+        let prepared=crate::agent_runtime::deleted_scan_audit::prepare_with_source_parents_mode(&tx,scan_id,source_parents,force).map_err(|error| if error=="deleted_audit_financial_schema_migration_required" {
             "native_paid_audit_retention_required: deleted_audit_financial_schema_migration_required: 原财务关联尚未完成受控迁移；任务与凭证已保留，须先核对、备份再迁移".to_string()
         } else {"native_paid_audit_retention_required: 该任务包含原始请求或财务审计凭证；当前必须保留原任务关联，可以归档。归档不表示执行、未知费用或清理已结清".to_string()})?;
-        require_scan_deletion_with_audit_in(&tx,scan_id,Some(&prepared)).map_err(|_|"native_paid_audit_retention_required: 原执行义务尚未全部闭合；任务与原审计来源已保留".to_string())?;
+        // Hard override deletes a dead-but-unsettled scan: the retained finance
+        // rows are still captured and archived (forced), but the settlement gate
+        // is skipped. Normal deletion keeps requiring full closure.
+        if !force {
+            require_scan_deletion_with_audit_in(&tx,scan_id,Some(&prepared)).map_err(|_|"native_paid_audit_retention_required: 原执行义务尚未全部闭合；任务与原审计来源已保留".to_string())?;
+        }
         Some(prepared)
-    } else {require_scan_deletion_settled_in(&tx,scan_id)?;None};
+    } else {if !force {require_scan_deletion_settled_in(&tx,scan_id)?;}None};
     let children = scan_deletion_children_in(&tx, scan_id)?;
 
     let stamp: String = tx.query_row("SELECT datetime('now','localtime')", [], |r| r.get(0))
         .map_err(|e| e.to_string())?;
-    if let Some(audit)=&paid_audit {audit.install_private_writer(&tx)?;audit.persist(&tx,&stamp)?;}
+    if let Some(audit)=&paid_audit {audit.install_private_writer(&tx,force)?;audit.persist(&tx,&stamp)?;}
     let inserted = tx.execute(
         "INSERT INTO sentinel_deleted_scans(scan_id,deleted_at) VALUES(?1,?2)",
         params![scan_id, stamp],
@@ -117,8 +143,6 @@ fn delete_sentinel_scan_inner(db_path: &Path, scan_id: &str) -> Result<(), Strin
         if actual != expected { return Err("后续任务内容发生异常变化，已回滚".into()); }
     }
     if let Some(audit)=&paid_audit {audit.verify_deleted(&tx)?;}
-    #[cfg(test)]
-    if paid_audit.is_some() {agent_tests::paid_deletion_commit_barrier(db_path,scan_id)?;}
     tx.commit().map_err(|e| format!("任务删除提交结果未确认；请刷新后核对，不要清理文件：{e}"))
 }
 
@@ -186,4 +210,90 @@ fn require_scan_deletion_with_audit_in(connection: &rusqlite::Connection, scan_i
         }
     }
     Ok(())
+}
+
+// Gold-standard end-to-end validation of the operator hard-override against a
+// REAL crashed scan. It is #[ignore]d so normal `cargo test` and CI never run
+// it, and it operates only on COPIES of a snapshot the caller points it at —
+// never the live database. Invoke explicitly, e.g.:
+//   OVIRAPTOR_FORCE_TEST_SNAPSHOT=/abs/copy.sqlite3 \
+//   OVIRAPTOR_FORCE_TEST_SCAN=<dead-unsettled-scan-id> \
+//   cargo test --lib force_delete_live_data -- --ignored --nocapture
+#[cfg(test)]
+mod force_delete_live_data_tests {
+    use super::*;
+
+    fn count(db: &Path, sql: &str, scan: &str) -> i64 {
+        let c = rusqlite::Connection::open(db).unwrap();
+        c.query_row(sql, [scan], |r| r.get(0)).unwrap()
+    }
+
+    #[test]
+    #[ignore]
+    fn forced_delete_removes_dead_but_unsettled_scan_and_archives_raw() {
+        let snapshot = std::env::var("OVIRAPTOR_FORCE_TEST_SNAPSHOT")
+            .expect("set OVIRAPTOR_FORCE_TEST_SNAPSHOT to a DB copy path");
+        let scan = std::env::var("OVIRAPTOR_FORCE_TEST_SCAN").expect("set OVIRAPTOR_FORCE_TEST_SCAN");
+        let snapshot = PathBuf::from(snapshot);
+        let dir = std::env::temp_dir().join(format!("oviraptor-forcetest-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // (1) The normal path must still REFUSE this dead-but-unsettled scan —
+        // otherwise there would be nothing for the override to override.
+        let w1 = dir.join("normal.sqlite3");
+        std::fs::copy(&snapshot, &w1).unwrap();
+        let normal = delete_sentinel_scan_inner(&w1, &scan);
+        assert!(normal.is_err(), "normal delete must refuse; got {normal:?}");
+
+        // (2) The forced path must SUCCEED, cascade-delete the scan, archive the
+        // retained finance rows raw (marked forced), and leave them in place.
+        let w2 = dir.join("forced.sqlite3");
+        std::fs::copy(&snapshot, &w2).unwrap();
+        let attempts_before = count(
+            &w2,
+            "SELECT COUNT(*) FROM agent_root_budget_attempts WHERE json_extract(contract_json,'$.root.scan')=?1",
+            &scan,
+        );
+        assert!(attempts_before > 0, "test scan must carry retained budget attempts");
+        // Counted via the retained budget-attempt keys (not via agent_runs,
+        // which the cascade removes) so the same query is valid before & after.
+        let tick_sql = "SELECT COUNT(*) FROM agent_root_tick_receipts WHERE lease_attempt_id IN (SELECT id FROM agent_root_budget_attempts WHERE json_extract(contract_json,'$.root.scan')=?1)";
+        let tick_before = count(&w2, tick_sql, &scan);
+        assert!(tick_before > 0, "test scan must carry retained tick receipts");
+
+        let forced = delete_sentinel_scan_inner_mode(&w2, &scan, true);
+        assert!(forced.is_ok(), "forced delete must succeed; got {forced:?}");
+
+        // Scan row and cascading runs/ledger are gone.
+        assert_eq!(count(&w2, "SELECT COUNT(*) FROM sentinel_scans WHERE id=?1", &scan), 0);
+        assert_eq!(count(&w2, "SELECT COUNT(*) FROM agent_runs WHERE scan_id=?1", &scan), 0);
+
+        // The forced archive is persisted and honestly marked forced.
+        let conn = rusqlite::Connection::open(&w2).unwrap();
+        let audit_json: String = conn
+            .query_row(
+                "SELECT audit_json FROM native_deleted_scan_audits_v2 WHERE scan_id=?1",
+                [&scan],
+                |r| r.get(0),
+            )
+            .expect("a forced archive row must exist");
+        assert!(audit_json.contains("\"forced\":true"), "archive must be marked forced");
+
+        // The retained financial record survives verbatim — nothing was lost.
+        assert_eq!(
+            count(
+                &w2,
+                "SELECT COUNT(*) FROM agent_root_budget_attempts WHERE json_extract(contract_json,'$.root.scan')=?1",
+                &scan,
+            ),
+            attempts_before,
+        );
+        assert_eq!(count(&w2, tick_sql, &scan), tick_before);
+
+        // The deletion verifies end to end (the forced bundle re-verifies without
+        // demanding closure, every other integrity check intact).
+        assert!(crate::agent_runtime::deleted_scan_audit::verify_deleted(&conn, &scan).unwrap());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

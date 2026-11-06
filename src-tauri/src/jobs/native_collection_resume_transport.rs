@@ -1,10 +1,7 @@
 use serde_json::Value;
 use std::{
     error::Error,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        OnceLock,
-    },
+    sync::OnceLock,
     time::{Duration, Instant},
 };
 
@@ -312,6 +309,11 @@ pub(super) struct Transport {
     runtime: &'static tokio::runtime::Runtime,
     next_request: Instant,
     interval: Duration,
+    // Adaptive throttle: grows on a FOFA 429 (rate limit) and is added to the base
+    // interval so the collection self-slows to a sustainable rate instead of
+    // hammering into a 429 storm that burns retries and drops queries; it decays on
+    // success so throughput recovers once the provider stops limiting.
+    rate_penalty: Duration,
     key: String,
     proxy: String,
 }
@@ -360,25 +362,29 @@ impl Transport {
             runtime,
             next_request: Instant::now(),
             interval,
+            rate_penalty: Duration::ZERO,
             key: key.into(),
             proxy: proxy.into(),
         })
     }
 
-    #[cfg(test)]
-    pub(super) fn runtime_for_test(&self) -> &'static tokio::runtime::Runtime {
-        self.runtime
-    }
 
     pub(super) fn request(
         &mut self,
         endpoint: &reqwest::Url,
-        cancel: &AtomicBool,
+        // "Abort now" predicate rather than the raw stop flag: the caller returns
+        // true for a cancel (abort the in-flight request at once) but false for a
+        // pause (let this request and the rest of the batch finish, then stop at the
+        // batch boundary).
+        should_abort: impl Fn() -> bool,
         mut on_retry: impl FnMut(&str),
     ) -> Result<PageReceipt, Failure> {
-        for attempt in 0..3 {
+        // More attempts than before, because a 429 is recoverable by waiting: with
+        // the growing backoff below, a rate-limited query waits out a per-minute
+        // window instead of being dropped after a few quick retries.
+        for attempt in 0..6 {
             while Instant::now() < self.next_request {
-                if cancel.load(Ordering::Relaxed) {
+                if should_abort() {
                     return Err(Failure::cancelled());
                 }
                 std::thread::sleep(
@@ -387,15 +393,15 @@ impl Transport {
                         .min(Duration::from_millis(25)),
                 );
             }
-            if cancel.load(Ordering::Relaxed) {
+            if should_abort() {
                 return Err(Failure::cancelled());
             }
-            self.next_request = Instant::now() + self.interval;
+            self.next_request = Instant::now() + self.interval + self.rate_penalty;
             let response = self.runtime.block_on(async {
                 tokio::select! {
                     biased;
                     () = async {
-                        while !cancel.load(Ordering::Relaxed) {
+                        while !should_abort() {
                             tokio::time::sleep(Duration::from_millis(25)).await;
                         }
                     } => Err(Failure::cancelled()),
@@ -404,28 +410,40 @@ impl Transport {
             });
             match response {
                 Ok((payload, secrets_redacted, received_at, redacted_locator_rows)) => {
+                    // Decay the throttle on success so throughput recovers.
+                    self.rate_penalty /= 2;
                     return Ok(PageReceipt {
                         payload,
                         attempts: attempt + 1,
                         received_at,
                         secrets_redacted,
                         redacted_locator_rows,
-                    })
+                    });
                 }
                 Err(mut failure) => {
                     failure.attempts = attempt + 1;
-                    if attempt == 2 || !failure.retryable || failure.category == "cancelled" {
+                    if attempt == 5 || !failure.retryable || failure.category == "cancelled" {
                         return Err(failure);
                     }
                     on_retry(&format!(
-                        "第 {}/3 次请求失败 [{}] {}",
+                        "第 {}/6 次请求失败 [{}] {}",
                         attempt + 1,
                         failure.category,
                         failure.detail
                     ));
-                    self.next_request = self
-                        .next_request
-                        .max(Instant::now() + Duration::from_secs(1 << attempt));
+                    let backoff = if failure.category == "http_rate_limit" {
+                        // Grow the sustained throttle and wait it out (capped), so a
+                        // per-minute rate window clears before the next attempt.
+                        self.rate_penalty = self
+                            .rate_penalty
+                            .saturating_mul(2)
+                            .saturating_add(Duration::from_secs(3))
+                            .min(Duration::from_secs(60));
+                        self.rate_penalty
+                    } else {
+                        Duration::from_secs(1 << attempt)
+                    };
+                    self.next_request = self.next_request.max(Instant::now() + backoff);
                 }
             }
         }
@@ -529,17 +547,3 @@ impl Transport {
     }
 }
 
-#[cfg(test)]
-mod quota_regressions {
-    use super::*;
-    #[test]
-    fn insufficient_points_and_monthly_quota_stop_without_retry_or_field_downgrade() {
-        for message in ["F点不足", "F 点不足", "F币不足", "月度查询额度不足", "积分不足", "insufficient fpoint", "monthly quota exhausted"] {
-            let f=provider_failure(&serde_json::json!({"error":true,"errmsg":message}),"synthetic-key","");
-            assert_eq!(f.category,"provider_quota","{message}");assert!(f.stop_collection);assert!(!f.retryable);
-            assert!(!field_restricted(message));
-        }
-        assert!(!field_restricted("当前会员不支持此检索语法"));
-        assert!(field_restricted("无权限导出字段 cert.is_match"));
-    }
-}

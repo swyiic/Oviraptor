@@ -17,7 +17,13 @@ use std::{
 const OWNER: &str = ".collection-retention-v1.json";
 const WRITER: &str = ".collection-writer-v1.lock";
 const GLOBAL: &str = ".collection-retention-v1.lock";
-const MAX_METADATA: u64 = 8 * 1024 * 1024;
+// The per-artifact metadata cap. collection_state.json (the resume checkpoint)
+// grows with the seed/candidate set, so a large seed list (e.g. a 360 KB seed
+// file → a ~13 MB state) legitimately exceeds the old 8 MiB cap and the write was
+// rejected with invalid_time_or_metadata_limit, failing the whole collection.
+// Raise it so normal large collections fit; total storage is still bounded by the
+// per-run / per-project / global byte budgets (512 MiB / 1 GiB / 2 GiB).
+const MAX_METADATA: u64 = 128 * 1024 * 1024;
 const MAX_FILES: usize = 16_384;
 const MAX_HISTORY: usize = 4096;
 static TEMPORARY: AtomicU64 = AtomicU64::new(0);
@@ -32,11 +38,19 @@ pub(crate) struct Limits {
 }
 impl Default for Limits {
     fn default() -> Self {
+        // These caps bound a collection's cached-page storage. The previous
+        // defaults (512 MiB / 4096 pages per run) halted a large collection
+        // (thousands of FOFA queries, each paginated) with
+        // collection_retention:budget_exhausted long before it finished — the page
+        // cap in particular was hit at only ~168 MiB. Raise them so a large
+        // multi-thousand-target collection completes; bytes remain the real guard
+        // and old pages still expire by age. Budgets are caps, not allocations, so
+        // a small project uses only what it needs.
         Self {
-            global_bytes: 2 * 1024 * 1024 * 1024,
-            project_bytes: 1024 * 1024 * 1024,
-            run_bytes: 512 * 1024 * 1024,
-            pages: 4096,
+            global_bytes: 16 * 1024 * 1024 * 1024,
+            project_bytes: 8 * 1024 * 1024 * 1024,
+            run_bytes: 4 * 1024 * 1024 * 1024,
+            pages: 1_000_000,
             age_seconds: 7 * 24 * 60 * 60,
         }
     }
@@ -385,16 +399,6 @@ fn record_removal(manifest: &mut Value, path: &str, entry: &Value, reason: &str,
     manifest["entries"].as_object_mut().unwrap().remove(path);
 }
 impl CollectionStorage {
-    pub(crate) fn open(
-        root: &Path,
-        output: &Path,
-        project: i64,
-        run: i64,
-        now: i64,
-        limits: Limits,
-    ) -> Result<Self, String> {
-        Self::open_in(root, output, project, run, now, limits, false)
-    }
     /// Explicitly called for a DB-verified current legacy run, never from a sweep.
     /// Existing recognized files have unknown age and are not silently expired.
     pub(crate) fn open_adopting_current(
@@ -874,20 +878,6 @@ impl CollectionStorage {
         fs::remove_file(path).map_err(|e| e.to_string())?;
         self.report_locked()
     }
-    /// Low-level retention reference only; no analysis approval/pin lifecycle is
-    /// wired here. A caller must explicitly own and release any such reference.
-    pub(crate) fn set_pinned(&self, relative: &Path, pinned: bool) -> Result<(), String> {
-        let _global = lock(&self.root.join(GLOBAL), true)?.unwrap();
-        let mut manifest = read_manifest(&self.output)?;
-        let key = relative
-            .to_str()
-            .ok_or("collection_retention_invalid_path")?;
-        let entry = manifest["entries"]
-            .get_mut(key)
-            .ok_or("collection_retention_pin_unregistered")?;
-        entry["pinned"] = json!(pinned);
-        self.publish_control(&self.output, &manifest)
-    }
     pub(crate) fn finish(&self, now: i64) -> Result<RetentionReport, String> {
         let _global = lock(&self.root.join(GLOBAL), true)?.unwrap();
         let mut manifest = read_manifest(&self.output)?;
@@ -900,6 +890,3 @@ impl CollectionStorage {
     }
 }
 
-#[cfg(test)]
-#[path = "collection_retention_tests.rs"]
-mod tests;

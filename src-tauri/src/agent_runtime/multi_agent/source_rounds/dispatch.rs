@@ -62,20 +62,6 @@ pub(crate) fn prepare_next_authorized(
     Ok(result)
 }
 
-/// One durable claim per round. A second caller gets the existing receipt or
-/// an unknown-outcome error, never permission to repeat provider I/O.
-#[cfg(test)]
-pub fn start_authorized(
-    db: &Connection,
-    lease: &CoordinatorLease,
-    child: &ScheduledChild,
-    number: i64,
-    request: &Value,
-    reserved_tokens: i64,
-    check: impl Fn(&Connection) -> Result<(), String>,
-) -> Result<Start, String> {
-    start_inner(db,lease,child,number,request,reserved_tokens,check,false).map(|(start,_)|start)
-}
 
 // Only the actual gateway keeps this non-cloneable owner through SDK and local
 // publication. Financial PendingRound clones never carry execution ownership.

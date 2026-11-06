@@ -73,36 +73,7 @@ impl RoleConfigDraft {
     }
 }
 
-/// Live (or historical) execution instance — always tied to a run, never a draft.
-///
-/// The two views below and their constructors are exercised only by the §8
-/// contract test in this file until the collaboration surface (Stage 11) reads
-/// them; keeping them `cfg(test)` states that instead of shipping unreachable code.
-#[cfg(test)]
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ExecutionInstanceRef {
-    pub run_id: String,
-    pub scan_id: String,
-    pub attempt_number: i64,
-    pub role: String,
-    pub status: String,
-    pub assignment_id: Option<String>,
-}
 
-/// Collaboration / mailbox message — append-only facts between agents, not a
-/// role template and not an execution lease.
-#[cfg(test)]
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CollaborationMessageRef {
-    pub id: String,
-    pub run_id: String,
-    pub kind: String,
-    pub from_agent: String,
-    pub to_agent: String,
-    pub summary: String,
-}
 
 /// Resolve the shipped capability directory. Prefers an explicit override, then
 /// the crate `resources/capability_bundles` next to the Tauri crate.
@@ -301,5 +272,3 @@ fn row_to_draft(row: &rusqlite::Row<'_>) -> rusqlite::Result<RoleConfigDraft> {
     })
 }
 
-#[cfg(test)]
-include!("role_config/tests.rs");

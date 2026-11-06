@@ -48,14 +48,6 @@ fn execute_source_tool_assignment(
     })
 }
 
-#[cfg(test)]
-fn run_source_tool_phases(
-    connection: &rusqlite::Connection,
-    context: &SpecialistTransportContext<'_>,
-    lease: &crate::agent_runtime::multi_agent::lease::CoordinatorLease,
-) -> Result<Vec<JsonValue>, String> {
-    run_source_tool_phases_from(connection, context, lease, 0)
-}
 
 fn run_source_tool_phases_from(
     connection: &rusqlite::Connection,
