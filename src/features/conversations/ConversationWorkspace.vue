@@ -181,7 +181,8 @@ function submit(event: KeyboardEvent) {
         </div>
       </aside>
     </Teleport>
-    <div v-if="!selectedProject" class="conversation-welcome">
+    <AgentHostChat v-if="useAgentHostChat && agentHostClient && agentHostSettings" :client="agentHostClient" :settings="agentHostSettings" :project-name="selectedProject?.name||tr('直接对话','Direct chat')" :project-id="selectedProject?.id" :personal="!selectedProject" :history-search-request="historySearchRequest" :draft-request="draftRequest" @draft-applied="emit('draftApplied',$event)" @settings-changed="value => (agentHostSettings = value)" />
+    <div v-else-if="!selectedProject" class="conversation-welcome">
       <div class="conversation-welcome-mark"><MessageSquare :size="30"/></div>
       <p class="conversation-eyebrow">OVIRAPTOR</p>
       <h2>{{tr('从一个好问题开始','Start with a good question')}}</h2>
@@ -193,7 +194,6 @@ function submit(event: KeyboardEvent) {
       </template>
       <template v-else><button class="button primary" @click="emit('createProject')"><Plus :size="16"/>{{tr('创建工作空间','Create workspace')}}</button><small class="conversation-muted">{{tr('对话、资产和扫描共享同一个工作空间。','One workspace for conversations, assets, and scans.')}}</small></template>
     </div>
-    <AgentHostChat v-else-if="useAgentHostChat && agentHostClient && agentHostSettings" :client="agentHostClient" :settings="agentHostSettings" :project-name="selectedProject.name" :project-id="selectedProject.id" :history-search-request="historySearchRequest" :draft-request="draftRequest" @draft-applied="emit('draftApplied',$event)" @settings-changed="value => (agentHostSettings = value)" />
     <div v-else class="conversation-main">
       <header class="conversation-header">
         <div class="conversation-heading"><h2>{{snapshot?.conversation.title||tr('新想法，新对话','A fresh conversation')}}</h2><span>{{snapshot?.replyAvailability.model||tr('本地对话','Local conversations')}} · {{selectedProject.name}}<small v-if="snapshot?.conversation.titleSource==='ai'" class="conversation-title-source">{{tr('AI 标题','AI title')}}</small></span></div>

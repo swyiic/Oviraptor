@@ -22,7 +22,7 @@ import ConversationFiles from './ConversationFiles.vue';
 import { useToolTimeline } from '../toolTimeline';
 import AgentToolTimelineList from './AgentToolTimelineList.vue';
 
-const props = defineProps<{ client: AgentHostChatClient; settings: AgentHostSettings; projectName: string; projectId?: number; historySearchRequest?:number; draftRequest?:DiscoveryChatRequest }>();
+const props = defineProps<{ client: AgentHostChatClient; settings: AgentHostSettings; projectName: string; projectId?: number; /** No named workspace: bind to the reserved personal/direct-chat space instead of `projectId`. */ personal?: boolean; historySearchRequest?:number; draftRequest?:DiscoveryChatRequest }>();
 const emit = defineEmits<{ draftApplied:[id:number]; settingsChanged: [settings: AgentHostSettings] }>();
 const { tr } = useI18n();
 
@@ -290,14 +290,14 @@ async function readMessages() {
 async function loadProject() {
   const generation = ++projectGeneration;
   ++messageGeneration;
-  const { projectName, projectId } = props;
+  const { projectName, projectId, personal } = props;
   hostProjectId.value = undefined; selectedId.value = undefined; messages.value = []; task.value = null; conversations.value = [];
   grantPrompt.value = null; runtimePermission.value = null; running.value = false; draft.value = "";
   permissionsOpen.value = false; ++permissionGeneration; savedFilePermissions.value = []; workspaceFullAccess.value=false; savedAppPermissions.value = []; historyQuery.value = ""; finderOpen.value=false;
   loadingProject.value = true;
   error.value = "";
   try {
-    const boundId = await props.client.ensureProject(projectName, projectId);
+    const boundId = personal ? (await props.client.ensurePersonalProject()).id : await props.client.ensureProject(projectName, projectId);
     if (disposed || generation !== projectGeneration) return;
     const listed = await props.client.conversations(boundId);
     if (disposed || generation !== projectGeneration) return;
@@ -605,7 +605,7 @@ function handleEvent(event: AgentHostEvent) {
 }
 const stop = props.client.events(handleEvent);
 onBeforeUnmount(() => { ++permissionGeneration; disposed = true; ++projectGeneration; ++messageGeneration; stop(); });
-watch(() => [props.projectName, props.projectId], () => void loadProject(), { immediate: true, flush: "sync" });
+watch(() => [props.projectName, props.projectId, props.personal], () => void loadProject(), { immediate: true, flush: "sync" });
 watch(running, value => { if (!value) heartbeat.value = undefined; });
 watch(selectedId, (id,previous) => { if(previous)conversationDrafts.set(previous,draft.value);++messageGeneration;messageLoad=undefined;messages.value=[];loadingMessages.value=false;loadingEarlier.value=false;historyLoaded=false;earlierCursor=undefined;hasEarlier.value=false;followingTail.value=true;unreadBelow.value=false;error.value='';discoveryPanelOpen.value=!!props.draftRequest?.analysis;draft.value=id?conversationDrafts.get(id)||"":""; permissionsOpen.value = false; ++permissionGeneration; resetActivity(); task.value = null; cancellingChildren.value = []; grantPrompt.value = null; runtimePermission.value = null; running.value = false; void loadMessages(); void loadChain(); void restoreStatus(); }, { flush: "sync" });
 watch([()=>props.draftRequest,loadingProject,running,continuingTask,hostProjectId],()=>void applyDiscoveryDraft(),{immediate:true});
@@ -615,6 +615,7 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
 <template>
   <Teleport defer to="#conversation-history">
     <nav class="ahc-side-list" :aria-label="tr('聊天记录', 'Chat history')" data-testid="agent-host-history">
+      <p v-if="personal" class="ahc-personal-badge" data-testid="agent-host-personal-badge">{{ tr('直接对话 · 未挂工作空间', 'Direct chat · no workspace') }}</p>
       <button type="button" class="ahc-side-new" :disabled="loadingProject" @click="newConversation"><Plus :size="16" />{{ tr('新对话', 'New chat') }}</button>
       <label class="ahc-history-search"><Search :size="14" /><input v-model="historyQuery" type="search" :placeholder="tr('搜索对话', 'Search chats')" :aria-label="tr('搜索对话', 'Search chats')" /><button type="button" :aria-label="tr('查找全部会话','Find all conversations')" title="⌘K / Ctrl+K" @click="finderOpen=true">⌘K</button></label>
       <div class="ahc-history-heading"><span>{{ tr('对话', 'Chats') }}</span><button type="button" @click="finderOpen=true">{{tr(`全部 ${conversations.length}`,`All ${conversations.length}`)}}</button></div>
@@ -759,6 +760,7 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
 <style scoped>
 .ahc-side-list{display:flex;flex-direction:column;height:100%;min-height:0;gap:10px;padding:4px 0 12px;overflow:hidden}
 .ahc-side-new{display:flex;align-items:center;gap:8px;flex-shrink:0;width:100%;padding:10px;border:1px solid var(--line,#e5e6e1);border-radius:9px;background:var(--app-surface,#fff);color:var(--app-ink,#252624);font:inherit;font-size:12px;cursor:pointer}
+.ahc-personal-badge{margin:0;flex-shrink:0;font-size:var(--text-micro);font-weight:600;color:var(--blue,#416b9c);background:color-mix(in srgb,var(--blue,#416b9c) 10%,transparent);border-radius:7px;padding:4px 9px}
 .ahc-history-search{display:flex;align-items:center;gap:7px;flex-shrink:0;padding:0 8px;color:var(--app-muted,#72746f)}
 .ahc-history-search input{min-width:0;width:100%;height:28px;padding:0;border:0!important;background:transparent!important;box-shadow:none!important;font:inherit;font-size:11px;color:inherit}
 .ahc-history-search button{flex-shrink:0;padding:3px 5px;border:1px solid var(--line);border-radius:5px;background:transparent;color:inherit;font:inherit;font-size:var(--text-micro);cursor:pointer}.ahc-history-heading button{border:0;padding:0;background:transparent;color:inherit;font:inherit;cursor:pointer}.ahc-history-heading button:hover{color:var(--blue)}

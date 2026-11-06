@@ -60,11 +60,15 @@ export function createAgentHostChatClient(endpoint: AgentHostEndpoint, fetchImpl
         });
         return project.id;
       }
-      const { items } = await request<{ items: { id: number; name: string }[] }>("/api/projects");
-      const found = items.find(item => item.name === name);
+      const { items } = await request<{ items: { id: number; name: string; kind?: string }[] }>("/api/projects");
+      // Never fall back onto the reserved personal/direct-chat row by a name collision.
+      const found = items.find(item => item.kind !== "personal" && item.name === name);
       if (found) return found.id;
       return (await request<{ id: number }>("/api/projects", { method: "POST", body: JSON.stringify({ name }) })).id;
     },
+    /** The reserved "direct chat" space (agent-at-top): conversations started with no named
+     *  workspace land here. Ensures it exists and returns its (stable) host project. */
+    ensurePersonalProject: () => request<{ id: number; name: string; kind: string; externalId: string | null; createdAt: string }>("/api/projects/personal"),
     conversations: (projectId: number) => request<{ items: AgentHostConversation[] }>(`/api/conversations?projectId=${projectId}`).then(r => r.items),
     createConversation: (projectId: number, title?: string) => request<AgentHostConversation>("/api/conversations", { method: "POST", body: JSON.stringify({ projectId, title }) }),
     /** The conversation a scan task reports to; the Host creates and binds one when none exists. */
