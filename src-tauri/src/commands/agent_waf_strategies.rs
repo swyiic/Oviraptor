@@ -5,7 +5,13 @@
 use crate::agent_runtime::model::{transport, TransportError, TransportRequest};
 use std::sync::Arc;
 
-const WAF_MODEL_ROUNDS: usize = 12;
+// Bounded WAF-efficacy attempts (design C5). A hard cap on same-host bypass
+// tries; the loop never exceeds it and never auto-continues past it — more
+// attempts are a separate operator-authorized action, not something this loop
+// decides. Rate-limited between tries so the probe can never become rapid-fire /
+// DoS-like. Default ≤8 per design §4b.
+const WAF_BYPASS_ATTEMPT_CAP: usize = 8;
+const WAF_BYPASS_RATE_LIMIT: Duration = Duration::from_millis(1500);
 
 struct BypassHit {
     curl: String,
@@ -131,7 +137,11 @@ fn bounded_waf_bypass(
     let snippet: String = body.chars().take(800).collect();
     let mut transcript = format!("原始请求被拦截。url={url} status={status} body={snippet}");
     let mut trace = Vec::new();
-    for round in 1..=WAF_MODEL_ROUNDS {
+    for round in 1..=WAF_BYPASS_ATTEMPT_CAP {
+        // Rate-limit: never fire bypass tries back-to-back (anti-DoS, design C5).
+        if round > 1 {
+            std::thread::sleep(WAF_BYPASS_RATE_LIMIT);
+        }
         let prompt = format!("{transcript}\n请给出下一发同主机请求。若应停止，stop=true。");
         let text = match ask_model(&profile, &prompt) {
             Ok(text) => text,
@@ -179,12 +189,25 @@ fn bounded_waf_bypass(
         }
         transcript = format!("上一轮仍被拦截。method={} url={} status={code} body={preview} reason={}", proposal.method, proposal.url, proposal.reason);
     }
-    WafBypassOutcome { hit: None, note: "模型在同主机建议后仍被拦截，或已主动停止。不使用写死规则，不破解验证码。".into() }
+    WafBypassOutcome {
+        hit: None,
+        note: format!(
+            "已达有界 WAF 尝试上限（{WAF_BYPASS_ATTEMPT_CAP} 次）仍被拦截，或模型主动停止。不自动继续、不使用写死规则、不破解验证码；如需更多尝试须 operator 另行授权。"
+        ),
+    }
 }
 
 #[cfg(test)]
 mod waf_model_tests {
-    use super::{parse_proposal, same_host};
+    use super::{parse_proposal, same_host, WAF_BYPASS_ATTEMPT_CAP, WAF_BYPASS_RATE_LIMIT};
+
+    #[test]
+    fn attempt_cap_is_bounded_and_rate_limited() {
+        // Design C5: a small bounded cap (≤8) and a non-zero rate limit so the
+        // efficacy probe can never become unbounded or rapid-fire / DoS-like.
+        assert!(WAF_BYPASS_ATTEMPT_CAP >= 1 && WAF_BYPASS_ATTEMPT_CAP <= 8);
+        assert!(!WAF_BYPASS_RATE_LIMIT.is_zero());
+    }
 
     #[test]
     fn rejects_other_hosts() {
