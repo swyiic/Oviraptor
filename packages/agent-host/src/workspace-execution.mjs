@@ -36,7 +36,7 @@ function sandbox(work,runtime,script,args,readRoots=[]){
 }
 export async function executeWorkspaceScript(root,input,{executionRoot,assertAuthorized,write,readRoots=[]}){
  if(!input||!['node','python'].includes(input.runtime)||typeof input.path!=='string'||!input.path||isAbsolute(input.path)||input.path.split('/').some(p=>p==='..'||p==='.'||!p)||/[\\\u0000-\u001f]/u.test(input.path)||!Array.isArray(input.args??[])||(input.args??[]).length>32||(input.args??[]).some(a=>typeof a!=='string'||a.length>4096)||Object.keys(input).some(k=>!['path','runtime','args','timeoutMs'].includes(k)))throw error('workspace_execution_invalid');
- const timeoutMs=input.timeoutMs??30000;if(!Number.isSafeInteger(timeoutMs)||timeoutMs<100||timeoutMs>60000)throw error('workspace_execution_invalid');
+ const timeoutMs=input.timeoutMs??30000;if(!Number.isSafeInteger(timeoutMs)||timeoutMs<100||timeoutMs>1800000)throw error('workspace_execution_invalid');
  if(!executionRoot)throw error('workspace_execution_unsupported');
  assertAuthorized();const before=await tree(root);if(!before.has(input.path))throw error('workspace_script_unavailable');
  const valid=input.runtime==='node'?['.js','.mjs','.cjs']:['.py'];if(!valid.includes(extname(input.path).toLowerCase()))throw error('workspace_execution_invalid');
@@ -58,7 +58,7 @@ export async function executeWorkspaceScript(root,input,{executionRoot,assertAut
    child.on('close',(exitCode,signal)=>{finish();if(settled)return;settled=true;const out=boundedScrubbedOutput(Buffer.concat(stdoutChunks).toString('utf8')),err=boundedScrubbedOutput(Buffer.concat(stderrChunks).toString('utf8'));resolveResult({exitCode,signal,stdout:out.text,stderr:err.text,truncated:out.truncated||err.truncated,timedOut,cancelled,success:exitCode===0&&!timedOut&&!cancelled});});
   });
   const files=[],conflicts=[],deleted=[],outputs=[];
-  if(result.success){assertAuthorized();const after=await tree(work),current=await tree(root);for(const[path,entry]of after){if(path.startsWith('.tmp/'))continue;if(before.get(path)?.sha256===entry.sha256)continue;if(current.get(path)?.sha256!==before.get(path)?.sha256){conflicts.push(path);continue;}if(entry.bytes.includes(0)){conflicts.push(path);continue;}if(entry.bytes.length>256*1024){conflicts.push(path);continue;}const content=entry.bytes.toString('utf8');if(!Buffer.from(content).equals(entry.bytes)){conflicts.push(path);continue;}outputs.push([path,content]);}for(const path of before.keys())if(!after.has(path))deleted.push(path);}
+  if(result.success){assertAuthorized();const after=await tree(work),current=await tree(root);for(const[path,entry]of after){if(path.startsWith('.tmp/'))continue;if(before.get(path)?.sha256===entry.sha256)continue;if(current.get(path)?.sha256!==before.get(path)?.sha256){conflicts.push(path);continue;}if(entry.bytes.includes(0)){conflicts.push(path);continue;}if(entry.bytes.length>16*1024*1024){conflicts.push(path);continue;}const content=entry.bytes.toString('utf8');if(!Buffer.from(content).equals(entry.bytes)){conflicts.push(path);continue;}outputs.push([path,content]);}for(const path of before.keys())if(!after.has(path))deleted.push(path);}
   if(result.success&&!conflicts.length){assertAuthorized();for(const[path,content]of outputs)files.push(await write(path,content));}
   return {...result,files,conflicts,deletedNotApplied:deleted,success:result.success&&conflicts.length===0,isolated:true,networkAllowed:false,originalFilesChanged:files.length>0};
  }finally{await rm(work,{recursive:true,force:true});}
