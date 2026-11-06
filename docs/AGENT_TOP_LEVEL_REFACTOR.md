@@ -40,6 +40,10 @@
 
 ### D3 — 工具库落点与读写路径（推荐：Tauri DB 表 + host 只读注入，沿用 research_cards 那套）
 
+> **存储单位已定（用户拍板）**：存**参数化"骨架工具"**(目标无关构件,key/iv/偏移/算法作运行时参数),**不是整脚本原样复用**(那是"死抄作业"),也不是冻死的内置集。来源混合:一小撮通用骨架内置 + agent 写出新骨架时"去具体化"再入库。
+>
+> **P2b 已落地**(commit 110e759):host 模块 `agent-tools.mjs` — 3 个内置骨架(burp carver / AES-DES 对称解密台 / JS 加密点定位器)+ 读已批准骨架 + 按 algoTags/指纹匹配当前轮线索 + advisory 块(只列匹配项、不塞代码)+ `recall_agent_tool(id)` 取回骨架;注入在 service.mjs(紧随技法卡块)。复用前强制沙箱重跑验证。95 测试过。**剩**:agent 侧"去具体化沉淀"(目前靠 operator 经 UI `ingest_agent_tool` 入库)。
+
 - 存储：Tauri app DB 新表 `agent_tools`（跨 project，全局）。字段：`id, title, language(node|python), code, target_fingerprint, algo_tags(JSON), source_conversation_id, verified(bool), status(pending|approved|rejected), created_at`。
 - **写入（agent 沉淀）**：agent 在某空间验证可用后，调一个工具 `sink_agent_tool`（host 工具 → 经 scan/cert bridge 落到 Tauri DB，或 host 直写一个 host 侧镜像；二选一，见开放决策 Q3），脚本正文 + 自评指纹入库，默认 `pending`。
 - **写入（操作员策展）**：UI 也能从某空间工作区挑一个脚本"入库"，或编辑/审批。
