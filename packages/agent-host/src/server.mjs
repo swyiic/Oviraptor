@@ -211,6 +211,12 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
           const input = await body(request);
           return json(host.createConversationFromRequest(input));
         }
+        if (parts[1] === 'conversations' && parts.length === 4 && parts[3] === 'workspace' && method === 'GET') {
+          return json({ files: await host.workspaceFiles(decodeURIComponent(parts[2])) });
+        }
+        if (parts[1] === 'conversations' && parts.length === 5 && parts[3] === 'workspace' && parts[4] === 'file' && method === 'GET') {
+          return json(await host.workspaceFileContent(decodeURIComponent(parts[2]), url.searchParams.get('path') || ''));
+        }
         if (parts[1] === 'conversations' && parts.length === 4 && parts[3] === 'attach' && method === 'POST') {
           return json(host.attachConversationToWorkspace(decodeURIComponent(parts[2]), (await body(request)).projectId));
         }

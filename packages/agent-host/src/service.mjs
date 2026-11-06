@@ -2,9 +2,9 @@ const settledWorkspaceExecutions = new WeakSet();
 import { proxyFetch } from './net-proxy.mjs';
 import { HostNetworkSettings } from './network-settings.mjs';
 import { createHash, randomUUID, randomBytes } from 'node:crypto';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readdir, stat, readFile } from 'node:fs/promises';
 import { existsSync, writeFileSync } from 'node:fs';
 import { HostStore, hostError, boundedText, RETRYABLE_HOST_CODES, deriveConversationTitle, isPlaceholderConversationTitle } from './store.mjs';
 import { desktopAssetDbPath, isDesktopAssetRead, DesktopAssetSynchronizer } from './desktop-assets.mjs';
@@ -864,6 +864,35 @@ export class AgentHost {
     if (active && (!run || run.taskId !== parent.id || run.id !== input.parentRunId)) throw hostError('host_child_scope_unavailable', 409);
     if (active) { await this.subagents.stop(active, 'host_child_cancelled'); await active.completion; }
     return { task: this.task(conversationId, { taskId: parent.id, projectId: input.projectId }), childTask: this.task(conversationId, { taskId: child.id, projectId: input.projectId }) };
+  }
+  // Operator surface for the agent's workspace scripts/artifacts (restructure §F).
+  #agentWorkspaceRoot(conversationId) { const conversation = this.store.conversation(conversationId); return join(this.dataDir, 'workspaces', String(conversation.projectId), 'agent'); }
+  async workspaceFiles(conversationId) {
+    const root = this.#agentWorkspaceRoot(conversationId);
+    const out = [];
+    const walk = async (dir, rel) => {
+      if (out.length >= 500) return;
+      let entries; try { entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
+      for (const e of entries) {
+        if (e.name.startsWith('.')) continue;
+        const abs = join(dir, e.name), r = rel ? `${rel}/${e.name}` : e.name;
+        if (e.isDirectory()) { await walk(abs, r); }
+        else if (e.isFile()) { try { const st = await stat(abs); out.push({ path: r, bytes: st.size, modifiedAt: st.mtime.toISOString() }); } catch { /* skip */ } }
+        if (out.length >= 500) break;
+      }
+    };
+    await walk(root, '');
+    return out.sort((a, b) => a.path.localeCompare(b.path));
+  }
+  async workspaceFileContent(conversationId, relPath) {
+    const root = this.#agentWorkspaceRoot(conversationId);
+    const abs = resolve(root, String(relPath || ''));
+    if (abs !== root && !abs.startsWith(root + sep)) throw hostError('host_workspace_path_denied', 403);
+    const st = await stat(abs).catch(() => null);
+    if (!st || !st.isFile()) throw hostError('host_workspace_path_denied', 404);
+    const MAX = 2 * 1024 * 1024;
+    const text = (await readFile(abs, 'utf8'));
+    return { path: relPath, bytes: st.size, truncated: text.length > MAX, content: text.slice(0, MAX) };
   }
   attachConversationToWorkspace(conversationId, projectId) {
     if (this.runs.has(conversationId) || [...this.inflightEffects.values()].some(effect => effect.conversationId === conversationId)) throw hostError('host_reply_already_running', 409);
