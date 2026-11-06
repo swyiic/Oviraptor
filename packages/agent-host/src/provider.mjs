@@ -1502,10 +1502,12 @@ export class OpenAiCompatibleRuntime {
     if (unavailableThisTurn.size) session.messages.push({ role:'user', _hostAuthorizationContext:true, content:`Host: 本轮权限核对后仍不可用的具体工具：${JSON.stringify([...unavailableThisTurn])}。${authorizationContext?.authorizationDeclined ? '用户未批准这些新权限，本轮不得再次询问或调用。' : '授权核对尚未使这些工具可用，本轮不得重复询问。'}这不影响当前 tools/list 中其余已获准的读取与操作。先完成可做的部分，再准确说明这些工具对应的缺口；不能声称全项目无权限，也不能冒充执行。` });
     const emit = event => { try { this.onEvent({ sessionId, turnId, ...event }); } catch { /* observer isolated */ } };
     let holdNote = '';
+    let innerSeq = 0;
     const emitInner = (phase, hold = '') => {
       if (phase === 'model') holdNote = hold;
       else if (hold) holdNote = hold;
-      emit({ type: 'inner', ...publicInnerState(session.harness, { phase, hold: phase === 'model' ? hold : (hold || holdNote), compressed: sawCompression }) });
+      // seq + at let the UI order 'thinking' snapshots precisely between tool steps.
+      emit({ type: 'inner', seq: ++innerSeq, at: Date.now(), ...publicInnerState(session.harness, { phase, hold: phase === 'model' ? hold : (hold || holdNote), compressed: sawCompression }) });
     };
     if (sawCompression && this.host?.recordSummary && session.conversationId) {
       const sourceIds = session.messages.flatMap(message => [message.tool_call_id, message._hostUserText].filter(Boolean)).slice(0, 32);

@@ -115,7 +115,7 @@ function reconciliationMatches(result, interrupted) {
 
 export function startTaskEvidence(task, runId, toolName, toolCallId, { readOnly = false, operationId = '', argumentDigest: digest = '' } = {}) {
   if (task.evidence.length >= 1024) fail('host_task_capacity_reached');
-  const evidence = { id: randomUUID(), sequence: task.evidence.length + 1, runId, toolCallId: text(toolCallId, 100), toolName: text(toolName, 160), readOnly, operationId: text(operationId, 128), argumentDigest: /^[a-f0-9]{64}$/.test(digest) ? digest : '', status: 'running', provenance: 'host-tool-result', startedAt: now(), summary: '' };
+  const evidence = { id: randomUUID(), sequence: task.evidence.length + 1, runId, toolCallId: text(toolCallId, 100), toolName: text(toolName, 160), readOnly, operationId: text(operationId, 128), argumentDigest: /^[a-f0-9]{64}$/.test(digest) ? digest : '', status: 'running', provenance: 'host-tool-result', startedAt: now(), summary: '', previewText: '' };
   return { task: { ...task, status: task.status === 'completed' ? 'running' : task.status, updatedAt: now(), evidence: [...task.evidence, evidence] }, evidenceId: evidence.id };
 }
 
@@ -124,7 +124,7 @@ export function finishTaskEvidence(task, evidenceId, { ok, summary, code, outcom
   return { ...task, updatedAt: now(), ...(outcomeUnknown ? { outcomeUnknown: true, status: task.status === 'completed' ? 'interrupted' : task.status } : {}), evidence: task.evidence.map(item => {
     if (item.id !== evidenceId) return item;
     const { resolvedBy: _previousResolution, reconciliation: _ignored, ...previous } = item;
-    return { ...previous, status: ok ? 'completed' : 'failed', summary: text(summary, 1600), ...(code ? { code: text(code, 100) } : {}), ...(rawRecordId ? { rawRecordId: text(rawRecordId, 80) } : {}), finishedAt: now(), outcomeUnknown: Boolean(outcomeUnknown), ...(item.readOnly && bound ? { reconciliation: bound } : {}) };
+    return { ...previous, status: ok ? 'completed' : 'failed', summary: text(summary, 1600), previewText: String(summary ?? '').replace(/\s+/g, ' ').trim().slice(0, 200), ...(code ? { code: text(code, 100) } : {}), ...(rawRecordId ? { rawRecordId: text(rawRecordId, 80) } : {}), finishedAt: now(), outcomeUnknown: Boolean(outcomeUnknown), ...(item.readOnly && bound ? { reconciliation: bound } : {}) };
   }) };
 }
 
