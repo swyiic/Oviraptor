@@ -232,7 +232,9 @@ fn tree_size(root: &Path, cap: u64) -> u64 {
 fn apply_rlimits(limits: &SandboxLimits) -> std::io::Result<()> {
     // Runs in the forked child before exec. setrlimit is a plain syscall and is
     // safe to call here.
-    let set = |resource: libc::c_int, value: u64| -> std::io::Result<()> {
+    // `resource` infers from setrlimit: c_int on macOS, __rlimit_resource_t (u32)
+    // on Linux — so the libc::RLIMIT_* constants and setrlimit agree on both.
+    let set = |resource, value: u64| -> std::io::Result<()> {
         let rl = libc::rlimit {
             rlim_cur: value as libc::rlim_t,
             rlim_max: value as libc::rlim_t,
