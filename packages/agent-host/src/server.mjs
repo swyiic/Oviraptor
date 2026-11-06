@@ -211,7 +211,10 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
           const input = await body(request);
           return json(host.createConversationFromRequest(input));
         }
-        if (parts[1] === 'conversations' && parts.length === 4 && parts[3] === 'workspace' && method === 'GET') {
+        // Agent workspace file LISTING (增量2/3). Distinct path from the len-4
+        // /workspace below (chatFiles.workspace, the Finder-reveal) so the two
+        // don't collide — both used to match conversations/len4/workspace/GET.
+        if (parts[1] === 'conversations' && parts.length === 5 && parts[3] === 'workspace' && parts[4] === 'files' && method === 'GET') {
           return json({ files: await host.workspaceFiles(decodeURIComponent(parts[2])) });
         }
         if (parts[1] === 'conversations' && parts.length === 5 && parts[3] === 'workspace' && parts[4] === 'file' && method === 'GET') {
