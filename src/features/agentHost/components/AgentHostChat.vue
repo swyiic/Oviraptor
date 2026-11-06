@@ -12,6 +12,7 @@ import ConversationMessage from "../../conversations/ConversationMessage.vue";
 import AgentPermissionMode from "./AgentPermissionMode.vue";
 import AgentTaskCollaboration from "./AgentTaskCollaboration.vue";
 import DiscoveryAssistPanel from "./DiscoveryAssistPanel.vue";
+import AgentWorkspacePanel from "./AgentWorkspacePanel.vue";
 import type { DiscoveryChatRequest } from "../../assets/discoveryAnalysis";
 import ConversationFinder from '../../conversations/ConversationFinder.vue';
 import type { AgentHostEvent } from "../chatClient";
@@ -135,7 +136,7 @@ let messageGeneration = 0;
 let disposed = false;
 const error = ref("");
 const transcript = ref<HTMLElement>();
-const followingTail = ref(true), unreadBelow = ref(false), loadingMessages = ref(false), loadingEarlier = ref(false), hasEarlier = ref(false), discoveryPanelOpen = ref(false);
+const followingTail = ref(true), unreadBelow = ref(false), loadingMessages = ref(false), loadingEarlier = ref(false), hasEarlier = ref(false), discoveryPanelOpen = ref(false), workspacePanelOpen = ref(false);
 let earlierCursor: string | undefined, historyLoaded = false;
 let messageLoad: {id:string;projectId:number;promise:Promise<void>} | undefined;
 function observeTranscript(){const el=transcript.value;if(el){followingTail.value=el.scrollHeight-el.scrollTop-el.clientHeight<80;if(followingTail.value)unreadBelow.value=false;}}
@@ -630,7 +631,7 @@ const stop = props.client.events(handleEvent);
 onBeforeUnmount(() => { ++permissionGeneration; disposed = true; ++projectGeneration; ++messageGeneration; stop(); });
 watch(() => [props.projectName, props.projectId, props.personal], () => void loadProject(), { immediate: true, flush: "sync" });
 watch(running, value => { if (!value) heartbeat.value = undefined; });
-watch(selectedId, (id,previous) => { if(previous)conversationDrafts.set(previous,draft.value);++messageGeneration;messageLoad=undefined;messages.value=[];loadingMessages.value=false;loadingEarlier.value=false;historyLoaded=false;earlierCursor=undefined;hasEarlier.value=false;followingTail.value=true;unreadBelow.value=false;error.value='';discoveryPanelOpen.value=!!props.draftRequest?.analysis;draft.value=id?conversationDrafts.get(id)||"":""; permissionsOpen.value = false; ++permissionGeneration; resetActivity(); task.value = null; cancellingChildren.value = []; grantPrompt.value = null; runtimePermission.value = null; running.value = false; void loadMessages(); void loadChain(); void restoreStatus(); }, { flush: "sync" });
+watch(selectedId, (id,previous) => { if(previous)conversationDrafts.set(previous,draft.value);++messageGeneration;messageLoad=undefined;messages.value=[];loadingMessages.value=false;loadingEarlier.value=false;historyLoaded=false;earlierCursor=undefined;hasEarlier.value=false;followingTail.value=true;unreadBelow.value=false;error.value='';discoveryPanelOpen.value=!!props.draftRequest?.analysis;workspacePanelOpen.value=false;draft.value=id?conversationDrafts.get(id)||"":""; permissionsOpen.value = false; ++permissionGeneration; resetActivity(); task.value = null; cancellingChildren.value = []; grantPrompt.value = null; runtimePermission.value = null; running.value = false; void loadMessages(); void loadChain(); void restoreStatus(); }, { flush: "sync" });
 watch([()=>props.draftRequest,loadingProject,running,continuingTask,hostProjectId],()=>void applyDiscoveryDraft(),{immediate:true});
 watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{immediate:true});
 </script>
@@ -662,6 +663,7 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
     <div ref="transcript" class="agent-host-chat-transcript" @scroll="observeTranscript">
       <div class="ahc-column">
       <details v-if="selectedId&&hostProjectId" class="ahc-discovery-details" :open="discoveryPanelOpen" @toggle="discoveryPanelOpen=($event.target as HTMLDetailsElement).open"><summary>{{tr('项目资产发现','Project asset discovery')}}</summary><DiscoveryAssistPanel v-if="discoveryPanelOpen" :client="client" :conversation-id="selectedId" :project-id="hostProjectId" :refresh-key="task?.revision" /></details>
+      <details v-if="selectedId" class="ahc-discovery-details" :open="workspacePanelOpen" @toggle="workspacePanelOpen=($event.target as HTMLDetailsElement).open"><summary>{{tr('产物与脚本 · 报告','Artifacts, scripts & report')}}</summary><AgentWorkspacePanel v-if="workspacePanelOpen" :client="client" :conversation-id="selectedId" /></details>
       <button v-if="hasEarlier" type="button" class="text-button" :disabled="loadingEarlier" @click="loadEarlierMessages">{{loadingEarlier?tr('读取中…','Loading…'):tr('加载更早消息','Load earlier messages')}}</button>
       <p v-if="loadingMessages&&!messages.length" role="status">{{tr('正在读取此会话…','Loading this conversation…')}}</p>
       <p v-if="!messages.length" class="ahc-empty">{{ tr(`当前模型：${header || '尚未选择'}。权限不足时会说明用途；已保存的授权会在原范围内复用。`, `Model: ${header || 'not selected'}. Missing permissions are explained; saved grants are reused within their scope.`) }}</p>

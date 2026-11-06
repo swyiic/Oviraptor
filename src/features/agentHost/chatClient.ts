@@ -10,6 +10,19 @@ export type AgentConversationWorkspace = { projectId: number; conversationId: st
 export type AgentConversationFile = { path: string; name: string; absolutePath: string; size: number; modifiedAt: string; generatedAt: string; runId: string; recordId: string; versionId?: string|null; previewable: boolean; openable: boolean };
 export type AgentConversationFiles = { projectId: number; conversationId: string; workspacePath: string; shared: true; items: AgentConversationFile[]; truncated: boolean; hasMore?: boolean; nextCursor?:string|null; references?:Array<{path:string;absolutePath:string}>; unavailable: number };
 export type AgentConversationFilePreview = { path: string; name: string; size: number; modifiedAt: string; content: string; truncated: boolean; language: string; offset?:number; nextOffset?:number; versionId?:string };
+/** Agent-recorded pentest finding (host `agent_findings` table, via the `record_finding` tool) —
+ *  distinct from the native Tauri-side `sentinel_findings`; shown on its own until unified later. */
+export type AgentFindingRecord = {
+  title?: string; severity?: string; cvss?: number | string; confidence?: string; cwe?: string; cve?: string;
+  description?: string; evidence?: string; chain_context?: string; business_impact?: string;
+  poc_request?: string; poc_script?: string; poc_output?: string; recommendation?: string;
+  http_request?: { method?: string; url?: string; headers?: Record<string, string>; body?: string };
+  http_response?: { status?: number; headers?: Record<string, string>; body?: string };
+  [key: string]: unknown;
+};
+export type AgentFinding = { id: string; conversationId: string; projectId: number; title: string; severity: string; kind: string; record: AgentFindingRecord; status: "unverified" | "confirmed" | "rejected"; createdAt: string; decidedAt: string };
+export type AgentWorkspaceFile = { path: string; bytes: number; modifiedAt: string };
+export type AgentWorkspaceFileContent = { path: string; bytes: number; truncated: boolean; content: string };
 export type AgentHostEvent = { type: string; conversationId?: string; runId?: string; messageId?: string; delta?: string; status?: string; content?: string; title?: string; code?: string; [key: string]: unknown };
 /** External MCP decision connector (jev-studio): advisory typed-decision tools, surfaced to
  *  the agent as `jev_*`. Disabled by default; any failure degrades to "no extra tools". */
@@ -96,6 +109,15 @@ export function createAgentHostChatClient(endpoint: AgentHostEndpoint, fetchImpl
     forgetGlobalMemory: (entryId: string) => request<{ ok: boolean; removed: boolean }>(`/api/memory/global/${encodeURIComponent(entryId)}`, { method: "DELETE" }),
     mcpJevStatus: () => request<McpJevStatus>("/api/mcp/jev"),
     setMcpJev: (input: McpJevConfigInput) => request<McpJevStatus>("/api/mcp/jev", { method: "POST", body: JSON.stringify(input) }),
+    /** Agent-recorded findings (record_finding tool). No project filter server-side —
+     *  callers scope by projectId client-side (each row carries its own). */
+    listFindings: (status?: "unverified" | "confirmed" | "rejected") => request<{ items: AgentFinding[] }>(`/api/findings${status ? `?status=${encodeURIComponent(status)}` : ""}`).then(r => r.items),
+    decideFinding: (id: string, confirm: boolean) => request<AgentFinding>(`/api/findings/${encodeURIComponent(id)}/decide`, { method: "POST", body: JSON.stringify({ confirm }) }),
+    deleteFinding: (id: string) => request<{ ok: boolean; removed: boolean }>(`/api/findings/${encodeURIComponent(id)}`, { method: "DELETE" }),
+    /** Operator surface for the agent's own workspace scripts/artifacts (§F) — distinct from
+     *  conversationFiles() above (chat-attachment records), this walks the live workspace dir. */
+    workspaceFiles: (conversationId: string) => request<{ files: AgentWorkspaceFile[] }>(`/api/conversations/${encodeURIComponent(conversationId)}/workspace`).then(r => r.files),
+    workspaceFile: (conversationId: string, path: string) => request<AgentWorkspaceFileContent>(`/api/conversations/${encodeURIComponent(conversationId)}/workspace/file?path=${encodeURIComponent(path)}`),
     messagePage: (conversationId:string,projectId:number,before?:string) => request<{items:AgentHostMessage[];hasMore:boolean;nextCursor:string|null}>(`/api/conversations/${encodeURIComponent(conversationId)}/messages?projectId=${projectId}&limit=50${before?`&before=${encodeURIComponent(before)}`:''}`),
     messages: (conversationId: string, projectId: number) => request<{ items: AgentHostMessage[] }>(`/api/conversations/${encodeURIComponent(conversationId)}/messages?projectId=${projectId}`).then(r => r.items),
     chain: (conversationId: string, projectId: number) => request<{ hops: Array<{ id: string; factLabel: string; factValue: string; source: string; opensNext: boolean; action: string }> }>(`/api/conversations/${encodeURIComponent(conversationId)}/chain?projectId=${projectId}`).then(result => result.hops),

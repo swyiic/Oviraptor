@@ -41,6 +41,7 @@ import ScanRequestLog from "./ScanRequestLog.vue";
 import SentinelEndpointsPane from "./results/SentinelEndpointsPane.vue";
 import SentinelOpportunitiesPane from "./results/SentinelOpportunitiesPane.vue";
 import SentinelVulnerabilitiesPane from "./results/SentinelVulnerabilitiesPane.vue";
+import AgentFindingsPanel from "./results/AgentFindingsPanel.vue";
 import SentinelApiPane from "./results/SentinelApiPane.vue";
 import SentinelFuseZone from "./SentinelFuseZone.vue";
 import {
@@ -3818,27 +3819,29 @@ onUnmounted(() => {
                 :selected-url="selectedUrl"
               />
 
-              <SentinelVulnerabilitiesPane
-                v-else
-                :vulnerability-rows="vulnerabilityRows"
-                :focused-vulnerability-rows="focusedVulnerabilityRows"
-                :poc-rows="pocRows"
-                :selected-finding-id="selectedFindingId"
-                :selected-url="selectedUrl"
-                :validation-editor="validationEditor"
-                :validation-form="validationForm"
-                :edit-validation="editValidation"
-                :save-validation="saveValidation"
-                :validation-for="validationFor"
-                :effective-severity="effectiveSeverity"
-                :vulnerability-update-history="vulnerabilityUpdateHistory"
-                :finding-exploits="findingExploits"
-                :deep-dive-busy-id="deepDiveBusyId"
-                :deep-dive-disabled-reason="deepDiveNote"
-                @select-finding="selectedFindingId = $event"
-                @close-validation="validationEditor = undefined"
-                @deep-dive="runDeepDive"
-              />
+              <template v-else>
+                <SentinelVulnerabilitiesPane
+                  :vulnerability-rows="vulnerabilityRows"
+                  :focused-vulnerability-rows="focusedVulnerabilityRows"
+                  :poc-rows="pocRows"
+                  :selected-finding-id="selectedFindingId"
+                  :selected-url="selectedUrl"
+                  :validation-editor="validationEditor"
+                  :validation-form="validationForm"
+                  :edit-validation="editValidation"
+                  :save-validation="saveValidation"
+                  :validation-for="validationFor"
+                  :effective-severity="effectiveSeverity"
+                  :vulnerability-update-history="vulnerabilityUpdateHistory"
+                  :finding-exploits="findingExploits"
+                  :deep-dive-busy-id="deepDiveBusyId"
+                  :deep-dive-disabled-reason="deepDiveNote"
+                  @select-finding="selectedFindingId = $event"
+                  @close-validation="validationEditor = undefined"
+                  @deep-dive="runDeepDive"
+                />
+                <AgentFindingsPanel :project-id="projectFilter" />
+              </template>
             </template></template
           >
         </main>
