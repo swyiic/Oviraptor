@@ -33,3 +33,18 @@ test('a direct-chat conversation can be created in the personal space', () => {
     assert.equal(store.conversations(personal.id).length, 1);
   } finally { cleanup(); }
 });
+
+test('attachConversation re-homes a conversation to another workspace', () => {
+  const { store, cleanup } = tempStore();
+  try {
+    const a = store.createProject('A', { externalId: '1' });
+    const b = store.createProject('B', { externalId: '2' });
+    const conv = store.createConversation(a.id, 'direct chat');
+    assert.equal(store.conversations(a.id).length, 1);
+    const moved = store.attachConversation(conv.id, b.id);
+    assert.equal(moved.projectId, b.id);
+    assert.equal(store.conversations(a.id).length, 0);
+    assert.equal(store.conversations(b.id).length, 1);
+    assert.throws(() => store.attachConversation(conv.id, 99999)); // missing target rejected
+  } finally { cleanup(); }
+});

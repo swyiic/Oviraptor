@@ -864,6 +864,12 @@ export class AgentHost {
     if (active) { await this.subagents.stop(active, 'host_child_cancelled'); await active.completion; }
     return { task: this.task(conversationId, { taskId: parent.id, projectId: input.projectId }), childTask: this.task(conversationId, { taskId: child.id, projectId: input.projectId }) };
   }
+  attachConversationToWorkspace(conversationId, projectId) {
+    if (this.runs.has(conversationId) || [...this.inflightEffects.values()].some(effect => effect.conversationId === conversationId)) throw hostError('host_reply_already_running', 409);
+    const updated = this.store.attachConversation(conversationId, projectId);
+    this.emit({ type: 'conversation.attached', conversationId, projectId: Number(projectId) });
+    return updated;
+  }
   deleteConversation(conversationId, projectId) {
     if (this.runs.has(conversationId) || [...this.inflightEffects.values()].some(effect => effect.conversationId === conversationId)) throw hostError('host_reply_already_running', 409);
     this.store.deleteConversation(conversationId, projectId);

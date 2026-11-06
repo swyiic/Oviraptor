@@ -332,6 +332,14 @@ export class HostStore {
     this.db.prepare('UPDATE conversations SET title=?,metadata_revision=metadata_revision+1 WHERE id=? AND title_manual=0').run(boundedText(title, 256), String(id));
     return this.conversation(id);
   }
+  /** Re-home a conversation to another workspace (agent-at-top §5): forward-only —
+   * future turns use the target's workspace/memory/budget; past evidence stays. */
+  attachConversation(id, projectId) {
+    this.conversation(id);
+    this.project(projectId);
+    this.db.prepare('UPDATE conversations SET project_id=?,metadata_revision=metadata_revision+1 WHERE id=?').run(positiveId(projectId), String(id));
+    return this.conversation(id);
+  }
   updateConversationMetadata(id, input) {
     if (!input || typeof input !== 'object' || Array.isArray(input) || !Object.hasOwn(input, 'projectId')
       || Object.keys(input).some(key => !['projectId', 'title', 'pinned'].includes(key))
