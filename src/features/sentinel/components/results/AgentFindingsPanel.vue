@@ -8,11 +8,11 @@
 // is deliberately its own block, styled to match (reuses the global .vuln-card /
 // .severity-badge / .vuln-columns rules from src/styles/sentinel-base.css so it
 // sits visually next to the native pane without new global CSS).
-import { Bug, ChevronDown, Copy, ShieldBan, ShieldCheck, Trash2 } from "@lucide/vue";
+import { ArrowDownLeft, ArrowUpRight, Bug, ChevronDown, Copy, ShieldBan, ShieldCheck, Trash2 } from "@lucide/vue";
 import { computed, onMounted, ref } from "vue";
 import { useI18n } from "../../../../i18n";
 import { resolveAgentHostEndpoint } from "../../../agentHost/api";
-import { createAgentHostChatClient, type AgentHostChatClient, type AgentFinding } from "../../../agentHost/chatClient";
+import { createAgentHostChatClient, type AgentHostChatClient, type AgentFinding, type AgentFindingRecord } from "../../../agentHost/chatClient";
 import { createSentinelLabels, safeSeverity, text } from "../../presentation";
 
 const props = defineProps<{ projectId?: number }>();
@@ -88,6 +88,16 @@ function headerRows(headers?: Record<string, string>) {
 function statusLabel(item: AgentFinding) {
   return item.status === "confirmed" ? tr("已确认", "Confirmed") : item.status === "rejected" ? tr("已拒绝", "Rejected") : tr("待复核", "Unverified");
 }
+// workspace_ws captures (increment 4): sorted by `at`, no header-style secrets to
+// redact here — the existing evidence redaction above covers HTTP headers only.
+type WsFrame = NonNullable<AgentFindingRecord["ws_frames"]>[number];
+function sortedFrames(frames?: WsFrame[]) {
+  return frames ? [...frames].sort((a, b) => (a.at ?? 0) - (b.at ?? 0)) : [];
+}
+function frameTruncated(frame: WsFrame) {
+  const shown = frame.text?.length ?? frame.base64?.length ?? 0;
+  return typeof frame.bytes === "number" && frame.bytes > shown;
+}
 
 onMounted(load);
 </script>
@@ -129,8 +139,8 @@ onMounted(load);
           <div v-if="item.record.poc_script" class="deep-field"><span>{{ tr("PoC 脚本", "PoC script") }}<button class="button ghost compact" @click="copyText(String(item.record.poc_script))"><Copy :size="12" />{{ tr("复制", "Copy") }}</button></span><pre>{{ item.record.poc_script }}</pre></div>
           <div v-if="item.record.poc_output" class="deep-field"><span>{{ tr("PoC 输出", "PoC output") }}</span><pre>{{ item.record.poc_output }}</pre></div>
         </section>
-        <details v-if="item.record.http_request || item.record.http_response" class="agent-finding-http" :open="expandedId === item.id" @toggle="expandedId = ($event.target as HTMLDetailsElement).open ? item.id : ''">
-          <summary><ChevronDown :size="13" />{{ tr("HTTP 请求/响应（已脱敏敏感请求头）", "HTTP request/response (sensitive headers redacted)") }}</summary>
+        <details v-if="item.record.http_request || item.record.http_response || item.record.ws_frames?.length" class="agent-finding-http" :open="expandedId === item.id" @toggle="expandedId = ($event.target as HTMLDetailsElement).open ? item.id : ''">
+          <summary><ChevronDown :size="13" />{{ tr("HTTP/WS 证据（已脱敏敏感请求头）", "HTTP/WS evidence (sensitive headers redacted)") }}</summary>
           <div v-if="item.record.http_request" class="agent-finding-http-block">
             <strong>{{ tr("请求", "Request") }}</strong>
             <code class="agent-finding-http-line">{{ item.record.http_request.method || "GET" }} {{ item.record.http_request.url || "" }}</code>
@@ -146,6 +156,22 @@ onMounted(load);
               <li v-for="row in headerRows(item.record.http_response.headers)" :key="row.key"><b>{{ row.key }}</b>{{ row.value }}</li>
             </ul>
             <pre v-if="item.record.http_response.body">{{ text(item.record.http_response.body) }}</pre>
+          </div>
+          <div v-if="item.record.ws_frames?.length" class="agent-finding-http-block">
+            <strong>{{ tr(`WebSocket 帧（${item.record.ws_frames.length}）`, `WebSocket frames (${item.record.ws_frames.length})`) }}</strong>
+            <ol class="agent-finding-ws-frames">
+              <li v-for="(frame, index) in sortedFrames(item.record.ws_frames)" :key="index" :class="`ws-frame ws-frame-${frame.dir === 'send' ? 'send' : 'recv'}`">
+                <span class="ws-frame-meta">
+                  <ArrowUpRight v-if="frame.dir === 'send'" :size="12" /><ArrowDownLeft v-else :size="12" />
+                  {{ frame.dir === 'send' ? tr('发', 'Sent') : tr('收', 'Recv') }} · {{ frame.type || 'text' }}
+                  <template v-if="typeof frame.at === 'number'"> · {{ tr(`+${frame.at}ms`, `+${frame.at}ms`) }}</template>
+                  <template v-if="typeof frame.bytes === 'number'"> · {{ frame.bytes }}B</template>
+                  <em v-if="frameTruncated(frame)" class="ws-frame-truncated">{{ tr('已截断', 'Truncated') }}</em>
+                </span>
+                <pre v-if="frame.type !== 'binary' && frame.text">{{ frame.text }}</pre>
+                <details v-else-if="frame.base64" class="ws-frame-binary"><summary>{{ tr('二进制（base64）', 'Binary (base64)') }}</summary><pre>{{ frame.base64 }}</pre></details>
+              </li>
+            </ol>
           </div>
         </details>
         <footer v-if="item.status === 'unverified'">
@@ -183,6 +209,15 @@ onMounted(load);
 .agent-finding-headers li { display: flex; gap: 6px; overflow-wrap: anywhere; }
 .agent-finding-headers b { flex: none; color: var(--ui-muted, #777); font-weight: 600; }
 .agent-finding-http-block > pre { margin: 0; max-height: 220px; overflow: auto; padding: 8px; background: var(--ui-surface-raised, #f7f7f7); border-radius: 8px; font: 11px/1.55 var(--font-mono, monospace); white-space: pre-wrap; word-break: break-all; }
+.agent-finding-ws-frames { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 320px; overflow: auto; }
+.ws-frame { display: flex; flex-direction: column; gap: 4px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--ui-line, #ddd); max-width: 90%; }
+.ws-frame-send { align-self: flex-end; background: color-mix(in srgb, var(--blue, #2878ff) 6%, var(--ui-surface, #fff)); }
+.ws-frame-recv { align-self: flex-start; background: var(--ui-surface-raised, #f7f7f7); }
+.ws-frame-meta { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; font-size: 11px; color: var(--ui-muted, #777); }
+.ws-frame-truncated { font-style: normal; color: #b07b32; }
+.ws-frame > pre { margin: 0; max-height: 160px; overflow: auto; padding: 6px 8px; background: var(--ui-surface-raised, #f7f7f7); border-radius: 6px; font: 11px/1.5 var(--font-mono, monospace); white-space: pre-wrap; word-break: break-all; }
+.ws-frame-binary > summary { cursor: pointer; font-size: 11px; color: var(--ui-muted, #777); }
+.ws-frame-binary > pre { margin: 4px 0 0; max-height: 160px; overflow: auto; padding: 6px 8px; background: var(--ui-surface-raised, #f7f7f7); border-radius: 6px; font: 10px/1.5 var(--font-mono, monospace); white-space: pre-wrap; word-break: break-all; }
 .vuln-business-impact { border-left: 3px solid color-mix(in srgb, #b4332f 55%, transparent); padding-left: 10px; }
 .vuln-business-impact > span { color: color-mix(in srgb, #b4332f 80%, var(--ui-ink, #1a1a1a)); font-weight: 600; }
 .vuln-chain-context { border-left: 3px solid color-mix(in srgb, #7a5bbf 55%, transparent); padding-left: 10px; }

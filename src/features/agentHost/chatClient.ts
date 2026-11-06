@@ -18,6 +18,8 @@ export type AgentFindingRecord = {
   poc_request?: string; poc_script?: string; poc_output?: string; recommendation?: string;
   http_request?: { method?: string; url?: string; headers?: Record<string, string>; body?: string };
   http_response?: { status?: number; headers?: Record<string, string>; body?: string };
+  /** workspace_ws captures (increment 4), time-ordered, at most 100 frames. */
+  ws_frames?: Array<{ dir?: "recv" | "send"; type?: "text" | "binary"; at?: number; text?: string; base64?: string; bytes?: number }>;
   [key: string]: unknown;
 };
 export type AgentFinding = { id: string; conversationId: string; projectId: number; title: string; severity: string; kind: string; record: AgentFindingRecord; status: "unverified" | "confirmed" | "rejected"; createdAt: string; decidedAt: string };
