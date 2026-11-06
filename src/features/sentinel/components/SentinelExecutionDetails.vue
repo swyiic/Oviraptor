@@ -110,14 +110,32 @@ function familyStatus(family: string) {
           <dt>{{ tr('最终停止原因', 'Final stop reason') }}</dt>
           <dd>{{ execution.runtime?.terminalReason || tr('尚未结束', 'Not finished yet') }}</dd>
         </dl>
+      </section>
+      <section
+        v-if="execution.coverage?.ledger?.manualDeepDiveSuggestions?.length
+          || execution.coverage?.ledger?.exclusions?.length"
+        class="agent-followup-advice"
+      >
+        <h4>{{ tr('Agent 的后续建议', "Agent's recommended follow-up") }}</h4>
         <ul v-if="execution.coverage?.ledger?.manualDeepDiveSuggestions?.length">
-          <li v-for="tip in execution.coverage.ledger.manualDeepDiveSuggestions" :key="tip">
-            {{ tr(`人工深入建议：${tip}`, `Manual deep-dive suggestion: ${tip}`) }}
+          <li v-for="tip in execution.coverage.ledger.manualDeepDiveSuggestions" :key="`tip-${tip}`">
+            {{ tr(`建议人工深入：${tip}`, `Manual deep-dive: ${tip}`) }}
           </li>
         </ul>
+        <template v-if="execution.coverage?.ledger?.exclusions?.length">
+          <p class="agent-followup-sub">{{ tr('本轮刻意排除', 'Deliberately excluded this run') }}</p>
+          <ul>
+            <li v-for="item in execution.coverage.ledger.exclusions" :key="`excl-${item}`">{{ item }}</li>
+          </ul>
+        </template>
+        <p class="agent-followup-note">{{ tr('这些是 Agent 的建议,不是已执行结果。继续需另建一个经授权的新任务(不继承本次预算、作用域或凭据)。', 'These are the agent’s suggestions, not executed results. Continuing requires a separately authorized new task — no budget, scope or credentials are inherited.') }}</p>
       </section>
     </div>
   </details>
 </template>
 
 <style scoped src="./executionPresentation.css"></style>
+<style scoped>
+.agent-followup-note { font-size: 11px; color: var(--ui-muted, #777); margin-top: 8px; }
+.agent-followup-sub { font-weight: 600; margin: 8px 0 2px; }
+</style>
