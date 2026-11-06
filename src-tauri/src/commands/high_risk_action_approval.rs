@@ -108,6 +108,9 @@ fn request_high_risk_action_on(
     if changed != 1 {
         return Err("待批准请求写入未确认".into());
     }
+    // D7: a NEW pending request knocks on the operator (native notification).
+    // Knock only — approval stays single-use + operator-only below. No-op headless.
+    crate::notify_high_risk_pending(action_summary, target);
     Ok((request_id, "pending".to_string()))
 }
 

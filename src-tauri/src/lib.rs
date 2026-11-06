@@ -109,6 +109,45 @@ use tauri::{
     tray::TrayIconBuilder,
     Emitter, Manager,
 };
+use std::sync::OnceLock;
+use tauri_plugin_notification::NotificationExt;
+
+// D7 (设计稿 §4f): when a NEW high-risk action goes pending, knock on the operator
+// with a native desktop notification so they don't miss it while away. A
+// notification NEVER approves anything — approval stays single-use, operator-only
+// and fencing-bound; this only surfaces that a request is waiting.
+static HIGH_RISK_NOTIFIER: OnceLock<tauri::AppHandle> = OnceLock::new();
+
+/// Show a macOS notification for a newly pending high-risk approval. No-op (never
+/// panics) before the app handle is set (unit tests / headless) or if the OS
+/// declines to show it. Called from the pending-insert site in high_risk_action_approval.
+pub fn notify_high_risk_pending(summary: &str, target: &str) {
+    let Some(handle) = HIGH_RISK_NOTIFIER.get() else {
+        return;
+    };
+    let body = if target.trim().is_empty() {
+        summary.to_string()
+    } else {
+        format!("{summary} · 目标 {target}")
+    };
+    let _ = handle
+        .notification()
+        .builder()
+        .title("Agent 请求批准")
+        .body(body)
+        .show();
+}
+
+#[cfg(test)]
+mod high_risk_notify_tests {
+    #[test]
+    fn notify_is_noop_without_app_handle() {
+        // Before the app handle is set (every unit-test run) knocking must be a
+        // silent no-op: never panics, never touches approval state.
+        super::notify_high_risk_pending("probe_command_execution", "https://app.example");
+        super::notify_high_risk_pending("x", "");
+    }
+}
 
 pub struct AppState {
     pub db_path: PathBuf,
@@ -417,6 +456,8 @@ pub fn run() {
             tauri::async_runtime::spawn_blocking(move || {
                 let _ = worker::restart_worker_service(&worker_app);
             });
+            // D7: give the high-risk pending notifier the app handle (knock-only).
+            let _ = HIGH_RISK_NOTIFIER.set(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {
