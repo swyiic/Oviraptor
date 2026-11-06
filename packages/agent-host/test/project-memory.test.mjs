@@ -9,6 +9,8 @@ import {
   readProjectMemory,
   forgetProjectMemory,
   formatProjectMemoryPromptBlock,
+  readGlobalMemory,
+  formatGlobalMemoryPromptBlock,
   PROJECT_MEMORY_LIMITS,
 } from '../src/memory.mjs';
 
@@ -100,5 +102,47 @@ test('recall of empty memory is an empty string (no block injected)', () => {
   try {
     const project = store.createProject('p', { externalId: '1' });
     assert.equal(formatProjectMemoryPromptBlock(readProjectMemory(store, project.id)), '');
+  } finally { cleanup(); }
+});
+
+
+test('a global entry is visible from any project and isolated from project blocks', () => {
+  const { store, cleanup } = tempStore();
+  try {
+    const a = store.createProject('A', { externalId: '1' });
+    const b = store.createProject('B', { externalId: '2' });
+    const w = writeProjectMemoryEntry(store, a.id, { note: '国密 SM4-CBC: key 由 RSA 握手下发,解密脚本在工具库', scope: 'global' });
+    assert.equal(w.ok, true);
+    assert.equal(w.scope, 'global');
+    // global is NOT in any project's own (project-scope) block
+    assert.equal(readProjectMemory(store, a.id).length, 0);
+    assert.equal(readProjectMemory(store, b.id).length, 0);
+    // but readable globally from either project context
+    const g = readGlobalMemory(store);
+    assert.equal(g.length, 1);
+    assert.match(g[0].note, /国密 SM4-CBC/);
+    const block = formatGlobalMemoryPromptBlock(g);
+    assert.match(block, /全局记忆/);
+    assert.match(block, /不是授权/);
+  } finally { cleanup(); }
+});
+
+test('project and global scopes do not collide; forget removes a global from another project', () => {
+  const { store, cleanup } = tempStore();
+  try {
+    const a = store.createProject('A', { externalId: '1' });
+    const b = store.createProject('B', { externalId: '2' });
+    writeProjectMemoryEntry(store, a.id, { note: 'A 本地笔记', scope: 'project' });
+    const g = writeProjectMemoryEntry(store, a.id, { note: '全局通法', scope: 'global' });
+    assert.equal(readProjectMemory(store, a.id).length, 1); // only A's project note
+    assert.equal(readGlobalMemory(store).length, 1);
+    // dedup on a repeated global note
+    const g2 = writeProjectMemoryEntry(store, b.id, { note: '全局通法', scope: 'global' });
+    assert.equal(g2.deduped, true);
+    assert.equal(readGlobalMemory(store).length, 1);
+    // forget the global entry from project B's context works
+    assert.equal(forgetProjectMemory(store, b.id, g.entryId), true);
+    assert.equal(readGlobalMemory(store).length, 0);
+    assert.equal(readProjectMemory(store, a.id).length, 1); // A's project note untouched
   } finally { cleanup(); }
 });

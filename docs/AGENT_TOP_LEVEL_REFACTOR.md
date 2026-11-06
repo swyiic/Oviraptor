@@ -94,15 +94,15 @@ agent 对话里工具执行的呈现，目标是用户给的参考样式（截�
 - **思考内嵌**：`已思考` 作为独立步骤插在工具之间，显示该步 thinking 摘要。
 - **完成后**：整组收起成「执行工具 N 次」，保留每步可展开的回执（stdout/exitCode/产物链接）。
 
-基础：已有 `src/features/conversations/ConversationToolActivity.vue`、`AgentTraceHub.vue`（Stage 3 的 live timeline）。5.5 在其上补：运行中累计/单步计时、输出行数、最新输出预览、命令说明、思考步骤内嵌、整组折叠态。数据来自 host 的 `runtime.status` / 工具回执事件流（run/tool 事件已有，必要字段缺口由后端补，列进 §7 契约）。
+基础（经 5.5 实测核正）：真正承载对话工具活动实时态的是 `AgentHostChat.vue` 里的 `steps`/`heartbeat`/`inner` + `task.evidence`（`AgentTaskEvidence` 已有 `startedAt`/`finishedAt`/`status`/`toolName`/`summary` 分步、随 `task.updated` 实时推）——**不是** `ConversationToolActivity.vue`（旧非-agent-host 路径的完成后静态列表）或 `AgentTraceHub.vue`（sentinel 扫描轨迹，与对话无关）。5.5 已在此基础上做出 composable `toolTimeline.ts` + `AgentToolTimelineList.vue`（1efb9d4）：折叠工具组、分步状态、整组/单步计时、思考内嵌、完成折叠。缺口（输出预览、思考时序）见 §7，由后端补后前端从近似换精确。
 
 ## 7. 前后端契约（UI 依赖的接口，后端我保证）
 
-- 工具库（Tauri 命令，沿用 research_cards 风格）：`list_agent_tools(status?)`、`decide_agent_tool(id, approve)`、`delete_agent_tool(id)`、`sink_agent_tool_from_workspace(conversationId, path, title)`（操作员从工作区入库）。返回字段见 D3。
+- 工具库（Tauri 命令，沿用 research_cards 风格，camelCase 字段）：`list_agent_tools(status?)`、`ingest_agent_tool(title, language, code, targetFingerprint?, algoTags?, sourceConversationId?)`（直接收 code → pending；"从工作区入库"由前端先经 host 读到脚本内容再传 code，Rust 不跨读 host 工作区）、`decide_agent_tool(id, approve)`、`delete_agent_tool(id)`。字段：id/title/language(node|python)/code/targetFingerprint/algoTags(JSON 数组)/sourceConversationId/verified/status/createdAt。**不跑 poison_strip**（自写代码，非外来材料）。
 - 记忆：现有 host chat client `projectMemory` 扩一个全局作用域读取；或新增 `globalMemory()`。
 - 默认空间：host 暴露"确保默认空间存在 / 其 id"的接口，供 UI 开直接对话。
 - 会话挂载：`attach_conversation_to_workspace(conversationId, projectId)`。
-- 工具活动时间线（§6.1）：host 事件流需带 per-step 字段——`status`(running/done/failed/thinking)、`startedAt`/`elapsedMs`、`outputLines`、`previewText`(最新输出预览，已脱敏/截断)、`actionSummary`(命令说明)、`thinkingSummary`。现有 `runtime.status` + 工具回执事件若缺这些，由后端补齐（P1 顺带），UI 只消费。
+- 工具活动时间线（§6.1，字段已按 5.5 实测核正）：主数据源 = `task.evidence`(`AgentTaskEvidence`，已有 `startedAt`/`finishedAt`/`status`/`toolName`/`summary`，随 `task.updated` 实时推) + 事件 `runtime.step`(仅 title)/`runtime.heartbeat`(整 run 一份，当前步 elapsedMs+stepTitle)/`runtime.inner`(单份快照)。**后端待补的两处缺口**（P1 顺带）：①运行中工具的单步 `outputLines`/`previewText`(最新输出预览，脱敏截断)——现无；②`runtime.inner` 加单调 `seq` 或快照时间戳，让「已思考」精确插在两次工具调用之间（现 UI 用"内容变化即追加"近似）。UI 只消费，补后换精确。
 
 ## 8. 开放决策（请你拍板，其余我按推荐做）
 
