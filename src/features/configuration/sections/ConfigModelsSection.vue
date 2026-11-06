@@ -15,6 +15,7 @@ import { directoryConnections, matchesModelBinding, modelSettingsForConnection, 
 import type { ConfigProfile } from "../types";
 import { useI18n } from "../../../i18n";
 import ProjectMemoryManager from "../../agentHost/components/ProjectMemoryManager.vue";
+import ResearchCardsManager from "../../agentHost/components/ResearchCardsManager.vue";
 
 const props = defineProps<{ profiles: ConfigProfile[] }>();
 const emit = defineEmits<{ changed: []; notify: [type: "success" | "error" | "info", text: string] }>();
@@ -396,6 +397,7 @@ onMounted(() => { void loadDirectory(); });
     </div></details>
     <details class="model-advanced"><summary>{{tr('历史来源与保存恢复','Historical sources and recovery')}}</summary><div class="model-advanced-content"><div v-if="profiles.length" class="model-history-row"><label class="field"><span>{{tr('历史模型来源','Historical model source')}}</span><select :value="legacySource?.id" :disabled="locked" @change="legacyId=Number(($event.target as HTMLSelectElement).value)"><option v-for="source in profiles" :key="source.id" :value="source.id">{{source.name}}</option></select></label><button class="button ghost compact" :disabled="locked" @click="importLegacy">{{tr('载入模型','Load models')}}</button></div><div class="model-history-row"><label class="field"><span>{{tr('恢复请求编号','Recovery request id')}}</span><input v-model="recoveryId" maxlength="36" :readonly="Boolean(workflow)"/></label><button class="button ghost compact" :disabled="busy || !recoveryId.trim()" @click="recoverRust">{{tr('查询保存结果','Check saved result')}}</button></div></div></details>
   <ProjectMemoryManager />
+  <ResearchCardsManager />
   </section>
 </template>
 
