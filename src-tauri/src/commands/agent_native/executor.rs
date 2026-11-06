@@ -31,22 +31,36 @@ fn native_executor_system_turn(system_rules: &str, controller_planning: Option<&
 // today's seed (None). The continuity text is projected from the coordinator's
 // already-published handoff decision summary (the controller's own reasoning
 // output) — never new evidence and never a new grant.
-// Env var is the SOLE activation path for the controller-planning continuity
-// (B3.3c Option a, fork-approved). Operator-only — a target page cannot set env,
-// so there is no injection surface; default-absent = OFF. Kept a pure helper so
-// the default-OFF decision is unit-tested without touching the real environment.
+// Operator-only — a target page cannot set env, so there is no injection
+// surface; default-absent = OFF. Kept a pure helper so the default-OFF decision
+// is unit-tested without touching the real environment.
 fn controller_execution_conversation_env_enabled(value: Option<String>) -> bool {
     value.as_deref() == Some(CONTROLLER_EXECUTION_CONVERSATION_RULE)
 }
 
 fn native_controller_execution_planning(context: &AgentRunContext) -> Option<String> {
-    // Env is the only path that can turn this on today; the bootstrap reader
-    // coexists but is inert (the deny_unknown_fields contract cannot carry the
-    // field). Env unset AND bootstrap absent ⇒ OFF ⇒ opening turn byte-identical.
+    // Three operator-only, uninjectable activation sources, any of which turns
+    // the continuity ON; all absent ⇒ OFF ⇒ opening turn byte-identical:
+    //   1. the immutable per-scan-attempt operator record (B3-1, the production
+    //      frozen-plan switch — scan_controller_execution.conversation_continuity);
+    //   2. the OVIRAPTOR_CONTROLLER_EXECUTION env var (dev/test fallback);
+    //   3. the frozen-plan bootstrap field (coexists but inert — the
+    //      deny_unknown_fields contract cannot carry the key).
+    // A target page can set none of these, so there is no injection surface.
     let enabled = controller_execution_conversation_env_enabled(
         std::env::var("OVIRAPTOR_CONTROLLER_EXECUTION").ok(),
     ) || (|| -> Result<bool, String> {
         let connection = db::open(&context.db_path)?;
+        // 1. The immutable operator record is the authoritative frozen switch.
+        if scan_controller_conversation_continuity_on(
+            &connection,
+            &context.scan_id,
+            context.attempt_number,
+        )? {
+            return Ok(true);
+        }
+        // 3. The frozen-plan bootstrap field (inert today; kept for forward
+        //    compatibility if the contract ever carries the key).
         let run = context.run.as_ref().ok_or("executor_run_missing")?;
         let root: String = connection
             .query_row(

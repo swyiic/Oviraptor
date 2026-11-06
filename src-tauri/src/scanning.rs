@@ -203,6 +203,7 @@ include!("commands/workbench_auth.rs");
 include!("commands/workbench_retry.rs");
 include!("commands/scan_control.rs");
 include!("commands/scan_capability_authorization.rs");
+include!("commands/scan_controller_execution.rs");
 include!("commands/high_risk_action_approval.rs");
 include!("commands/agent_tool_permission_rules.rs");
 include!("commands/agent_operator_questions.rs");

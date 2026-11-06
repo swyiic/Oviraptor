@@ -715,6 +715,8 @@ pub fn run() {
             scanning::force_delete_sentinel_scan,
             scanning::set_scan_capability_authorization,
             scanning::get_scan_capability_authorization,
+            scanning::set_scan_controller_execution,
+            scanning::get_scan_controller_execution,
             scanning::get_operator_permission_tier,
             scanning::set_operator_permission_tier,
             scanning::list_pending_high_risk_actions,

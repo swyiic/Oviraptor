@@ -17,6 +17,13 @@ struct MultiAgentSession {
     lease: crate::agent_runtime::multi_agent::lease::CoordinatorLease,
     mapper: crate::agent_runtime::multi_agent::scheduler::ScheduledChild,
     executor: crate::agent_runtime::multi_agent::scheduler::ScheduledChild,
+    // D2 single-controller execution takeover (flag-gated, default OFF). When
+    // true, `executor.run_id` is the coordinator ROOT run (the one brain decides
+    // AND executes), authorized via its Web controller-phase lease and settled on
+    // the segregated phase-exec budget window — NOT a distinct child run and NOT
+    // the child_accounting path. False for the ordinary child-executor session,
+    // whose settlement/lifecycle is byte-identical to before.
+    controller_execution: bool,
 }
 
 include!("multi_agent/findings.rs");
