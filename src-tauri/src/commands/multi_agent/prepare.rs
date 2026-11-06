@@ -89,6 +89,20 @@ fn multi_agent_prepare_owned(context:&mut AgentRunContext,owner:crate::agent_run
     // replacement fence. Received and uncertain calls require distinct
     // recovery contracts; neither grants the new Coordinator old authority.
     scheduler::ensure_fresh_readonly_fence(&connection, &coordinator_lease)?;
+    // B3-2 (single-controller phase leasing, flag-gated, default OFF): when the
+    // operator FROZE phase-leasing ON for this scan attempt (immutable operator
+    // record, no injection surface), the controller enters its zero-capability
+    // deliberation phase (Planner) on its OWN run, bound to the live coordinator
+    // lease epoch + fencing. Planner leases NO capability and reserves NO budget,
+    // so this touches neither the child-executor authorization path nor the
+    // budget root; the child executor path is unchanged. OFF ⇒ neither call runs
+    // ⇒ byte-identical. (Leasing a read-only capability-bearing phase whose lease
+    // a live controller tool call consumes is B3-3.)
+    let controller_phase_leasing =
+        scan_controller_phase_leasing_on(&connection, &context.scan_id, context.attempt_number)?;
+    if controller_phase_leasing {
+        scheduler::coordinator_enter_planner_phase(&connection, &coordinator_lease)?;
+    }
     if context.external_surface {
         let prior: bool = connection
             .query_row(
@@ -426,6 +440,13 @@ fn multi_agent_prepare_owned(context:&mut AgentRunContext,owner:crate::agent_run
         hard_tokens: executor_tokens,
         hard_requests: executor_requests,
     });
+    // B3-2: close the controller's deliberation phase before handing execution
+    // to the dispatched child (release is symmetric with the Planner enter
+    // above; it revokes zero rows when nothing was leased). Done only when the
+    // operator froze phase-leasing ON, so the default path is byte-identical.
+    if controller_phase_leasing {
+        scheduler::coordinator_release_controller_phases(&connection, &coordinator_lease)?;
+    }
     supervisor.check()?;
     Ok(MultiAgentSession {
         supervisor,

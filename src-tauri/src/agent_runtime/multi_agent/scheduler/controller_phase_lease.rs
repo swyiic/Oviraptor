@@ -10,10 +10,15 @@
 // learns to enter phases (later). Every grant is validated exactly like the
 // equivalent child contract via validate_controller_phase — same lane, same
 // allow-list, same B1/B2 high-risk gate — so one controller relaxes no per-role
-// boundary. Each item is #[allow(dead_code)] until the chokepoint/coordinator
-// wiring consumes it.
+// boundary.
+//
+// B3-2 wiring: the coordinator now enters the zero-capability Planner phase on
+// its own run (flag-gated, default OFF — see coordinator_enter_planner_phase),
+// so the issue/release path below is live. Leasing a capability-bearing phase
+// whose lease a live controller TOOL CALL consumes stays deferred to B3-3 (it
+// needs the controller execution window + the per-role surface preconditions),
+// so controller_phase_lease_active remains reserved for that step.
 
-#[allow(dead_code)]
 const CONTROLLER_PHASE_LEASE_SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS agent_controller_phase_leases (
     id TEXT PRIMARY KEY,
@@ -32,7 +37,6 @@ CREATE TABLE IF NOT EXISTS agent_controller_phase_leases (
 );
 "#;
 
-#[allow(dead_code)]
 fn controller_phase_str(profile: ControllerProfile) -> &'static str {
     match profile {
         ControllerProfile::Planner => "planner",
@@ -43,7 +47,6 @@ fn controller_phase_str(profile: ControllerProfile) -> &'static str {
     }
 }
 
-#[allow(dead_code)]
 fn controller_phase_lease_storage_exists(connection: &Connection) -> Result<bool, String> {
     connection
         .query_row(
@@ -54,7 +57,7 @@ fn controller_phase_lease_storage_exists(connection: &Connection) -> Result<bool
         .map_err(|_| "controller_phase_lease_storage_unavailable".into())
 }
 
-#[allow(dead_code, clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn insert_controller_phase_lease(
     connection: &Connection,
     root_run_id: &str,
@@ -86,6 +89,10 @@ fn insert_controller_phase_lease(
 /// controller run. This is the predicate the per-call chokepoint will add as a
 /// branch PARALLEL to the existing child-executor path (B3.2b); it never widens
 /// that path. Returns false (fail closed) when the store does not exist yet.
+/// Reserved for B3-3: the execution-time active-lease check a live controller
+/// tool call will use (today the chokepoint uses `controller_phase_authorized`,
+/// which additionally proves the live coordinator binding), so it is exercised
+/// by tests but not yet on a non-test path.
 #[allow(dead_code)]
 fn controller_phase_lease_active(
     connection: &Connection,
@@ -146,8 +153,7 @@ pub(crate) fn controller_phase_authorized(
 }
 
 /// Release every capability of a phase for this controller run + epoch + fencing.
-#[allow(dead_code)]
-fn revoke_controller_phase(
+pub(crate) fn revoke_controller_phase(
     connection: &Connection,
     root_run_id: &str,
     lease_epoch: i64,
@@ -170,10 +176,11 @@ fn revoke_controller_phase(
 /// Enter a phase: validate it exactly like the equivalent child contract, then
 /// lease the phase's capabilities to the controller's own run (bound to the
 /// current epoch + fencing). Issues nothing if validation fails. Not called in
-/// production yet (the coordinator does not enter phases until a later step), so
-/// the system is unchanged until then.
-#[allow(dead_code, clippy::too_many_arguments)]
-fn lease_controller_phase(
+/// production for the Planner phase (zero capabilities) via
+/// coordinator_enter_planner_phase, flag-gated and default OFF; capability-
+/// bearing phases are leased here once B3-3 wires controller execution.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn lease_controller_phase(
     connection: &Connection,
     lease: &CoordinatorLease,
     profile: ControllerProfile,
@@ -206,6 +213,46 @@ fn lease_controller_phase(
         )?;
     }
     Ok(())
+}
+
+/// B3-2 production entry: the coordinator enters the Planner phase on its OWN
+/// run. Planner is pure deliberation — it leases NO capability and reserves NO
+/// budget (reserved_tokens/requests = 0), so it touches neither the child-
+/// executor authorization path nor the budget root; it is the safest possible
+/// live exercise of the enter path, bound to the live coordinator lease epoch +
+/// fencing. Flag-gated by the caller (scan_controller_phase_leasing_on, default
+/// OFF), so production is byte-identical until an operator froze it ON.
+pub(crate) fn coordinator_enter_planner_phase(
+    connection: &Connection,
+    lease: &CoordinatorLease,
+) -> Result<(), String> {
+    lease_controller_phase(
+        connection,
+        lease,
+        ControllerProfile::Planner,
+        &JsonValue::Null,
+        0,
+        &[],
+        0,
+        0,
+    )
+}
+
+/// Release the controller's deliberation phase(s) for the current epoch +
+/// fencing. Symmetric to coordinator_enter_planner_phase; safe to call even when
+/// nothing was leased (it revokes zero rows). A lease roll (new epoch/fencing)
+/// already invalidates every prior phase lease, so this is belt-and-suspenders.
+pub(crate) fn coordinator_release_controller_phases(
+    connection: &Connection,
+    lease: &CoordinatorLease,
+) -> Result<(), String> {
+    revoke_controller_phase(
+        connection,
+        &lease.root_run_id,
+        lease.lease_epoch,
+        &lease.fencing_token,
+        controller_phase_str(ControllerProfile::Planner),
+    )
 }
 
 #[cfg(test)]
@@ -368,5 +415,91 @@ mod controller_phase_lease_tests {
     fn active_false_when_store_absent() {
         let c = Connection::open_in_memory().unwrap();
         assert!(!controller_phase_lease_active(&c, "ctrl", 7, "ftok", "replay_http").unwrap());
+    }
+
+    // ---- B3-2: coordinator enter/release-phase (fail-closed) ----
+    use super::{
+        coordinator_enter_planner_phase, coordinator_release_controller_phases,
+        lease_controller_phase, ControllerProfile, CoordinatorLease,
+    };
+
+    fn lease_for(epoch: i64, fencing: &str) -> CoordinatorLease {
+        CoordinatorLease {
+            scan_id: "s".into(),
+            attempt_number: 1,
+            target_key: "t".into(),
+            root_run_id: "ctrl".into(),
+            lease_epoch: epoch,
+            fencing_token: fencing.into(),
+            lease_expires_at: FUTURE.into(),
+        }
+    }
+
+    fn phase_row_count(c: &Connection) -> i64 {
+        c.query_row("SELECT COUNT(*) FROM agent_controller_phase_leases", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    #[test]
+    fn enter_planner_phase_leases_nothing_and_is_budget_neutral() {
+        // Planner is zero-capability deliberation: entering it creates the store
+        // but issues NO lease row (no capability, no budget).
+        let c = db();
+        coordinator_enter_planner_phase(&c, &lease_for(7, "ftok")).unwrap();
+        assert_eq!(phase_row_count(&c), 0, "Planner must lease no capability");
+    }
+
+    #[test]
+    fn planner_phase_refuses_any_capability() {
+        // The Planner phase can never be used to smuggle a capability in: a
+        // non-empty capability set is rejected by validate_controller_phase and
+        // nothing is issued. (Fail-closed: the deliberation phase grants none.)
+        let c = db();
+        let err = lease_controller_phase(
+            &c,
+            &lease_for(7, "ftok"),
+            ControllerProfile::Planner,
+            &serde_json::Value::Null,
+            0,
+            &["evidence.read".into()],
+            0,
+            0,
+        )
+        .unwrap_err();
+        assert_eq!(err, "controller_planner_phase_grants_no_capabilities");
+        // The store may or may not have been created, but no lease row exists.
+        if super::controller_phase_lease_storage_exists(&c).unwrap() {
+            assert_eq!(phase_row_count(&c), 0);
+        }
+    }
+
+    #[test]
+    fn release_revokes_only_the_matching_epoch_and_fencing() {
+        // Seed a (capability-bearing) planner-phase lease, then prove release
+        // withdraws it only for the matching epoch + fencing — a stale epoch or
+        // a forged fencing token leaves it untouched (fail-closed boundary).
+        let c = db();
+        insert_controller_phase_lease(&c, "ctrl", "s", 1, "t", "planner", "evidence.read", 7, "ftok", FUTURE).unwrap();
+        assert!(controller_phase_lease_active(&c, "ctrl", 7, "ftok", "evidence.read").unwrap());
+        // Wrong epoch / wrong fencing: nothing is revoked.
+        coordinator_release_controller_phases(&c, &lease_for(8, "ftok")).unwrap();
+        coordinator_release_controller_phases(&c, &lease_for(7, "other")).unwrap();
+        assert!(controller_phase_lease_active(&c, "ctrl", 7, "ftok", "evidence.read").unwrap());
+        // Matching epoch + fencing: revoked.
+        coordinator_release_controller_phases(&c, &lease_for(7, "ftok")).unwrap();
+        assert!(!controller_phase_lease_active(&c, "ctrl", 7, "ftok", "evidence.read").unwrap());
+    }
+
+    #[test]
+    fn release_is_safe_when_store_absent_or_nothing_leased() {
+        // Release before any enter (no store) is a no-op, not an error.
+        let bare = Connection::open_in_memory().unwrap();
+        bare.execute_batch("CREATE TABLE agent_runs(id TEXT PRIMARY KEY); INSERT INTO agent_runs(id) VALUES('ctrl');").unwrap();
+        coordinator_release_controller_phases(&bare, &lease_for(7, "ftok")).unwrap();
+        // Enter (nothing leased) then release round-trips cleanly.
+        let c = db();
+        coordinator_enter_planner_phase(&c, &lease_for(7, "ftok")).unwrap();
+        coordinator_release_controller_phases(&c, &lease_for(7, "ftok")).unwrap();
+        assert_eq!(phase_row_count(&c), 0);
     }
 }
