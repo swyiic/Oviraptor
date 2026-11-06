@@ -19,7 +19,7 @@ export const en: Messages = {
     },
     sentinel: {
       overview: "Overview", queue: "Scan tasks", urls: "Results and evidence", dialog: "Run details", fuse: "Stopped targets",
-      new_scan: "New scan", knowledge: "Knowledge base", logs: "Scan logs",
+      new_scan: "New scan", knowledge: "Knowledge base", logs: "Scan logs", validations: "Manual validation queue",
     },
   },
   settings: {

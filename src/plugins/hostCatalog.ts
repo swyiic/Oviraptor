@@ -49,14 +49,14 @@ const FALLBACK_PLUGINS: readonly BuiltinPluginManifest[] = freeze([
   {
     id: "sentinel", label: ["扫描", "Scanning"], description: ["查看扫描结果，或进入现有工作台发起 Web、源码、灰盒和 CI 调查。", "Review scan results, or use the existing workbench for Web, source, greybox and CI investigations."],
     defaultView: "sentinel", views: ["sentinel"], hasLogs: true, requirements: [],
+    // 瘦身到总览/任务/结果三项(docs/AGENT_SCAN_RESULTS_REDESIGN.md §4): 执行过程(dialog)
+    // 从任务/结果内的任务上下文打开，新建扫描(workbench)、已停止目标(fuse)、人工验证
+    // 队列(validations)折进总览/任务的子区入口，知识库(knowledge)迁到顶层「库」区。
+    // SentinelBoard 仍认得这些 Tab 值，只是不再作为独立侧栏页。
     pages: [
       { id: "overview", view: "sentinel", section: "overview", label: ["总览", "Overview"] },
       { id: "queue", view: "sentinel", section: "queue", label: ["扫描任务", "Scan tasks"] },
       { id: "urls", view: "sentinel", section: "results", label: ["结果与证据", "Results and evidence"] },
-      { id: "dialog", view: "sentinel", section: "dialog", label: ["执行过程", "Run details"] },
-      { id: "fuse", view: "sentinel", section: "fuse", label: ["已停止目标", "Stopped targets"] },
-      { id: "new_scan", view: "sentinel", section: "workbench", label: ["新建扫描", "New scan"] },
-      { id: "knowledge", view: "sentinel", section: "knowledge", label: ["知识库", "Knowledge base"] },
       { id: "logs", view: "logs", label: ["扫描日志", "Scan logs"] },
     ],
     commands: [command("scanning.list-link-candidates", "read"), command("scanning.open-workspace", "navigate")],

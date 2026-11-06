@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import {
   Activity,
   ArrowLeft,
+  BookOpen,
   Bug,
   Code2,
   Download,
@@ -65,7 +66,6 @@ import {
   AgentDialog,
   AgentTraceHub,
   AgentWorkbench,
-  KnowledgeDistillation,
   SentinelSourceResults,
   SentinelTaskCenter,
 } from "./lazyPanels";
@@ -128,6 +128,7 @@ const emit = defineEmits<{
   "alerts-change": [alerts: { fuse: number; vulnerabilities: number }];
   "open-runner-log": [scanId: string, attempt: number];
   "open-workbench": [mode: WorkbenchMode];
+  "open-library": [];
 }>();
 const { t, tr, fmt } = useI18n();
 type Tab =
@@ -2002,12 +2003,13 @@ async function load() {
     vulnerabilityScanIds.value = nextVulnerabilityScanIds;
     opportunities.value = nextOpportunities;
     void refreshVulnerabilityCounts(project);
-    if (tab.value === "fuse") {
+    if (tab.value === "fuse" || tab.value === "queue") {
       const entries = await sentinelApi.listSentinelFuseZone(project);
       if (!current()) return;
       fuseEntries.value = entries;
     }
-    if (tab.value === "validations") {
+    // 任务 (queue) shows a live "人工验证队列" entry badge, so it needs the count too.
+    if (tab.value === "validations" || tab.value === "queue") {
       const items = await sentinelApi.listSentinelValidationWorkItems(project);
       if (!current()) return;
       validationWorkItems.value = items;
@@ -2714,10 +2716,12 @@ watch(tab, async (value) => {
   emit("section-change", value);
   try {
     if (value === "fuse" || value === "queue") fuseEntries.value = await sentinelApi.listSentinelFuseZone(projectFilter.value);
-    if (value === "validations") {
+    if (value === "validations" || value === "queue") {
       validationWorkItems.value = await sentinelApi.listSentinelValidationWorkItems(projectFilter.value);
-      const first = selectedValidationWorkItems.value[0];
-      if (first && !validationWorkEditor.value) editValidationWorkItem(first);
+      if (value === "validations") {
+        const first = selectedValidationWorkItems.value[0];
+        if (first && !validationWorkEditor.value) editValidationWorkItem(first);
+      }
     }
   } catch (error) {
     emit("notify", "error", String(error));
@@ -3048,6 +3052,10 @@ onUnmounted(() => {
     <template v-else-if="tab === 'overview'">
       <div class="section-toolbar overview-heading">
         <div><p>{{ t.scanning.overviewIntro }}</p></div>
+        <div class="overview-heading-actions">
+          <button type="button" class="button ghost compact" @click="tab = 'fuse'">{{ tr('已停止目标', 'Stopped targets') }}<b v-if="stats.activeFuseCount" class="opportunity-count-badge">{{ stats.activeFuseCount }}</b></button>
+          <button type="button" class="button primary compact" @click="startInvestigation"><Play :size="13" />{{ tr('新建扫描', 'New scan') }}</button>
+        </div>
       </div>
       <SentinelTaskStrip
         :scans="visibleScans" :vulnerability-count="taskVulnerabilityCount" :target-count="taskTargetCount"
@@ -3165,6 +3173,9 @@ onUnmounted(() => {
     </template>
 
     <template v-else-if="tab === 'queue'">
+    <div class="queue-sub-nav">
+      <button type="button" class="button ghost compact" @click="tab = 'validations'">{{ tr('人工验证队列', 'Manual validation queue') }}<b v-if="validationWorkStats.pending" class="opportunity-count-badge">{{ validationWorkStats.pending }}</b></button>
+    </div>
     <SentinelTaskCenter
       :scans="queueScans"
       :project-id="projectFilter"
@@ -3835,6 +3846,7 @@ onUnmounted(() => {
     </template>
 
     <template v-else-if="tab === 'fuse'">
+      <div class="section-back-nav"><button type="button" class="button ghost compact" @click="tab = 'overview'"><ArrowLeft :size="13" />{{ tr('返回总览', 'Back to overview') }}</button></div>
       <SentinelFuseZone
         v-model:fuse-filter="fuseFilter"
         v-model:fuse-category-filter="fuseCategoryFilter"
@@ -3863,10 +3875,16 @@ onUnmounted(() => {
     </template>
 
     <template v-else-if="tab === 'knowledge'">
-      <KnowledgeDistillation />
+      <section class="panel sentinel-guide">
+        <div class="guide-icon"><BookOpen :size="23" /></div>
+        <h3>{{ tr('知识库已搬到库区', 'Knowledge base moved to the Library') }}</h3>
+        <p>{{ tr('蒸馏、技法卡和记忆库现在统一在顶层「库」区管理，跟扫描任务脱钩。', 'Distillation, technique cards and memory are now managed together in the top-level Library, decoupled from scan tasks.') }}</p>
+        <button type="button" class="button primary compact" @click="emit('open-library')">{{ tr('打开库', 'Open Library') }}</button>
+      </section>
     </template>
 
     <template v-else-if="tab === 'workbench'">
+      <div class="section-back-nav"><button type="button" class="button ghost compact" @click="tab = 'overview'"><ArrowLeft :size="13" />{{ tr('返回总览', 'Back to overview') }}</button></div>
       <AgentTraceHub
         v-if="(workbenchIntent || props.workbenchMode) === 'traces'"
         :project-id="props.projectId"
@@ -3888,18 +3906,20 @@ onUnmounted(() => {
       />
     </template>
 
-    <SentinelValidationWorkbench
-      v-else-if="tab === 'validations'"
-      :filter="validationFilter"
-      :stats="validationWorkStats"
-      :items="selectedValidationWorkItems"
-      :editor="validationWorkEditor"
-      :form="validationWorkForm"
-      @update:filter="validationFilter = $event"
-      @select="editValidationWorkItem"
-      @evidence="openValidationEvidence"
-      @save="saveValidationWorkItem"
-    />
+    <template v-else-if="tab === 'validations'">
+      <div class="section-back-nav"><button type="button" class="button ghost compact" @click="tab = 'queue'"><ArrowLeft :size="13" />{{ t.scanning.taskList }}</button></div>
+      <SentinelValidationWorkbench
+        :filter="validationFilter"
+        :stats="validationWorkStats"
+        :items="selectedValidationWorkItems"
+        :editor="validationWorkEditor"
+        :form="validationWorkForm"
+        @update:filter="validationFilter = $event"
+        @select="editValidationWorkItem"
+        @evidence="openValidationEvidence"
+        @save="saveValidationWorkItem"
+      />
+    </template>
 
     <template v-else
       ><section class="panel sentinel-guide">
@@ -4002,6 +4022,11 @@ onUnmounted(() => {
    --app-surface / --app-ink, with --amber / --red for the fuse + risk tints),
    each with a literal fallback so it renders correctly in both themes whether
    or not the later design-system token aliases are present. */
+/* 任务 tab: 人工验证队列 folded in as a sub-section entry (§4 of the scan UI redesign). */
+.queue-sub-nav { display: flex; justify-content: flex-end; margin-bottom: 10px; }
+/* fuse/workbench/validations are no longer top-level nav tabs (§4); they're
+   reached from 总览/任务 actions, so each needs its own way back. */
+.section-back-nav { margin-bottom: 10px; }
 .url-subtasks { margin: 10px 0 4px; border: 1px solid var(--line, #e5e6e1); border-radius: 12px; background: var(--app-surface, #fff); overflow: hidden; }
 .url-subtasks-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; padding: 11px 13px; border-bottom: 1px solid var(--line, #e5e6e1); background: color-mix(in srgb, var(--app-ink, #252624) 4%, var(--app-surface, #fff)); }
 .url-subtasks-head .eyebrow { display: block; color: var(--muted, #72746f); font-size: 10px; letter-spacing: 0.08em; }

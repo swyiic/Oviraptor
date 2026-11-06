@@ -252,7 +252,7 @@ const activeWorkspace = computed(() => isBuiltinPluginId(activeModule.value) && 
 const viewTitle = computed(() => {
   if(activeWorkspace.value&&workspaceMetadata.value.title)return workspaceMetadata.value.title;
   const pages = t.value.pages.asset;
-  return ({chat:t.value.modules.chat,skills:t.value.settings.items.skills,dashboard:pages.dashboard,projects:t.value.shell.workspacesAndScope,query:pages.query,assets:pages.assets,seeds:pages.seeds,ownership:pages.ownership,exposure:pages.exposure,quarantine:pages.quarantine,hackerone:"HackerOne SRC",sentinel:t.value.modules.sentinel,changes:pages.changes,tasks:pages.tasks,logs:t.value.shell.logs,settings:t.value.shell.settings} as Record<string,string>)[activeView.value];
+  return ({chat:t.value.modules.chat,skills:t.value.settings.items.skills,library:tr('库','Library'),dashboard:pages.dashboard,projects:t.value.shell.workspacesAndScope,query:pages.query,assets:pages.assets,seeds:pages.seeds,ownership:pages.ownership,exposure:pages.exposure,quarantine:pages.quarantine,hackerone:"HackerOne SRC",sentinel:t.value.modules.sentinel,changes:pages.changes,tasks:pages.tasks,logs:t.value.shell.logs,settings:t.value.shell.settings} as Record<string,string>)[activeView.value];
 });
 function pluginAvailable(module:ModuleKey) { return module==="chat" || (module!=="hackerone" && pluginEnabled.value[module]); }
 function applyRoute(module:ModuleKey, view:ViewKey, navigation?:WorkspaceNavItem) {

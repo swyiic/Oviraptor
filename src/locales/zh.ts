@@ -22,7 +22,7 @@ export const zh = {
     },
     sentinel: {
       overview: "总览", queue: "扫描任务", urls: "结果与证据", dialog: "执行过程", fuse: "已停止目标",
-      new_scan: "新建扫描", knowledge: "知识库", logs: "扫描日志",
+      new_scan: "新建扫描", knowledge: "知识库", logs: "扫描日志", validations: "人工验证队列",
     },
   },
   settings: {

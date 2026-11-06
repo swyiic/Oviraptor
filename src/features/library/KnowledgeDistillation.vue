@@ -2,10 +2,10 @@
 import {ref,computed,onMounted} from 'vue';
 import {invoke} from '@tauri-apps/api/core';
 import {open} from '@tauri-apps/plugin-dialog';
-import {knowledgeCatalogApi} from './catalogApi';
-import {skillsApi} from './api';
-import type {AgentKnowledgeEntry} from './knowledgeTypes';
-import type {SkillPackage} from './types';
+import {knowledgeCatalogApi} from '../skills/catalogApi';
+import {skillsApi} from '../skills/api';
+import type {AgentKnowledgeEntry} from '../skills/knowledgeTypes';
+import type {SkillPackage} from '../skills/types';
 import {useI18n} from '../../i18n';
 const {tr}=useI18n();
 const source=ref(''),content=ref(''),busy=ref(false),error=ref(''),notice=ref(''),search=ref('');

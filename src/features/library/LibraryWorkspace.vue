@@ -4,25 +4,27 @@
 // center (see docs/AGENT_TOP_LEVEL_REFACTOR.md §6). All three are reference
 // only: they shape how the agent reasons, never what it may act on, and never
 // feed any auth/scope/settlement gate.
-import { BrainCircuit, BookOpen, Wrench } from "@lucide/vue";
+import { BrainCircuit, BookOpen, FlaskConical, Wrench } from "@lucide/vue";
 import { ref, type Component } from "vue";
 import ProjectMemoryManager from "../agentHost/components/ProjectMemoryManager.vue";
 import ResearchCardsManager from "../agentHost/components/ResearchCardsManager.vue";
 import AgentToolsManager from "../agentHost/components/AgentToolsManager.vue";
+import KnowledgeDistillation from "./KnowledgeDistillation.vue";
 import { useI18n } from "../../i18n";
 
-type LibraryTab = "memory" | "techniques" | "tools";
+type LibraryTab = "memory" | "techniques" | "tools" | "knowledge";
 const { tr } = useI18n();
 const tab = ref<LibraryTab>("memory");
 const tabs: Array<{ id: LibraryTab; icon: Component; label: [string, string] }> = [
   { id: "memory", icon: BrainCircuit, label: ["记忆库", "Memory"] },
   { id: "techniques", icon: BookOpen, label: ["技法卡", "Techniques"] },
   { id: "tools", icon: Wrench, label: ["工具库", "Tools"] },
+  { id: "knowledge", icon: FlaskConical, label: ["知识库", "Knowledge"] },
 ];
 </script>
 <template>
   <section class="library-workspace">
-    <p class="library-description">{{ tr('agent 跨工作空间共享的参考素材:它自己记下的跨会话记忆、你审入的外部技法卡、以及它自己写过并验证过的可复用脚本。三者都是参考,不是授权——只影响 agent 怎么想,不改变它能对谁做什么;每个目标仍需单独确认。', 'Advisory material the agent shares across workspaces: the cross-session memory it keeps, the technique cards you ingest, and the scripts it has written and verified for reuse. All three are reference, not authorization — they shape how it thinks, never what it may act on; every target still needs its own authorization.') }}</p>
+    <p class="library-description">{{ tr('agent 跨工作空间共享的参考素材:它自己记下的跨会话记忆、你审入的外部技法卡、它自己写过并验证过的可复用脚本,以及从技术文章蒸馏出的知识。四者都是参考,不是授权——只影响 agent 怎么想,不改变它能对谁做什么;每个目标仍需单独确认。', 'Advisory material the agent shares across workspaces: the cross-session memory it keeps, the technique cards you ingest, the scripts it has written and verified for reuse, and knowledge distilled from technical articles. All four are reference, not authorization — they shape how it thinks, never what it may act on; every target still needs its own authorization.') }}</p>
     <div class="library-tabs" role="tablist">
       <button v-for="item in tabs" :key="item.id" type="button" class="library-tab" role="tab" :aria-selected="tab === item.id" :class="{ active: tab === item.id }" @click="tab = item.id">
         <component :is="item.icon" :size="15" />{{ tr(item.label[0], item.label[1]) }}
@@ -31,6 +33,7 @@ const tabs: Array<{ id: LibraryTab; icon: Component; label: [string, string] }> 
     <ProjectMemoryManager v-if="tab === 'memory'" />
     <ResearchCardsManager v-else-if="tab === 'techniques'" />
     <AgentToolsManager v-else-if="tab === 'tools'" />
+    <KnowledgeDistillation v-else-if="tab === 'knowledge'" />
   </section>
 </template>
 <style scoped>
