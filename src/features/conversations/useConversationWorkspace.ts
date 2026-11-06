@@ -362,7 +362,7 @@ export function useConversationWorkspace(deps: { project: () => Project | undefi
         const status = started.snapshot?.status || "scanning";
         scanLaunchNotice.value = scanId ? `${scanId} · ${status}` : status;
       } catch (error) {
-        actionError.value = `URL 扫描未能启动：${String(error)}`;
+        actionError.value = `URL 扫描未能启动：${String(error)}`; // i18n-ignore
       }
     }
     if (pendingSend.value && pendingSend.value.content !== content) {

@@ -99,8 +99,8 @@ async function copyText(value: string) {
               }}</strong
               ><small
                 >{{ tr(
-                  `原始记录 · 未经原生 Reviewer 审核 · 原始等级 ${severityLabel(safeSeverity(item.severity))}${json(item.recordJson).cvss ? ` · CVSS ${json(item.recordJson).cvss}` : ""} · 置信度 ${json(item.recordJson).confidence || "未说明"} · ${json(item.recordJson).method || "GET"} ${json(item.recordJson).url || "/"}`,
-                  `Raw record · not reviewed by the native Reviewer · Original severity ${severityLabel(safeSeverity(item.severity))}${json(item.recordJson).cvss ? ` · CVSS ${json(item.recordJson).cvss}` : ""} · Confidence ${json(item.recordJson).confidence || "not stated"} · ${json(item.recordJson).method || "GET"} ${json(item.recordJson).url || "/"}`
+                  `原始记录 · 未经原生 Reviewer 审核 · 原始等级 ${severityLabel(safeSeverity(item.severity))}${json(item.recordJson).cvss ? ' · CVSS ' + json(item.recordJson).cvss : ''} · 置信度 ${json(item.recordJson).confidence || "未说明"} · ${json(item.recordJson).method || "GET"} ${json(item.recordJson).url || "/"}`,
+                  `Raw record · not reviewed by the native Reviewer · Original severity ${severityLabel(safeSeverity(item.severity))}${json(item.recordJson).cvss ? ' · CVSS ' + json(item.recordJson).cvss : ''} · Confidence ${json(item.recordJson).confidence || "not stated"} · ${json(item.recordJson).method || "GET"} ${json(item.recordJson).url || "/"}`
                 ) }}</small
               ><small
                 v-if="json(item.recordJson).cwe || json(item.recordJson).cve"

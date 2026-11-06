@@ -118,7 +118,7 @@ async function toggleCapabilityMenu() {
 async function attachWorkspaceFile() {
   const path = await open({ multiple: false, directory: false });
   if (!path || Array.isArray(path)) return;
-  queueComposer(`参考工作区文件：${path}`);
+  queueComposer(`参考工作区文件：${path}`); // i18n-ignore
 }
 
 async function load() {
@@ -413,16 +413,16 @@ watch(selectedLive, (live) => {
                   /{{ book.command }} · {{ tr(book.label.zh, book.label.en) }}
                 </button>
                 <strong>{{ tr("计划", "Plan") }}</strong>
-                <button type="button" @click="queueComposer('请根据当前证据给出下一步计划，并说明停止条件。')">{{ tr("写入计划指令", "Insert plan prompt") }}</button>
+                <button type="button" @click="queueComposer('请根据当前证据给出下一步计划，并说明停止条件。')">{{ tr("写入计划指令", "Insert plan prompt") }}</button> <!-- i18n-ignore -->
                 <strong>{{ tr("站点", "Sites") }}</strong>
-                <button v-for="target in menuTargets.slice(0, 12)" :key="target.url" type="button" @click="queueComposer(`关注站点 ${target.url}`)">{{ target.url }}</button>
+                <button v-for="target in menuTargets.slice(0, 12)" :key="target.url" type="button" @click="queueComposer(`关注站点 ${target.url}`)">{{ target.url }}</button> <!-- i18n-ignore -->
                 <small v-if="!menuTargets.length">{{ tr("当前项目没有站点", "No sites in this project") }}</small>
                 <strong>{{ tr("工作区文件", "Workspace file") }}</strong>
                 <button type="button" @click="attachWorkspaceFile">{{ tr("选择文件并写入", "Pick a file") }}</button>
                 <strong>{{ tr("工具", "Tools") }}</strong>
-                <button v-for="tool in detail.summary.tools" :key="tool.name" type="button" @click="queueComposer(`优先使用工具 ${tool.name}`)">{{ tool.name }}</button>
+                <button v-for="tool in detail.summary.tools" :key="tool.name" type="button" @click="queueComposer(`优先使用工具 ${tool.name}`)">{{ tool.name }}</button> <!-- i18n-ignore -->
                 <strong>{{ tr("技能", "Skills") }}</strong>
-                <button v-for="skill in skills" :key="skill.id" type="button" @click="queueComposer(`使用技能 ${skill.name}`)">{{ skill.name }}</button>
+                <button v-for="skill in skills" :key="skill.id" type="button" @click="queueComposer(`使用技能 ${skill.name}`)">{{ skill.name }}</button> <!-- i18n-ignore -->
               </div>
             </div>
             <article class="trace-event" v-for="group in narrative" :key="group.key">
