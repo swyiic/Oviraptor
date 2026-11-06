@@ -1,4 +1,5 @@
 export { default as ConfigModelsSection } from "./ConfigModelsSection.vue";
+export { default as ConfigMcpSection } from "./ConfigMcpSection.vue";
 export { default as ConfigAgentKnowledgeSection } from "./ConfigAgentKnowledgeSection.vue";
 export { default as ConfigCompatibilityScopesSection } from "./ConfigCompatibilityScopesSection.vue";
 export { default as ConfigDomainSettingsSection } from "./ConfigDomainSettingsSection.vue";

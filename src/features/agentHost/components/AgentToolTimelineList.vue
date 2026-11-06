@@ -30,6 +30,7 @@ function statusLabel(item: ToolTimelineStep) {
               <span v-else class="ahc-pulse" />
             </span>
             <span class="ahc-timeline-title">{{ item.title || item.actionSummary }}</span>
+            <span v-if="item.isDecision" class="ahc-timeline-decision" :title="tr('jev 决策工具:建议性,不授予任何权限', 'jev decision tool: advisory only, grants no authority')">{{ tr('决策', 'Decision') }}</span>
             <small class="ahc-timeline-status">{{ statusLabel(item) }}</small>
             <ChevronRight :size="12" class="ahc-timeline-chevron" aria-hidden="true" />
           </summary>
@@ -53,6 +54,7 @@ function statusLabel(item: ToolTimelineStep) {
 .ahc-timeline-step.is-failed .ahc-timeline-icon { color: var(--orange, #a56b36); }
 .ahc-timeline-step.is-thinking .ahc-timeline-icon { color: var(--app-muted, #687078); }
 .ahc-timeline-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
+.ahc-timeline-decision { flex: none; font-size: var(--text-micro); font-weight: 600; color: var(--purple, #7a5bbf); border: 1px solid var(--purple, #7a5bbf); border-radius: 5px; padding: 0 5px; }
 .ahc-timeline-status { margin-left: auto; flex: none; font-size: var(--text-micro); color: var(--app-muted, #687078); }
 .ahc-timeline-chevron { flex: none; color: var(--app-muted, #687078); transition: transform .15s; }
 .ahc-timeline-step > details[open] > summary .ahc-timeline-chevron { transform: rotate(90deg); }

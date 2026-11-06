@@ -24,6 +24,8 @@ export type ToolTimelineStep = {
   detail?: string;
   startedAtMs?: number;
   elapsedMs: number;
+  /** A `jev_*` call — the external decision connector, distinct from file/network tools. */
+  isDecision?: boolean;
 };
 
 type InnerSnapshot = { goal: string; phase: string; phaseLabel: string; facts: string[]; hypotheses: string[]; compressed: boolean; hold: string; seq?: number; at?: number } | null;
@@ -99,6 +101,7 @@ export function useToolTimeline(getters: {
           detail: item.summary || undefined,
           startedAtMs,
           elapsedMs: Math.max(0, elapsedMs),
+          isDecision: item.toolName.startsWith("jev_"),
         };
       });
     }
@@ -107,6 +110,7 @@ export function useToolTimeline(getters: {
     return steps.map((title, index) => {
       const isRunning = index === steps.length - 1 && running;
       return {
+        isDecision: title.startsWith("jev_"),
         id: nextId("step"),
         kind: "tool" as const,
         title,

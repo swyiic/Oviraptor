@@ -11,6 +11,10 @@ export type AgentConversationFile = { path: string; name: string; absolutePath: 
 export type AgentConversationFiles = { projectId: number; conversationId: string; workspacePath: string; shared: true; items: AgentConversationFile[]; truncated: boolean; hasMore?: boolean; nextCursor?:string|null; references?:Array<{path:string;absolutePath:string}>; unavailable: number };
 export type AgentConversationFilePreview = { path: string; name: string; size: number; modifiedAt: string; content: string; truncated: boolean; language: string; offset?:number; nextOffset?:number; versionId?:string };
 export type AgentHostEvent = { type: string; conversationId?: string; runId?: string; messageId?: string; delta?: string; status?: string; content?: string; title?: string; code?: string; [key: string]: unknown };
+/** External MCP decision connector (jev-studio): advisory typed-decision tools, surfaced to
+ *  the agent as `jev_*`. Disabled by default; any failure degrades to "no extra tools". */
+export type McpJevStatus = { enabled: boolean; command: string; args: string[]; state: "disabled" | "starting" | "ready" | "error"; error: string; tools: Array<{ name: string; title: string; description: string }> };
+export type McpJevConfigInput = { enabled?: boolean; command?: string; args?: string[] };
 
 /** Header label for the session page: runtime + model from the live agent-host, never the legacy desktop profile. */
 export function agentRuntimeHeader(settings: AgentHostSettings | null | undefined): string {
@@ -87,6 +91,8 @@ export function createAgentHostChatClient(endpoint: AgentHostEndpoint, fetchImpl
     /** Global cross-workspace memory (scope='global'): visible from every project. */
     globalMemory: () => request<{ items: AgentProjectMemoryEntry[] }>("/api/memory/global").then(r => r.items),
     forgetGlobalMemory: (entryId: string) => request<{ ok: boolean; removed: boolean }>(`/api/memory/global/${encodeURIComponent(entryId)}`, { method: "DELETE" }),
+    mcpJevStatus: () => request<McpJevStatus>("/api/mcp/jev"),
+    setMcpJev: (input: McpJevConfigInput) => request<McpJevStatus>("/api/mcp/jev", { method: "POST", body: JSON.stringify(input) }),
     messagePage: (conversationId:string,projectId:number,before?:string) => request<{items:AgentHostMessage[];hasMore:boolean;nextCursor:string|null}>(`/api/conversations/${encodeURIComponent(conversationId)}/messages?projectId=${projectId}&limit=50${before?`&before=${encodeURIComponent(before)}`:''}`),
     messages: (conversationId: string, projectId: number) => request<{ items: AgentHostMessage[] }>(`/api/conversations/${encodeURIComponent(conversationId)}/messages?projectId=${projectId}`).then(r => r.items),
     chain: (conversationId: string, projectId: number) => request<{ hops: Array<{ id: string; factLabel: string; factValue: string; source: string; opensNext: boolean; action: string }> }>(`/api/conversations/${encodeURIComponent(conversationId)}/chain?projectId=${projectId}`).then(result => result.hops),
