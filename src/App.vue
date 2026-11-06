@@ -4,7 +4,7 @@ import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, 
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   Bell, CheckCircle2, ChevronDown, CircleAlert, Database,
-  AppWindow, FolderKanban, Languages, Menu, MessageSquare, Palette, PlayCircle, Plus, Puzzle, RefreshCw,
+  AppWindow, FolderKanban, Languages, Library, Menu, MessageSquare, Palette, PlayCircle, Plus, Puzzle, RefreshCw,
   Settings2, ShieldCheck, SlidersHorizontal, TerminalSquare, X,
 } from "@lucide/vue";
 import { shellApi } from "./shell/api";
@@ -27,6 +27,7 @@ import { isModuleKey, moduleDefinition, type ModuleKey, type WorkspaceNavItem } 
 import { normalizeRoute, parseProjectId, persistRoute, restoreRoute, trayRoute } from "./shell/navigation";
 const ConversationWorkspace = defineAsyncComponent(() => import("./features/conversations/ConversationWorkspace.vue"));
 const SkillsWorkspace = defineAsyncComponent(() => import("./features/skills/SkillsWorkspace.vue"));
+const LibraryWorkspace = defineAsyncComponent(() => import("./features/library/LibraryWorkspace.vue"));
 import packageInfo from "../package.json";
 import { LOCALES, useI18n } from "./i18n";
 import { useInstallLogPanel } from "./features/environment/useInstallLogPanel";
@@ -581,6 +582,7 @@ onUnmounted(()=>{unlisten?.();unlistenTray?.();if(workerSyncTimer)clearInterval(
       <div class="sidebar-fixed-links">
         <button v-if="activeView!=='chat'" :title="t.shell.workspacesAndScope" :aria-label="t.shell.workspacesAndScope" :class="{active:activeView==='projects'}" @click="navigate('projects');closeMobileSidebar()"><FolderKanban :size="17"/><span>{{t.shell.workspace}}</span></button>
         <button v-if="moduleDefinition(activeModule).hasLogs" :title="t.shell.logs" :aria-label="t.shell.logs" :class="{active:activeView==='logs'}" @click="navigate('logs');closeMobileSidebar()"><TerminalSquare :size="17" /><span>{{t.shell.logs}}</span></button>
+        <button :title="tr('库 · 记忆 / 技法 / 工具','Library · Memory / Techniques / Tools')" :aria-label="tr('库','Library')" data-testid="nav-library" :class="{active:activeView==='library'}" @click="navigate('library');closeMobileSidebar()"><Library :size="17" /><span>{{tr('库','Library')}}</span></button>
         <button :title="t.shell.settings" :aria-label="t.shell.settings" :class="{active:activeView==='settings'}" @click="navigate('settings');closeMobileSidebar()"><Settings2 :size="17" /><span>{{t.shell.settings}}</span></button>
       </div>
       <footer class="sidebar-footer"><button :title="tr('查看更新说明','View release notes')" @click="releaseNotesDialog=true">v{{packageInfo.version}}</button><span>Local-first</span></footer>
@@ -633,6 +635,8 @@ onUnmounted(()=>{unlisten?.();unlistenTray?.();if(workerSyncTimer)clearInterval(
 
         <SkillsWorkspace v-if="!loading&&activeView==='skills'" @notify="notify"/>
 
+        <LibraryWorkspace v-if="!loading&&activeView==='library'" />
+
         <component v-if="!loading&&activeWorkspace" :is="activeWorkspace" :key="activeModule" :projects="projects" :profiles="profiles" :project-id="selectedProjectId" :view="activeView" :refresh-token="pluginRefreshToken" :navigation="pluginNavigation" :intent="pendingWorkspaceIntent" :discovery-review="discoveryReview" @analyze-seeds="analyzeProjectSeeds" @analyze-exposure="analyzeProjectExposure" @analyze-scan="analyzeProjectScan" @discovery-confirmed="discoveryReview=undefined" :scanning-enabled="pluginEnabled.sentinel" :resume-workflow="resumeWorkflow" @navigate="navigate" @select-project="selectProject" @create-project="openProject()" @restore-project="toggleArchive" @projects-changed="refresh" @notify="notify" @configure-hacker-one="configureHackerOne" @configure-assets="configureAssetDiscovery" @metadata="workspaceMetadata=$event" @intent-consumed="consumeWorkspaceIntent" @interrupted-resumed="onInterruptedResumed" />
 
         <template v-else-if="!loading&&activeView==='projects'">
@@ -656,7 +660,6 @@ onUnmounted(()=>{unlisten?.();unlistenTray?.();if(workerSyncTimer)clearInterval(
             <p>{{t.settings.groups.modelsSkills}}</p>
             <button type="button" :class="{active:configSection==='runtime-model'}" data-testid="config-nav-runtime-model" @click="openConfigSection('runtime-model')">{{t.settings.items.models}}</button>
             <button type="button" :class="{active:configSection==='skills'}" data-testid="config-nav-skills" @click="openSkills">{{t.settings.items.skills}}</button>
-            <button type="button" :class="{active:configSection==='agent-knowledge'}" data-testid="config-nav-agent-knowledge" @click="openConfigSection('agent-knowledge')">{{t.settings.items.agentKnowledge}}</button>
             <p>{{t.settings.groups.assets}}</p>
             <button v-for="item in PROFILE_SETTINGS_NAV.filter(item=>['asset-apis','collection','probe','content-rules'].includes(item.route))" :key="item.route" type="button" :class="{active:configSection==='profile-settings'&&profileSettingsRoute===item.route}" :data-testid="`config-nav-${item.route}`" @click="openConfigSection(item.route)">{{t.settings.items[item.labelKey]}}</button>
             <button type="button" :class="{active:configSection==='advanced'&&advancedSub==='rules'}" @click="openConfigSection('rules')">{{t.settings.items.pageRules}}</button>
@@ -679,7 +682,7 @@ onUnmounted(()=>{unlisten?.();unlistenTray?.();if(workerSyncTimer)clearInterval(
 
           <ConfigModelsSection v-if="configSection==='runtime-model'" :profiles="profiles" @notify="notify" @changed="categorySaved" />
           <SkillsWorkspace v-else-if="configSection==='skills'" @notify="notify"/>
-          <ConfigAgentKnowledgeSection v-else-if="configSection==='agent-knowledge'" />
+          <ConfigAgentKnowledgeSection v-else-if="configSection==='agent-knowledge'" @open-library="navigate('library')" />
 
           <section v-else-if="configSection==='profile-settings'" class="panel config-domain-panel">
             <p class="config-domain-description">{{tr(profileSettingsItem.description[0],profileSettingsItem.description[1])}}</p>

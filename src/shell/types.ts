@@ -16,6 +16,7 @@ export type ViewKey =
   | "changes"
   | "tasks"
   | "logs"
+  | "library"
   | "settings";
 
 export interface AppSettings {

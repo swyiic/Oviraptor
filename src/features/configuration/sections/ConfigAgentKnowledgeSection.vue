@@ -1,22 +1,19 @@
 <script setup lang="ts">
-// Config-center section "记忆与技法": the agent's two kinds of advisory material —
-// its own cross-session project memory, and operator-ingested technique cards.
-// Both are reference only; they shape how the agent reasons, never what it may
-// act on, and never feed any auth/scope/settlement/capability gate.
-import ProjectMemoryManager from "../../agentHost/components/ProjectMemoryManager.vue";
-import ResearchCardsManager from "../../agentHost/components/ResearchCardsManager.vue";
+// Legacy landing spot for old deep links ("agent-knowledge" / "memory" /
+// "techniques"). The managers themselves moved to the top-level "库" (Library)
+// view (see docs/AGENT_TOP_LEVEL_REFACTOR.md §6) so they are reused from one
+// place instead of being mounted here too.
 import { useI18n } from "../../../i18n";
 
+const emit = defineEmits<{ "open-library": [] }>();
 const { tr } = useI18n();
 </script>
 <template>
-  <section class="panel config-domain-panel agent-knowledge">
-    <p class="config-domain-description">{{ tr('agent 的两类参考素材:它在各项目自己记下的跨会话记忆,以及你审入的外部技法卡。两者都是参考、不是授权——只影响 agent 怎么想,不改变它能对谁做什么。', 'The agent\'s two kinds of advisory material: the cross-session memory it keeps per project, and the technique cards you ingest. Both are reference, not authorization — they shape how it thinks, never what it may act on.') }}</p>
-    <ProjectMemoryManager />
-    <ResearchCardsManager />
+  <section class="panel config-domain-panel agent-knowledge-moved">
+    <p class="config-domain-description">{{ tr('记忆库、技法卡和工具库已经搬到顶层的「库」区,不再属于配置中心——它们是跨工作空间共享的参考素材,不是某一项设置。', 'Memory, technique cards and the tool library moved to the top-level “Library” area — they are advisory material shared across workspaces, not a setting.') }}</p>
+    <button class="button secondary compact" type="button" @click="emit('open-library')">{{ tr('前往库', 'Open Library') }}</button>
   </section>
 </template>
 <style scoped>
-.agent-knowledge{display:flex;flex-direction:column}
-.agent-knowledge .config-domain-description{margin-bottom:2px}
+.agent-knowledge-moved{display:flex;flex-direction:column;gap:12px;align-items:flex-start}
 </style>
