@@ -112,6 +112,22 @@ const savedLineStats = computed(() => {
 const incompleteLineStats = computed(() => ["physical", "code", "comments", "blank"]
   .some(key => savedCount(savedLineStats.value[key]) === undefined));
 const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skippedLargeFiles));
+
+// A large scan can have thousands of findings/dependencies; rendering every row at
+// once is what freezes the page (not just the JSON.parse recordOf() now fixes).
+// Cap each big list's DOM to a bounded window per attempt, with "显示更多" to grow it.
+const INDEX_PAGE = 200, DEP_PAGE = 150, APPSEC_PAGE = 150, CICD_PAGE = 200;
+const indexLimit = ref(INDEX_PAGE);
+const depLimit = ref(DEP_PAGE);
+const appsecLimit = ref(APPSEC_PAGE);
+const cicdLimit = ref(CICD_PAGE);
+watch(() => props.selected.id, () => {
+  indexLimit.value = INDEX_PAGE; depLimit.value = DEP_PAGE; appsecLimit.value = APPSEC_PAGE; cicdLimit.value = CICD_PAGE;
+});
+const visibleFindingIndexRows = computed(() => props.sourceFindingRows.slice(0, indexLimit.value));
+const visibleSourceDependencies = computed(() => props.sourceDependencies.slice(0, depLimit.value));
+const visibleAppsecVulnerabilities = computed(() => props.appsecVulnerabilities.slice(0, appsecLimit.value));
+const visibleCicdBlockingFindings = computed(() => props.cicdBlockingFindings.slice(0, cicdLimit.value));
 </script>
 
 <template>
@@ -429,7 +445,7 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
           ><span>{{ tr("文件", "File") }}</span><span>{{ tr("行号", "Line") }}</span>
         </div>
         <div
-          v-for="item in sourceFindingRows"
+          v-for="item in visibleFindingIndexRows"
           :key="`index-${item.id}`"
           :class="{ active: selectedFindingId === item.id }"
           role="button"
@@ -472,6 +488,10 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
         </div>
         <div v-if="!sourceFindingRows.length" class="empty-inline">
           {{ tr("没有可索引的安全发现。", "No security findings to index.") }}
+        </div>
+        <div v-if="visibleFindingIndexRows.length < sourceFindingRows.length" class="result-load-more">
+          <span>{{ tr(`已显示 ${visibleFindingIndexRows.length} / ${sourceFindingRows.length} 条`, `Showing ${visibleFindingIndexRows.length} / ${sourceFindingRows.length}`) }}</span>
+          <button type="button" class="button ghost compact" @click="indexLimit += INDEX_PAGE">{{ tr("显示更多", "Show more") }}</button>
         </div>
       </div>
     </section>
@@ -691,7 +711,7 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
       </div>
       <div class="source-dependency-list">
         <article
-          v-for="item in sourceDependencies"
+          v-for="item in visibleSourceDependencies"
           :key="`dep-${item.id}`"
         >
           <strong>{{
@@ -727,6 +747,10 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
             }}</em
           >
         </article>
+        <div v-if="visibleSourceDependencies.length < sourceDependencies.length" class="result-load-more">
+          <span>{{ tr(`已显示 ${visibleSourceDependencies.length} / ${sourceDependencies.length} 条`, `Showing ${visibleSourceDependencies.length} / ${sourceDependencies.length}`) }}</span>
+          <button type="button" class="button ghost compact" @click="depLimit += DEP_PAGE">{{ tr("显示更多", "Show more") }}</button>
+        </div>
       </div>
     </section>
     <section
@@ -782,7 +806,7 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
       </div>
       <div class="appsec-correlation-list">
         <article
-          v-for="vulnerability in appsecVulnerabilities"
+          v-for="vulnerability in visibleAppsecVulnerabilities"
           :key="`appsec-${vulnerability.id}`"
           :class="`appsec-correlation-card severity-border-${vulnerability.severity}`"
         >
@@ -859,6 +883,10 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
           class="empty-inline"
         >
           {{ tr("当前任务没有可统一的结构化漏洞记录。", "This task has no structured vulnerability records to unify.") }}
+        </div>
+        <div v-if="visibleAppsecVulnerabilities.length < appsecVulnerabilities.length" class="result-load-more">
+          <span>{{ tr(`已显示 ${visibleAppsecVulnerabilities.length} / ${appsecVulnerabilities.length} 条`, `Showing ${visibleAppsecVulnerabilities.length} / ${appsecVulnerabilities.length}`) }}</span>
+          <button type="button" class="button ghost compact" @click="appsecLimit += APPSEC_PAGE">{{ tr("显示更多", "Show more") }}</button>
         </div>
       </div>
     </section>
@@ -969,7 +997,7 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
           ><span>{{ tr("状态", "Status") }}</span><span>{{ tr("生命周期", "Lifecycle") }}</span><span>{{ tr("负责人", "Owner") }}</span>
         </div>
         <div
-          v-for="vulnerability in cicdBlockingFindings"
+          v-for="vulnerability in visibleCicdBlockingFindings"
           :key="`gate-${vulnerability.id}`"
         >
           <span
@@ -996,6 +1024,10 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
         >
           {{ tr("此历史汇总中没有导致门禁超限的 Critical / High 条目；不代表所选轮次 CI 已通过。", "This historical summary has no Critical / High entries that exceed the gate; this does not mean CI passed for the selected attempt.") }}
         </div>
+        <div v-if="visibleCicdBlockingFindings.length < cicdBlockingFindings.length" class="result-load-more">
+          <span>{{ tr(`已显示 ${visibleCicdBlockingFindings.length} / ${cicdBlockingFindings.length} 条`, `Showing ${visibleCicdBlockingFindings.length} / ${cicdBlockingFindings.length}`) }}</span>
+          <button type="button" class="button ghost compact" @click="cicdLimit += CICD_PAGE">{{ tr("显示更多", "Show more") }}</button>
+        </div>
       </div>
     </section>
     </details>
@@ -1005,5 +1037,6 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
 <style scoped>
 .source-historical-results { min-width: 0; }
 .source-historical-results > summary { cursor: pointer; padding: 12px 0; }
+.result-load-more { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 12px; color: var(--ui-muted); font-size: var(--text-micro); }
 .source-historical-results > p { overflow-wrap: anywhere; }
 </style>

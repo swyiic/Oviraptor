@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { refreshFeedback as vRefreshFeedback } from '../../../shared/directives/refreshFeedback';
-import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { invoke } from '@tauri-apps/api/core';
-import { Plus, Square, ArrowUp, ChevronDown, Copy, Check, Pencil, CornerDownRight, ShieldCheck, Search } from "@lucide/vue";
-import { providerDisplayName, SESSION_MODEL_PRESETS } from "../providerPresets";
+import { Plus, Square, ArrowUp, ChevronDown, Copy, Check, Pencil, CornerDownRight, ShieldCheck, Search, Wifi, Loader2, AlertTriangle } from "@lucide/vue";
+import { configurationApi } from "../../configuration/api";
+import { directoryConnections, type ModelDirectoryConnection } from "../../configuration/modelConnections";
 import { useI18n } from "../../../i18n";
 import type { AgentHostSettings, AgentTask } from "../types";
 import { describeAgentHostError } from "../errors";
-import { agentRuntimeHeader, type AgentHostChatClient, type AgentHostConversation, type AgentHostMessage, type AgentModelUsage } from "../chatClient";
+import { agentRuntimeHeader, type AgentHostChatClient, type AgentHostConversation, type AgentHostMessage, type AgentModelUsage, type ModelConnectionTest } from "../chatClient";
 import ConversationMessage from "../../conversations/ConversationMessage.vue";
 import AgentPermissionMode from "./AgentPermissionMode.vue";
 import AgentTaskCollaboration from "./AgentTaskCollaboration.vue";
@@ -231,14 +232,28 @@ const liveSettings = ref<AgentHostSettings>(props.settings);
 watch(() => props.settings, value => { liveSettings.value = value; });
 const header = computed(() => agentRuntimeHeader(liveSettings.value));
 const currentModel = computed(() => liveSettings.value?.apiProvider?.model || "");
+// The switcher must only offer models the user actually configured (saved connection,
+// real credentials) — never static presets with no key/oauth behind them. Source of
+// truth is the same model directory ConfigModelsSection reads/writes.
+const modelConnections = ref<ModelDirectoryConnection[]>([]);
+async function loadModelConnections() {
+  try {
+    const category = await configurationApi.getCategory("models");
+    if (category.section === "models") modelConnections.value = directoryConnections(category);
+  } catch { /* chat still works with whatever model is currently active */ }
+}
+function onAgentHostSettingsChanged() { void loadModelConnections(); }
+onMounted(() => {
+  void loadModelConnections();
+  if (typeof window !== "undefined") window.addEventListener("oviraptor:agent-host-settings", onAgentHostSettingsChanged);
+});
+onBeforeUnmount(() => { if (typeof window !== "undefined") window.removeEventListener("oviraptor:agent-host-settings", onAgentHostSettingsChanged); });
 const modelOptions = computed(() => {
-  const oauth = Boolean(liveSettings.value?.apiProvider?.oauthConfigured);
-  const list = SESSION_MODEL_PRESETS.map(item => {
-    const name = item.provider === "xai"
-      ? (oauth && currentModel.value === item.model ? "xAI Grok (OAuth)" : "xAI Grok (API key)")
-      : providerDisplayName(item.provider, item.baseUrl);
-    return { value: item.model, label: `${name} · ${item.model}` };
-  });
+  const list: { value: string; label: string }[] = [];
+  for (const connection of modelConnections.value) {
+    if (list.some(item => item.value === connection.profile.llm)) continue;
+    list.push({ value: connection.profile.llm, label: `${connection.name} · ${connection.profile.llm}` });
+  }
   if (currentModel.value && !list.some(item => item.value === currentModel.value)) {
     list.unshift({ value: currentModel.value, label: header.value || currentModel.value });
   }
@@ -256,6 +271,33 @@ async function switchModel(event: Event) {
     error.value = String((e as Error).message || e);
     (event.target as HTMLSelectElement).value = currentModel.value;
   } finally { switchingModel.value = false; }
+}
+const connTest = ref<ModelConnectionTest | null>(null);
+const connTestBusy = ref(false);
+function connTestReasonLabel(reason?: string) {
+  return reason === "not_configured" ? tr("未配置模型", "No model configured")
+    : reason === "no_credential" ? tr("缺少凭据", "Missing credential")
+    : reason === "timeout" ? tr("连接超时", "Connection timed out")
+    : reason === "unreachable" ? tr("无法访问", "Unreachable")
+    : reason === "http_error" ? tr("接口返回错误", "API returned an error")
+    : tr("连接失败", "Connection failed");
+}
+const connTestTitle = computed(() => {
+  if (connTestBusy.value) return tr("正在测试模型连接…", "Testing the model connection…");
+  const result = connTest.value;
+  if (!result) return tr("测试当前模型是否能连通", "Test whether the current model can connect");
+  if (result.ok) {
+    const listedNote = result.modelListed === false ? tr("；模型未出现在列表中，仍可能可用", "; model not listed, may still work") : "";
+    return tr(`已连通 ${result.model || currentModel.value}@${result.baseUrl || ""} · ${result.latencyMs ?? "—"}ms${listedNote}`, `Connected to ${result.model || currentModel.value}@${result.baseUrl || ""} · ${result.latencyMs ?? "—"}ms${listedNote}`);
+  }
+  return tr(`${connTestReasonLabel(result.reason)}：${result.error || ""}`, `${connTestReasonLabel(result.reason)}: ${result.error || ""}`);
+});
+async function testConnection() {
+  if (connTestBusy.value) return;
+  connTestBusy.value = true; connTest.value = null;
+  try { connTest.value = await props.client.testModelConnection(); }
+  catch (e) { connTest.value = { ok: false, error: String((e as Error).message || e) }; }
+  finally { connTestBusy.value = false; }
 }
 const errorView = computed(() => (error.value ? describeAgentHostError(error.value) : null));
 const failure = (code?: string) => describeAgentHostError(code);
@@ -762,6 +804,12 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
             <option v-for="item in modelOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
           </select><ChevronDown :size="13" class="ahc-select-caret" />
         </label>
+        <button type="button" class="ahc-conn-test" :class="{ ok: connTest?.ok, err: connTest && !connTest.ok }" :disabled="connTestBusy" :title="connTestTitle" :aria-label="connTestTitle" @click="testConnection">
+          <Loader2 v-if="connTestBusy" :size="13" class="spinning" />
+          <AlertTriangle v-else-if="connTest && !connTest.ok" :size="13" />
+          <Check v-else-if="connTest?.ok" :size="13" />
+          <Wifi v-else :size="13" />
+        </button>
         <AgentPermissionMode :client="client" :project-id="hostProjectId" :runtime-identity="liveSettings.runtime?.identity" :disabled="loadingProject||continuingTask" compact @changed="permissionsOpen&&loadPermissions()" />
         <button type="button" class="ahc-permissions-toggle" :aria-expanded="permissionsOpen" aria-controls="agent-chat-permissions" :disabled="!selectedId" @click="togglePermissions"><ShieldCheck :size="14" />{{ tr('权限详情', 'Permission details') }}</button>
         <span class="ahc-composer-hint">{{ running ? tr('可随时停止或补充要求', 'Stop or steer at any time') : tr('Enter 发送 · Shift+Enter 换行', 'Enter to send · Shift+Enter for a new line') }}</span>
@@ -850,6 +898,13 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
 .ahc-heartbeat { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 12px; color: var(--app-muted, var(--muted, #6b7280)); }
 .ahc-pulse { width: 7px; height: 7px; border-radius: 50%; background: #22a06b; animation: ahc-pulse 1.4s ease-in-out infinite; }
 @keyframes ahc-pulse { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
+.ahc-conn-test { display: grid; place-items: center; flex-shrink: 0; width: 28px; height: 28px; padding: 0; border: 1px solid var(--line, #e5e6e1); border-radius: 7px; background: transparent; color: var(--app-muted, #72746f); cursor: pointer; }
+.ahc-conn-test:hover:not(:disabled) { color: var(--app-ink, #252624); background: color-mix(in srgb, var(--app-ink, #252624) 6%, transparent); }
+.ahc-conn-test.ok { color: #22a06b; border-color: #22a06b; }
+.ahc-conn-test.err { color: var(--red, #b63f3f); border-color: var(--red, #b63f3f); }
+.ahc-conn-test:disabled { cursor: default; opacity: .7; }
+.spinning { animation: ahc-spin .8s linear infinite; }
+@keyframes ahc-spin { to { transform: rotate(360deg); } }
 .ahc-steer { background: var(--app-accent, #3b82f6); }
 .ahc-steer-state,.ahc-model-usage { display: block; color: var(--app-text-muted, #737373); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .ahc-msg-actions { display: flex; gap: 2px; margin-top: 4px; opacity: 0; transition: opacity .15s; }
