@@ -7,7 +7,7 @@
 // continue and actually injects the announcement.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { OpenAiCompatibleRuntime, providerToolName } from '../src/provider.mjs';
+import { OpenAiCompatibleRuntime, providerToolName, MODEL_TRANSIENT_RETRIES } from '../src/provider.mjs';
 import {
   finishTurnDecision,
   FORCED_CONTINUE_BUDGET,
@@ -265,5 +265,40 @@ test('loop (Task 2): a mid-turn tool-set grant is announced to the model before 
     const secondTurnText = JSON.stringify(bodies[1].messages);
     assert.ok(secondTurnText.includes('workspace_run'), 'second request names the newly-available workspace_run');
     assert.ok(secondTurnText.includes('现在可用'), 'second request carries the Host announcement');
+  } finally { await runtime.close(); }
+});
+
+// ---------------------------------------------------------------------------
+// Part 3 — transient connection-error retry (the "连接不稳定" fix)
+// ---------------------------------------------------------------------------
+
+test('retry (a): a transient connection blip is retried and recovers (not dropped) when nothing streamed', async () => {
+  let calls = 0;
+  const { runtime } = harness({
+    tools: [],
+    script: () => {
+      calls += 1;
+      if (calls === 1) throw Object.assign(new Error('fetch failed'), { cause: { code: 'ECONNRESET' } });
+      return chatText('完成。');
+    },
+  });
+  const { sessionId } = await runtime.newSession({ mcpServers });
+  try {
+    const result = await runtime.prompt({ sessionId, prompt: 'hi', userText: 'hi' });
+    assert.equal(calls, 2); // one transient failure, then a successful retry — the turn did NOT drop
+    assert.equal(result.stopReason, 'end_turn');
+  } finally { await runtime.close(); }
+});
+
+test('retry (b): transient failures beyond the budget surface the error (bounded, no infinite retry)', async () => {
+  let calls = 0;
+  const { runtime } = harness({
+    tools: [],
+    script: () => { calls += 1; throw Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' }); },
+  });
+  const { sessionId } = await runtime.newSession({ mcpServers });
+  try {
+    await assert.rejects(runtime.prompt({ sessionId, prompt: 'hi', userText: 'hi' }));
+    assert.equal(calls, 1 + MODEL_TRANSIENT_RETRIES); // initial attempt + the bounded retries, then gives up
   } finally { await runtime.close(); }
 });

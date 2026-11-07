@@ -83,6 +83,10 @@ const isDeepSeekModel = model => /deepseek/i.test(String(model || ''));
 const isXaiBase = base => { try { return new URL(base).origin === 'https://api.x.ai'; } catch { return false; } };
 const isDeepSeekBase = base => { try { return new URL(base).origin === DEEPSEEK_BASE_URL; } catch { return false; } };
 const isXaiOAuthEndpoint = (provider, baseUrl) => provider === 'xai' && String(baseUrl || '').replace(/\/+$/, '') === PROVIDERS.xai.baseUrl;
+// How many times a single model HTTP turn retries on a TRANSIENT connection/timeout/429/5xx
+// error before giving up (only when nothing streamed yet). Smooths "连接不稳定" under the
+// high request volume the autonomy changes produce, without masking a real outage.
+export const MODEL_TRANSIENT_RETRIES = 2;
 /** Keep provider, baseUrl and model consistent: a DeepSeek model never rides the xAI endpoint. */
 export function normalizeProviderModel(input = {}) {
   const out = { ...input };
@@ -1408,30 +1412,60 @@ export class OpenAiCompatibleRuntime {
     if (session.conversationId) this.host?.beginModelUsage?.(session.conversationId, { requestId, runId: session.runId, api, model: session.config.model });
     return requestId;
   }
-  /** One model HTTP turn; on 401, ask host to refresh OAuth once and retry if no text yet. */
+  /**
+   * One model HTTP turn. On 401 (xAI OAuth) refresh once and retry. On a TRANSIENT
+   * connection/timeout/429/5xx error — the cause of "连接不稳定" when the agent now makes
+   * many sequential requests — retry with bounded backoff, but ONLY when nothing streamed
+   * yet (no double-billing a partial answer) and the user did not cancel. A blip no longer
+   * drops the whole task.
+   */
   async #modelTurn(session, tools, { toolChoice, onText } = {}) {
     const attempt = async () => (session.options.useResponsesApi
       ? await this.#responsesTurn(session, tools, { toolChoice, onText })
       : await this.#chatTurn(session, tools, { toolChoice, onText }));
-    try {
-      return await attempt();
-    } catch (error) {
-      const unauthorized = error?.code === 'host_provider_unauthorized';
-      if (!unauthorized || session._authRetried || !this.host?.ensureOAuthAccess) throw error;
-      if (session.config.authentication !== 'oauth' || !isXaiOAuthEndpoint(session.config.provider, session.config.baseUrl)) throw error;
-      // Only retry when nothing streamed yet (avoid double-billing partial answers).
-      if (session._producedText) throw error;
-      session._authRetried = true;
+    const isTransient = (error) => {
+      if (!error) return false;
+      const name = error.name || '';
+      // A timeout from AbortSignal.timeout counts; a user cancel (session.abort) does not.
+      if ((name === 'AbortError' || name === 'TimeoutError') && !session.abort?.signal?.aborted) return true;
+      const code = String(error.code || error.cause?.code || '');
+      if (['ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED', 'EPIPE', 'ENETUNREACH', 'ENETDOWN', 'EAI_AGAIN', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT'].includes(code)) return true;
+      const msg = `${error.message || ''} ${error.cause?.message || ''}`;
+      if (/fetch failed|socket hang up|network error|timed? ?out|terminated|other side closed|connection (?:reset|closed|refused|aborted)|read ECONNRESET/i.test(msg)) return true;
+      const status = Number(error.httpStatus ?? error.status ?? error.statusCode ?? 0);
+      return [429, 500, 502, 503, 504].includes(status);
+    };
+    let transientRetries = 0;
+    for (;;) {
       try {
-        const refreshed = await this.host.ensureOAuthAccess({ force: true });
-        const selected = this.host.providerStore?.read?.() ?? refreshed;
-        if (selected?.authentication !== 'oauth' || !isXaiOAuthEndpoint(selected.provider, selected.baseUrl) || !selected.accessToken) throw error;
-        session.config.apiKey = selected.accessToken;
-        if (this.config.authentication === 'oauth' && isXaiOAuthEndpoint(this.config.provider, this.config.baseUrl)) this.config.apiKey = selected.accessToken;
-      } catch {
+        return await attempt();
+      } catch (error) {
+        // 401 (xAI OAuth): refresh once and retry, only if nothing streamed yet.
+        const unauthorized = error?.code === 'host_provider_unauthorized';
+        if (unauthorized && !session._authRetried && this.host?.ensureOAuthAccess
+          && session.config.authentication === 'oauth' && isXaiOAuthEndpoint(session.config.provider, session.config.baseUrl)
+          && !session._producedText) {
+          session._authRetried = true;
+          try {
+            const refreshed = await this.host.ensureOAuthAccess({ force: true });
+            const selected = this.host.providerStore?.read?.() ?? refreshed;
+            if (selected?.authentication !== 'oauth' || !isXaiOAuthEndpoint(selected.provider, selected.baseUrl) || !selected.accessToken) throw error;
+            session.config.apiKey = selected.accessToken;
+            if (this.config.authentication === 'oauth' && isXaiOAuthEndpoint(this.config.provider, this.config.baseUrl)) this.config.apiKey = selected.accessToken;
+          } catch { throw error; }
+          continue;
+        }
+        // Transient connection/timeout/429/5xx: bounded backoff retry (no partial stream, not cancelled).
+        if (!session._producedText && transientRetries < MODEL_TRANSIENT_RETRIES && !session.abort?.signal?.aborted && isTransient(error)) {
+          transientRetries += 1;
+          const backoff = Math.min(4000, 500 * Math.pow(3, transientRetries - 1)) + Math.floor(Math.random() * 250);
+          try { this.onEvent?.({ type: 'model.transient_retry', attempt: transientRetries, max: MODEL_TRANSIENT_RETRIES, reason: String(error?.message || error?.code || 'transient').slice(0, 120) }); } catch { /* best effort */ }
+          await new Promise(resolve => setTimeout(resolve, backoff));
+          if (session.abort?.signal?.aborted) throw hostError('host_reply_cancelled');
+          continue;
+        }
         throw error;
       }
-      return await attempt();
     }
   }
 
