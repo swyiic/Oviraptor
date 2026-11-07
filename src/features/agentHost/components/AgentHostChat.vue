@@ -99,7 +99,7 @@ async function loadChain() {
   catch { chainHops.value = []; }
 }
 function resetActivity() {
-  inner.value = null; steps.value = []; heartbeat.value = undefined; toolProgress.value = new Map();
+  inner.value = null; steps.value = []; clearHeartbeat(); toolProgress.value = new Map();
   activityRunId.value = undefined; activityMessageId.value = undefined; activityOpen.value = false;
 }
 /** Match public execution updates to their reply; old runs cannot replace the active process. */
@@ -212,6 +212,19 @@ async function loadEarlierMessages(){
 }
 const composerInput = ref<HTMLTextAreaElement>();
 const heartbeat = ref<{ elapsedMs: number; stepTitle?: string }>();
+// The host only emits a runtime.heartbeat every RUNTIME_HEARTBEAT_MS (5s), so
+// displaying heartbeat.elapsedMs directly makes the on-screen timer jump in
+// 5s steps. Tick a locally-interpolated value every 1s between heartbeats
+// instead, re-anchored to the real elapsedMs each time a heartbeat arrives
+// (so drift never accumulates beyond one tick).
+const heartbeatDisplayMs = ref(0);
+let heartbeatReceivedAt = 0, heartbeatTicker: ReturnType<typeof setInterval> | undefined;
+function stopHeartbeatTicker() { if (heartbeatTicker !== undefined) { clearInterval(heartbeatTicker); heartbeatTicker = undefined; } }
+function clearHeartbeat() { heartbeat.value = undefined; heartbeatDisplayMs.value = 0; stopHeartbeatTicker(); }
+function setHeartbeat(payload: { elapsedMs: number; stepTitle?: string }) {
+  heartbeat.value = payload; heartbeatReceivedAt = Date.now(); heartbeatDisplayMs.value = payload.elapsedMs;
+  if (heartbeatTicker === undefined) heartbeatTicker = setInterval(() => { if (heartbeat.value) heartbeatDisplayMs.value = heartbeat.value.elapsedMs + (Date.now() - heartbeatReceivedAt); }, 1000);
+}
 /** `runtime.toolProgress` ticks (~1s) for the step still running, keyed by evidenceId; cleared on resetActivity. */
 const toolProgress = ref<Map<string, { outputLines: number; previewText: string }>>(new Map());
 const { timeline: toolTimeline, totalElapsedMs: toolTimelineElapsedMs } = useToolTimeline({
@@ -753,7 +766,7 @@ function handleEvent(event: AgentHostEvent) {
     const title = String(event.title); if (!steps.value.includes(title)) steps.value = [...steps.value, title].slice(-8);
   } else if (event.type === "runtime.heartbeat") {
     if (!bindActivity(event)) return;
-    heartbeat.value = { elapsedMs: Number(event.elapsedMs) || 0, stepTitle: typeof event.stepTitle === "string" ? event.stepTitle : undefined };
+    setHeartbeat({ elapsedMs: Number(event.elapsedMs) || 0, stepTitle: typeof event.stepTitle === "string" ? event.stepTitle : undefined });
   } else if (event.type === "runtime.toolProgress" && typeof event.evidenceId === "string") {
     if (!bindActivity(event)) return;
     toolProgress.value = new Map(toolProgress.value).set(event.evidenceId, { outputLines: Number(event.outputLines) || 0, previewText: String(event.previewText ?? "") });
@@ -765,15 +778,15 @@ function handleEvent(event: AgentHostEvent) {
   else if (event.type === "message.completed") {
     const active = [...messages.value].reverse().find(message => message.role === 'assistant' && message.status === 'running');
     if (active && (event.runId && active.runId && event.runId !== active.runId || event.messageId && event.messageId !== active.id)) return;
-    running.value = false; heartbeat.value = undefined; grantPrompt.value = null; runtimePermission.value = null; void loadMessages(true); }
+    running.value = false; clearHeartbeat(); grantPrompt.value = null; runtimePermission.value = null; void loadMessages(true); }
   else if (event.type === "runtime.permission_resolved") runtimePermission.value = null;
   // runtime.error is shown on the failed assistant bubble (reloaded on completion); no duplicate banner.
   else if (event.type === "runtime.error") { void loadMessages(); }
 }
 const stop = props.client.events(handleEvent);
-onBeforeUnmount(() => { ++permissionGeneration; disposed = true; ++projectGeneration; ++messageGeneration; stop(); });
+onBeforeUnmount(() => { ++permissionGeneration; disposed = true; ++projectGeneration; ++messageGeneration; stop(); stopHeartbeatTicker(); });
 watch(() => [props.projectName, props.projectId, props.personal], () => void loadProject(), { immediate: true, flush: "sync" });
-watch(running, value => { if (!value) heartbeat.value = undefined; });
+watch(running, value => { if (!value) clearHeartbeat(); });
 watch(selectedId, (id,previous) => { if(previous)conversationDrafts.set(previous,draft.value);++messageGeneration;messageLoad=undefined;messages.value=[];measuredHeights.clear();articleRefCallbacks.clear();avgMeasuredHeight=DEFAULT_ITEM_HEIGHT;loadingMessages.value=false;loadingEarlier.value=false;historyLoaded=false;earlierCursor=undefined;hasEarlier.value=false;followingTail.value=true;unreadBelow.value=false;error.value='';discoveryPanelOpen.value=!!props.draftRequest?.analysis;workspacePanelOpen.value=false;chainPanelOpen.value=false;draft.value=id?conversationDrafts.get(id)||"":""; permissionsOpen.value = false; ++permissionGeneration; resetActivity(); task.value = null; cancellingChildren.value = []; grantPrompt.value = null; runtimePermission.value = null; running.value = false; void loadMessages(); void loadChain(); void restoreStatus(); }, { flush: "sync" });
 watch([()=>props.draftRequest,loadingProject,running,continuingTask,hostProjectId],()=>void applyDiscoveryDraft(),{immediate:true});
 watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{immediate:true});
@@ -822,6 +835,7 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
           </li>
         </ul>
       </details>
+      <ConversationFiles :state="conversationFiles" />
       <button v-if="hasEarlier" type="button" class="text-button" :disabled="loadingEarlier" @click="loadEarlierMessages">{{loadingEarlier?tr('读取中…','Loading…'):tr('加载更早消息','Load earlier messages')}}</button>
       <p v-if="loadingMessages&&!messages.length" role="status">{{tr('正在读取此会话…','Loading this conversation…')}}</p>
       <p v-if="!messages.length" class="ahc-empty">{{ tr(`当前模型：${header || '尚未选择'}。权限不足时会说明用途；已保存的授权会在原范围内复用。`, `Model: ${header || 'not selected'}. Missing permissions are explained; saved grants are reused within their scope.`) }}</p>
@@ -862,7 +876,7 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
             <span v-if="message.status === 'running'" class="ahc-pulse" />
             <span class="ahc-inner-phase">{{ innerPhaseText }}</span>
             <span v-if="activityCount" class="ahc-inner-meta">{{ tr(`${activityCount} 项操作`, `${activityCount} actions`) }}</span>
-            <span v-if="message.status === 'running' && heartbeat" class="ahc-inner-meta">{{ Math.max(1, Math.round(heartbeat.elapsedMs / 1000)) }}s</span>
+            <span v-if="message.status === 'running' && heartbeat" class="ahc-inner-meta ahc-inner-timer">{{ Math.max(1, Math.round(heartbeatDisplayMs / 1000)) }}s</span>
             <ChevronDown :size="13" class="ahc-inner-chevron" aria-hidden="true" />
           </summary>
           <div class="ahc-inner-body">
@@ -885,7 +899,6 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
       </article>
       <div v-if="spacerAfter > 0" class="ahc-virt-spacer" :style="{ height: spacerAfter + 'px' }" aria-hidden="true"></div>
       </div>
-      <ConversationFiles :state="conversationFiles" />
       </div>
     </div>
       <button v-if="unreadBelow" class="button secondary compact ahc-jump-latest" type="button" @click="jumpToLatest">{{tr('有新消息 · 回到底部','New messages · Jump to latest')}}</button>
@@ -984,6 +997,11 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
 .ahc-inner>summary::-webkit-details-marker { display: none; }
 .ahc-inner-phase { flex-shrink: 0; font-weight: 500; }
 .ahc-inner-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Like the copy/delete message actions: hidden until the row is hovered or
+   focused, so a ticking number isn't a permanent fixture of the status line. */
+.ahc-inner-timer { opacity: 0; transition: opacity .15s; }
+.ahc-inner>summary:hover .ahc-inner-timer, .ahc-inner>summary:focus-visible .ahc-inner-timer { opacity: 1; }
+@media(hover:none){.ahc-inner-timer{opacity:1}}
 .ahc-inner-chevron { flex: 0 0 auto; transition: transform .15s ease; }
 .ahc-inner[open]>summary .ahc-inner-chevron { transform: rotate(180deg); }
 .ahc-inner-body { display: grid; gap: 10px; max-height: min(360px, 45vh); overflow: auto; margin: 4px 0 0 4px; padding: 10px 12px; border-left: 2px solid var(--line, #e5e6e1); overflow-wrap: anywhere; }
