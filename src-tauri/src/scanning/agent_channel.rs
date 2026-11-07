@@ -44,6 +44,33 @@ struct List {
     limit: Option<i64>,
     offset: Option<i64>,
 }
+/// Operator-only capability-class authorization, reached only through the trusted
+/// Host bridge (`scanAuthorizationConversationAction` → internalAction
+/// `authorize_capability`). It is never a model tool. The actual write delegates
+/// to `set_scan_capability_authorization_on`, which keeps the legal-attestation
+/// precondition, the known-class check and the immutable-record guarantee.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AuthorizeCapability {
+    scan_id: String,
+    #[serde(default)]
+    attempt_number: Option<i64>,
+    legal_attestation: bool,
+    classes: Vec<String>,
+    #[serde(default)]
+    attested_by: Option<String>,
+}
+/// Operator-only, host-triggered auto-apply of a pre-registered standing
+/// authorization. Never a model tool; it signs nothing and widens nothing — it
+/// only reuses the operator's earlier registration for a scan whose targets it
+/// fully covers.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ApplyStanding {
+    scan_id: String,
+    #[serde(default)]
+    attempt_number: Option<i64>,
+}
 
 fn active(c: &rusqlite::Connection, project: i64) -> Result<(), String> {
     if project < 1
@@ -707,6 +734,31 @@ fn arguments(action: &str, args: &Value) -> Result<(), String> {
             }
         }
         "results" => { results::Results::parse(args)?; }
+        "authorize_capability" => {
+            let input: AuthorizeCapability =
+                serde_json::from_value(args.clone()).map_err(|_| "scan_arguments_invalid")?;
+            if input.scan_id.is_empty()
+                || input.scan_id.len() > 128
+                || input.scan_id.chars().any(char::is_control)
+                || input.classes.len() > 8
+                || input.classes.iter().any(|c| c.is_empty() || c.len() > 32)
+                || input.attempt_number.is_some_and(|v| v <= 0)
+                || input.attested_by.as_deref().is_some_and(|v| v.len() > 64)
+            {
+                return Err("scan_arguments_invalid".into());
+            }
+        }
+        "apply_standing_authorization" => {
+            let input: ApplyStanding =
+                serde_json::from_value(args.clone()).map_err(|_| "scan_arguments_invalid")?;
+            if input.scan_id.is_empty()
+                || input.scan_id.len() > 128
+                || input.scan_id.chars().any(char::is_control)
+                || input.attempt_number.is_some_and(|v| v <= 0)
+            {
+                return Err("scan_arguments_invalid".into());
+            }
+        }
         "fingerprint_search" | "fingerprint_read" => { fingerprint_reference::validate_arguments(action, args)?; }
         "deliveries" => {
             if args.get("limit").is_some_and(|limit| !limit.as_i64().is_some_and(|value| (1..=64).contains(&value))) {
@@ -1061,6 +1113,98 @@ fn dispatch_in(
     if matches!(action, "fingerprint_search" | "fingerprint_read") {
         return fingerprint_reference::dispatch(&c, project, action, &args);
     }
+    if action == "authorize_capability" {
+        // Operator path only: the Host's authorization channel reaches this, never
+        // a model tool. The scan must belong to this project, then the immutable
+        // operator record is written (attestation enforced by the writer).
+        let input: AuthorizeCapability =
+            serde_json::from_value(args).map_err(|_| "scan_arguments_invalid")?;
+        owned_scope(&c, project, &input.scan_id)?;
+        let attempt = match input.attempt_number {
+            Some(value) if value > 0 => value,
+            Some(_) => return Err("scan_arguments_invalid".into()),
+            None => c
+                .query_row(
+                    "SELECT attempt_count FROM sentinel_scans WHERE id=?1",
+                    [&input.scan_id],
+                    |r| r.get::<_, i64>(0),
+                )
+                .map_err(|_| "scan_task_unavailable")?
+                .max(1),
+        };
+        let attested_by = input.attested_by.as_deref().unwrap_or("operator");
+        super::set_scan_capability_authorization_on(
+            &c,
+            &input.scan_id,
+            attempt,
+            input.legal_attestation,
+            &input.classes,
+            attested_by,
+        )
+        .map_err(|error| {
+            // Stable, fail-closed codes for the Host. Each is a pre-commit
+            // validation or the immutability guard: nothing new started.
+            if error.contains("合法授权") {
+                "scan_authorization_attestation_required".to_string()
+            } else if error.contains("未知的高危能力类") {
+                "scan_authorization_class_invalid".to_string()
+            } else if error.contains("不可更改") {
+                "scan_authorization_immutable".to_string()
+            } else if error.contains("任务不存在") {
+                "scan_task_unavailable".to_string()
+            } else {
+                error
+            }
+        })?;
+        let mut classes = input.classes.clone();
+        classes.sort();
+        classes.dedup();
+        return Ok(json!({
+            "projectId": project,
+            "scanId": input.scan_id,
+            "attemptNumber": attempt,
+            "authorized": true,
+            "classes": classes,
+            "attestedBy": attested_by,
+        }));
+    }
+    if action == "apply_standing_authorization" {
+        // Host-triggered, operator path only. Reuse the operator's prior standing
+        // registration for a scan it fully covers; apply nothing otherwise.
+        let input: ApplyStanding =
+            serde_json::from_value(args).map_err(|_| "scan_arguments_invalid")?;
+        owned_scope(&c, project, &input.scan_id)?;
+        let attempt = match input.attempt_number {
+            Some(value) if value > 0 => value,
+            Some(_) => return Err("scan_arguments_invalid".into()),
+            None => c
+                .query_row(
+                    "SELECT attempt_count FROM sentinel_scans WHERE id=?1",
+                    [&input.scan_id],
+                    |r| r.get::<_, i64>(0),
+                )
+                .map_err(|_| "scan_task_unavailable")?
+                .max(1),
+        };
+        let applied = super::apply_standing_authorizations_for_scan(&c, &input.scan_id, attempt)
+            .map_err(|error| {
+                if error.contains("合法授权") {
+                    "scan_authorization_attestation_required".to_string()
+                } else if error.contains("未知的高危能力类") {
+                    "scan_authorization_class_invalid".to_string()
+                } else {
+                    error
+                }
+            })?;
+        return Ok(json!({
+            "projectId": project,
+            "scanId": input.scan_id,
+            "attemptNumber": attempt,
+            "authorized": !applied.is_empty(),
+            "appliedFromStanding": !applied.is_empty(),
+            "classes": applied,
+        }));
+    }
     if action == "list" {
         let input: List = serde_json::from_value(args).map_err(|_| "scan_arguments_invalid")?;
         let limit = input.limit.unwrap_or(20);
@@ -1406,5 +1550,129 @@ mod model_client_tests {
         assert_eq!(verify_model_client(&profile(closed, "good-key", None)).err().as_deref(), Some("scan_model_unreachable"));
         let dead_proxy = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
         assert_eq!(verify_model_client(&profile(server, "good-key", Some(format!("http://127.0.0.1:{dead_proxy}")))).err().as_deref(), Some("scan_model_unreachable"));
+    }
+}
+
+#[cfg(test)]
+mod authorize_capability_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// A fully initialized desktop database with two projects and two scans.
+    fn seeded() -> (std::path::PathBuf, std::path::PathBuf) {
+        let root = std::env::temp_dir().join(format!("oviraptor-authz-{}", uuid::Uuid::new_v4()));
+        let desktop = root.join("desktop");
+        let db_path = crate::db::initialize(&desktop).unwrap();
+        {
+            let c = crate::db::open(&db_path).unwrap();
+            c.execute_batch(
+                "INSERT INTO projects(id,name) VALUES(1,'one'),(2,'two');
+                 INSERT INTO sentinel_scans(id,project_id,status,attempt_count,scan_type) VALUES('scan-1',1,'completed',1,'web'),('foreign',2,'completed',1,'web');",
+            )
+            .unwrap();
+        }
+        (db_path, desktop)
+    }
+
+    fn cleanup(desktop: &std::path::Path) {
+        let _ = std::fs::remove_dir_all(desktop.parent().unwrap());
+    }
+
+    #[test]
+    fn operator_authorize_writes_the_immutable_record_scoped_to_the_project() {
+        let (db_path, dir) = seeded();
+        let result = dispatch_on(
+            None, &db_path, &dir, 1, "authorize_capability",
+            json!({"scanId":"scan-1","legalAttestation":true,"classes":["code_exec","internal_scope"]}),
+            "op-1",
+        )
+        .unwrap();
+        assert_eq!(result["authorized"], true);
+        assert_eq!(result["attemptNumber"], 1);
+        assert_eq!(result["attestedBy"], "operator");
+        let c = crate::db::open(&db_path).unwrap();
+        assert!(super::scan_capability_class_authorized(&c, "scan-1", 1, "code_exec").unwrap());
+        assert!(super::scan_capability_class_authorized(&c, "scan-1", 1, "internal_scope").unwrap());
+        // A class outside the authorized set stays refused — the floor is closed.
+        assert!(!super::scan_capability_class_authorized(&c, "scan-1", 1, "egress").unwrap());
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn operator_standing_attribution_is_recorded() {
+        let (db_path, dir) = seeded();
+        dispatch_on(
+            None, &db_path, &dir, 1, "authorize_capability",
+            json!({"scanId":"scan-1","legalAttestation":true,"classes":["egress"],"attestedBy":"operator_standing"}),
+            "op-1",
+        )
+        .unwrap();
+        let c = crate::db::open(&db_path).unwrap();
+        let who: String = c
+            .query_row("SELECT attested_by FROM scan_capability_authorizations WHERE scan_id='scan-1' AND attempt_number=1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(who, "operator_standing");
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn authorize_refuses_a_scan_in_another_project() {
+        let (db_path, dir) = seeded();
+        let err = dispatch_on(
+            None, &db_path, &dir, 1, "authorize_capability",
+            json!({"scanId":"foreign","legalAttestation":true,"classes":["code_exec"]}),
+            "op-1",
+        )
+        .unwrap_err();
+        assert_eq!(err, "scan_task_unavailable");
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn authorize_refuses_high_risk_without_attestation() {
+        let (db_path, dir) = seeded();
+        let err = dispatch_on(
+            None, &db_path, &dir, 1, "authorize_capability",
+            json!({"scanId":"scan-1","legalAttestation":false,"classes":["code_exec"]}),
+            "op-1",
+        )
+        .unwrap_err();
+        assert_eq!(err, "scan_authorization_attestation_required");
+        // Nothing was written: the gate stays closed.
+        let c = crate::db::open(&db_path).unwrap();
+        assert!(!super::scan_capability_class_authorized(&c, "scan-1", 1, "code_exec").unwrap());
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn authorize_is_immutable_once_written() {
+        let (db_path, dir) = seeded();
+        dispatch_on(
+            None, &db_path, &dir, 1, "authorize_capability",
+            json!({"scanId":"scan-1","legalAttestation":true,"classes":["code_exec"]}),
+            "op-1",
+        )
+        .unwrap();
+        let err = dispatch_on(
+            None, &db_path, &dir, 1, "authorize_capability",
+            json!({"scanId":"scan-1","legalAttestation":true,"classes":["egress"]}),
+            "op-2",
+        )
+        .unwrap_err();
+        assert_eq!(err, "scan_authorization_immutable");
+        cleanup(&dir);
+    }
+
+    #[test]
+    fn authorize_rejects_an_unknown_class() {
+        let (db_path, dir) = seeded();
+        let err = dispatch_on(
+            None, &db_path, &dir, 1, "authorize_capability",
+            json!({"scanId":"scan-1","legalAttestation":true,"classes":["make_coffee"]}),
+            "op-1",
+        )
+        .unwrap_err();
+        assert_eq!(err, "scan_authorization_class_invalid");
+        cleanup(&dir);
     }
 }

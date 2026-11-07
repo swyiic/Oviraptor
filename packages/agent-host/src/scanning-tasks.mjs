@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { CertificateTasks } from './certificate-tasks.mjs';
+import { SCANNING_APP_ID } from './legacy-bridge.mjs';
 import { hostError } from './store.mjs';
 import { scrubbedModelText } from './quality-prompt.mjs';
 // The App SDK's bounded schema subset has no conditional fields. Validate the
@@ -13,10 +14,21 @@ export function validateScanningResultsArguments(args) {
  return args;
 }
 export const SCANNING_TOOLS = new Map([
+ // Advisory, host-handled locally (never bridged, never authorizes): it only
+ // opens the operator authorization panel and records the model's proposal.
+ ['request_scan_authorization','request_authorization'],
  ['scan_from_assets','from_assets'],['scan_list','list'],['scan_status','status'],['scan_preflight','preflight'],['scan_recovery','recovery'],['scan_results','results'],
  ['scan_fingerprint_search','fingerprint_search'],['scan_fingerprint_read','fingerprint_read'],
  ['scan_start','start'],['scan_pause','pause'],['scan_resume','resume'],['scan_continue_targets','continue_targets'],['scan_bind','bind'],['scan_reassociate_binding','reassociate_binding'],['scan_command','command'],['scan_command_ack','command_ack'],['scan_review','review'],['scan_verify','verify'],['scan_retry_delivery','retry_delivery'],
 ]);
+// Canonical high-risk capability classes. Mirror of
+// scan_capability_authorization.rs::HIGH_RISK_CLASS_STRINGS and
+// AgentWorkbench.vue::HIGH_RISK_CLASSES — keep all three in sync. A class string
+// the Rust gate does not recognize simply never matches, so the floor is closed
+// either way, but the advisory tool rejects unknown classes up front.
+export const SCAN_AUTH_LEGAL_CLASSES = Object.freeze(new Set([
+ 'code_exec', 'target_write', 'post_write', 'egress', 'internal_scope', 'persistence', 'exfil', 'waf_evasion',
+]));
 function ensureScanInbox(store) {
  store.db.exec(`CREATE TABLE IF NOT EXISTS scan_result_inbox(
   event_id TEXT PRIMARY KEY,
@@ -136,8 +148,23 @@ export class ScanningTasks extends CertificateTasks {
  constructor(options={}){super({origin:process.env.OVIRAPTOR_SCAN_BRIDGE_ORIGIN??null,token:process.env.OVIRAPTOR_SCAN_BRIDGE_TOKEN??null,requestTimeoutMs:60000,...options,tools:SCANNING_TOOLS,route:'/scan-task',kind:'scan',readOnlyTools:[...(options.readOnlyTools??['scan_list','scan_status','scan_preflight','scan_recovery','scan_results','scan_fingerprint_search','scan_fingerprint_read']),'scan_deliveries']});
   /** Called with `{conversationId, messageId}` for each newly stored delivery. */
   this.onDelivered = () => {};
+  /** Called with the model's authorization proposal; the service turns it into a `scan.authorization.requested` event that renders the operator panel. */
+  this.onAuthorizationRequested = () => {};
  }
  async call(store, projectId, name, args, operationId, context = {}) {
+  // Advisory, zero-authority: opens the operator panel and records the model's
+  // proposal. It is deliberately NOT bridged to the desktop and writes no
+  // authorization — the attestation and the capability record are the
+  // operator's, produced only by the panel's `authorize` channel.
+  if (name === 'request_scan_authorization') return this.#requestAuthorization(store, projectId, args, context);
+  // Just before execution, auto-apply any operator standing authorization that
+  // fully covers this scan's targets, so deep tools are advertised to the run
+  // without a live panel click. Best-effort: a miss or error simply leaves the
+  // authorization as it is and the run falls back to the panel path.
+  if (name === 'scan_start' && typeof args?.taskId === 'string') {
+    try { await this.applyStandingAuthorization(store, projectId, { scanId: args.taskId, attemptNumber: args.attemptNumber }, randomUUID(), context); }
+    catch { /* standing authorization is advisory sugar; never block the start */ }
+  }
   if (name === 'scan_reassociate_binding') args = this.#reassociation(store, projectId, args, context);
   const result = await super.call(store, projectId, name, args, operationId, context);
   if (context.hostConversationId && ['scan_bind','scan_reassociate_binding'].includes(name) && typeof args?.taskId === 'string')
@@ -159,6 +186,71 @@ export class ScanningTasks extends CertificateTasks {
   try { store.conversation(mapping.conversationId); } catch { alive = false; }
   if (alive) throw stop('host_scan_binding_source_active');
   return { ...args, hostSourceGone: mapping.conversationId };
+ }
+ /**
+  * Advisory authorization request from the model. Validates the proposed classes
+  * against the canonical set and asks the service to raise the operator panel.
+  * It NEVER authorizes, NEVER signs the legal attestation, NEVER bridges to the
+  * desktop and NEVER starts a scan — the deep-test tools stay undispatched until
+  * the operator authorizes through the panel's operator-only channel.
+  */
+ #requestAuthorization(store, projectId, args, context) {
+  const bad = code => hostError(code, 400, { outcomeUnknown: false, phase: 'not_started', retryable: false });
+  const taskId = args?.taskId;
+  if (typeof taskId !== 'string' || !taskId || taskId.length > 128) throw bad('host_scan_authorization_task_invalid');
+  if (!Array.isArray(args?.proposedClasses) || args.proposedClasses.length < 1 || args.proposedClasses.length > 8
+   || args.proposedClasses.some(value => typeof value !== 'string')) throw bad('host_scan_authorization_class_invalid');
+  const proposedClasses = [...new Set(args.proposedClasses)].sort();
+  if (proposedClasses.some(value => !SCAN_AUTH_LEGAL_CLASSES.has(value))) throw bad('host_scan_authorization_class_invalid');
+  const reason = typeof args?.reason === 'string' ? args.reason.slice(0, 600) : '';
+  const conversationId = context.hostConversationId ? String(context.hostConversationId) : '';
+  // The panel is anchored to the Host-verified conversation, not one the model
+  // named. Record the proposal and raise the panel; do not touch the authorization
+  // table.
+  try { this.onAuthorizationRequested({ conversationId, projectId, taskId, proposedClasses, reason }); } catch { /* the event is best-effort; the receipt stands either way */ }
+  const structuredContent = { projectId, taskId, requested: true, authorizationPending: true, authorized: false,
+   proposedClasses, panel: 'operator_authorization_panel',
+   note: 'Operator must tick the classes and the legal-authorization checkbox and click Authorize in the panel. This tool did not authorize anything.' };
+  return { content: [{ type: 'text', text: JSON.stringify(structuredContent) }], structuredContent };
+ }
+ /**
+  * Operator-only: land a capability-class authorization for a scan attempt onto
+  * the immutable desktop record, via the trusted `/scan-task` bridge. Never a
+  * model tool (no entry in any model `tools/list`); it is reached only from the
+  * Host's `scanAuthorizationConversationAction`, which the panel's operator click
+  * drives. The desktop re-validates ownership and immutability, and
+  * `set_scan_capability_authorization` itself refuses a non-empty class set
+  * without the legal attestation.
+  */
+ async authorizeCapability(store, projectId, { scanId, attemptNumber, legalAttestation, classes, attestedBy = 'operator' }, operationId, { hostConversationId } = {}) {
+  const bad = code => hostError(code, 400, { outcomeUnknown: false, phase: 'not_started', retryable: false });
+  if (typeof scanId !== 'string' || !scanId || scanId.length > 128) throw bad('host_scan_authorization_task_invalid');
+  if (!Array.isArray(classes) || classes.some(value => typeof value !== 'string')) throw bad('host_scan_authorization_class_invalid');
+  const list = [...new Set(classes)].sort();
+  if (list.some(value => !SCAN_AUTH_LEGAL_CLASSES.has(value))) throw bad('host_scan_authorization_class_invalid');
+  // The same hard precondition the Rust writer enforces, asserted here too so the
+  // panel can never bridge an un-attested high-risk opt-in.
+  if (list.length && legalAttestation !== true) throw bad('host_scan_authorization_attestation_required');
+  const attempt = attemptNumber === undefined || attemptNumber === null ? undefined
+   : Number.isSafeInteger(Number(attemptNumber)) && Number(attemptNumber) > 0 ? Number(attemptNumber) : null;
+  if (attempt === null) throw bad('host_scan_authorization_attempt_invalid');
+  const payload = { scanId, ...(attempt !== undefined ? { attemptNumber: attempt } : {}),
+   legalAttestation: Boolean(legalAttestation), classes: list, attestedBy: String(attestedBy || 'operator').slice(0, 64) };
+  return super.call(store, projectId, 'scan_authorize_internal', payload, operationId, { internalAction: 'authorize_capability', hostConversationId });
+ }
+ /**
+  * Host-triggered auto-apply of an operator standing authorization for a scan,
+  * via the trusted bridge. Never a model tool and never writes authority of its
+  * own: the desktop reuses the operator's prior registration only for a scan
+  * whose every target the registration covers, and applies nothing otherwise.
+  */
+ async applyStandingAuthorization(store, projectId, { scanId, attemptNumber }, operationId, { hostConversationId } = {}) {
+  if (typeof scanId !== 'string' || !scanId || scanId.length > 128) throw hostError('host_scan_authorization_task_invalid', 400, { outcomeUnknown: false, phase: 'not_started', retryable: false });
+  const attempt = attemptNumber === undefined || attemptNumber === null ? undefined
+   : Number.isSafeInteger(Number(attemptNumber)) && Number(attemptNumber) > 0 ? Number(attemptNumber) : null;
+  if (attempt === null) throw hostError('host_scan_authorization_attempt_invalid', 400, { outcomeUnknown: false, phase: 'not_started', retryable: false });
+  const payload = { scanId, ...(attempt !== undefined ? { attemptNumber: attempt } : {}) };
+  return super.call(store, projectId, 'scan_apply_standing_internal', payload, operationId, { internalAction: 'apply_standing_authorization', hostConversationId });
  }
  /** Binds a Host conversation the Host itself chose for a task (no model involved). */
  async bindConversation(store, projectId, taskId, conversationId) {
@@ -192,4 +284,43 @@ export class ScanningTasks extends CertificateTasks {
   }
   return receipts;
  }
+}
+
+/**
+ * UI adapter for the in-conversation scan authorization panel, bound to a stored
+ * conversation and the current access policy. Mirrors
+ * `discovery-assist.mjs::discoveryConversationAction`: the operator-only
+ * `authorize` action never appears in any model `tools/list` — it is reached
+ * only from the panel's human click through the Host route. Hard invariants: the
+ * model cannot drive this (no model tool reaches it), and it refuses a non-empty
+ * class set without the operator's legal attestation.
+ */
+export async function scanAuthorizationConversationAction(host, conversationId, projectId, input = {}) {
+  const conversation = host.store.conversation(conversationId, projectId), p = conversation.projectId;
+  const app = host.store.application(SCANNING_APP_ID), identity = host.runtimeIdentity();
+  const grant = host.apps.effectiveGrant(app, p, identity), policy = host.accessPolicy.view(p);
+  const witness = { appRevision: app.revision, grantRevision: grant.revision, policyRevision: policy.revision, runtimeIdentity: identity };
+  if (!app.enabled || host.apps.changing.has(app.id) || !host.apps.scanningTasks?.available) throw hostError('host_scan_executor_unavailable', 503);
+  if (input.action === 'authorize') {
+    if (Object.keys(witness).some(key => input[key] !== witness[key])) throw hostError('host_scan_authorization_stale', 409, { retryable: false });
+    if (!grant.permissions.includes('investigation.execute') || grant.disclosureRuntime !== identity) throw hostError('host_tool_permission_denied', 403, { retryable: false });
+    const { taskId, attemptNumber, classes, legalAttestation } = input;
+    if (typeof taskId !== 'string' || !taskId || taskId.length > 128 || !Array.isArray(classes)) throw hostError('host_tool_input_invalid', 400);
+    const result = await host.apps.scanningTasks.authorizeCapability(host.store, p,
+      { scanId: taskId, attemptNumber, legalAttestation: legalAttestation === true, classes, attestedBy: 'operator' },
+      randomUUID(), { hostConversationId: conversationId });
+    // TOCTOU guard, mirroring discovery's trusted-start re-check: authority must
+    // be unchanged across the write.
+    const current = host.store.application(app.id), now = host.accessPolicy.view(p), checkedIdentity = host.runtimeIdentity();
+    const checkedGrant = host.apps.effectiveGrant(current, p, checkedIdentity);
+    if (!current.enabled || host.apps.changing.has(app.id) || current.revision !== witness.appRevision
+      || checkedGrant.revision !== witness.grantRevision || now.revision !== witness.policyRevision
+      || checkedIdentity !== identity || checkedGrant.disclosureRuntime !== identity
+      || !checkedGrant.permissions.includes('investigation.execute')) throw hostError('host_tool_authority_changed', 403);
+    host.emit({ type: 'scan.authorization.updated', conversationId, projectId: p, taskId });
+    return { ...(result?.structuredContent ?? result), confirmationWitness: witness };
+  }
+  if (input.action !== undefined && input.action !== 'status') throw hostError('host_tool_input_invalid', 400);
+  if (!grant.permissions.includes('investigation.read') || grant.disclosureRuntime !== identity) throw hostError('host_tool_permission_denied', 403, { retryable: false });
+  return { confirmationWitness: witness, legalClasses: [...SCAN_AUTH_LEGAL_CLASSES] };
 }

@@ -97,13 +97,19 @@ export class AgentHost {
     this.heartbeatMs = Number.isFinite(heartbeatMs) && heartbeatMs > 0 ? heartbeatMs : RUNTIME_HEARTBEAT_MS;
     this.apps.onActivity = event => this.emit({ type: 'application.activity', appId: event.appId, ...(typeof event.busy === 'boolean' ? { busy: event.busy } : {}) });
     this.runtimeRevision = Number(this.store.db.prepare("SELECT value FROM host_settings WHERE key='runtime_revision'").get()?.value ?? 1);
-    this.accessPolicy = new ProjectAccessPolicy(this.store, () => this.runtimeIdentity());
+    this.accessPolicy = new ProjectAccessPolicy(this.store, () => this.#accessPolicyIdentity());
     this.apps.agentGrant = (app, projectId, base, identity) => this.accessPolicy.grant(app, projectId, base, identity);
     this.subagents = new ReadOnlySubagents(this);
     this.runtimeState = this.runtime ? 'configured' : 'unconfigured';
     this.runtimeEvidence = this.runtime?.evidence ?? (this.runtime?.command === 'grok' ? 'official-cli-unverified' : this.runtime ? 'synthetic-or-custom' : 'none');
     if (this.apps.scanningTasks) {
       // A stored delivery is a new message, not the end of a run.
+      // The model's advisory authorization proposal: raise the operator panel.
+      // This event carries no authority; the operator's click is what authorizes.
+      this.apps.scanningTasks.onAuthorizationRequested = meta => {
+        this.emit({ type: 'scan.authorization.requested', conversationId: meta.conversationId, projectId: meta.projectId,
+          taskId: meta.taskId, proposedClasses: meta.proposedClasses, reason: meta.reason });
+      };
       this.apps.scanningTasks.onDelivered = meta => {
         this.emit({ type: 'conversation.message', conversationId: meta.conversationId, message: { id: meta.messageId, role: 'assistant', content: meta.content, createdAt: meta.createdAt, status: 'completed', stopReason: 'scan_delivery' } });
         // B2: a new Nest event may auto-trigger one bounded corrective turn —
@@ -234,6 +240,11 @@ export class AgentHost {
     return { conversation, created: true, bound };
   }
   runtimeIdentity() { return `${this.runtime ? this.runtimeId : 'none'}:${this.runtimeRevision}`; }
+  // Elevated access (full/auto) binds to the model RECIPIENT (endpoint+provider+auth+credential),
+  // NOT the volatile runtime revision. Switching models on the same account keeps full access
+  // active; only changing provider/endpoint/credential forces a deliberate re-confirm. This fixes
+  // full access silently reverting to "ask" on every model switch (revision bump).
+  #accessPolicyIdentity() { return `${this.runtime ? this.runtimeId : 'none'}:${this.#permissionRecipient()}`; }
   #providerRuntime() {
     const config = this.providerStore.read();
     const bearer = this.providerStore.bearer();
@@ -374,6 +385,41 @@ export class AgentHost {
     this.#cancelOAuthPoll(); this.oauthPending = null;
     if (this.runtimeId === 'xai-api') await this.setRuntime('xai-api', { force: true, preserveAuthorization: beforeRecipient===this.#permissionRecipient() });
     return { ...this.settings(), apiProvider: view };
+  }
+  /**
+   * Lightweight reachability check of the CONFIGURED model provider: GET {baseUrl}/models
+   * with the stored credential. Answers "can this model actually connect?" without a paid
+   * completion. Never returns the credential. Bounded by a 12s timeout.
+   */
+  async testProvider() {
+    const config = this.providerStore.read();
+    const baseUrl = config?.baseUrl ? String(config.baseUrl).replace(/\/+$/, '') : '';
+    const model = config?.model || '';
+    if (!baseUrl) return { ok: false, reason: 'not_configured' };
+    const bearer = this.providerStore.bearer();
+    if (!bearer) return { ok: false, reason: 'no_credential', baseUrl, model };
+    const started = Date.now();
+    try {
+      const res = await Promise.race([
+        this.providerFetch(`${baseUrl}/models`, { method: 'GET', headers: { Authorization: `Bearer ${bearer}`, Accept: 'application/json' } }),
+        new Promise((_, reject) => setTimeout(() => reject(Object.assign(new Error('timeout'), { code: 'timeout' })), 12000)),
+      ]);
+      const latencyMs = Date.now() - started;
+      if (!res.ok) {
+        let detail = '';
+        try { detail = (await res.text()).slice(0, 200); } catch { /* ignore body */ }
+        return { ok: false, reason: 'http_error', status: res.status, baseUrl, model, latencyMs, error: detail };
+      }
+      let modelListed = null;
+      try {
+        const data = await res.json();
+        const ids = Array.isArray(data?.data) ? data.data.map(entry => entry?.id).filter(Boolean) : [];
+        if (model) modelListed = ids.includes(model);
+      } catch { /* non-JSON 200 still counts as reachable */ }
+      return { ok: true, status: res.status, baseUrl, model, latencyMs, modelListed };
+    } catch (error) {
+      return { ok: false, reason: error?.code === 'timeout' ? 'timeout' : 'unreachable', baseUrl, model, latencyMs: Date.now() - started, error: String(error?.message || error).slice(0, 200) };
+    }
   }
   async selectProviderOAuth(input = {}) {
     if (this.runs.size || this.runtimeChanging || this.oauthPending?.status === 'pending') throw hostError('host_runtime_busy', 409);
@@ -757,7 +803,7 @@ export class AgentHost {
       this.store.db.exec('BEGIN IMMEDIATE');
       try {
         const save = this.store.db.prepare('INSERT OR IGNORE INTO conversation_workspace_grants VALUES(?,?,?)');
-        for (const kind of kinds) save.run(id, pending.runtimeIdentity, kind);
+        for (const kind of kinds) save.run(id, this.#accessPolicyIdentity(), kind);
         this.store.db.exec('COMMIT');
       } catch (error) { this.store.db.exec('ROLLBACK'); throw error; }
     }
@@ -769,7 +815,7 @@ export class AgentHost {
   }
   workspaceGrants(conversationId, projectId) {
     this.store.conversation(conversationId, projectId);
-    return { permissions: this.store.db.prepare('SELECT permission FROM conversation_workspace_grants WHERE conversation_id=? AND runtime_identity=? ORDER BY permission').all(conversationId, this.runtimeIdentity()).map(row => row.permission) };
+    return { permissions: this.store.db.prepare('SELECT permission FROM conversation_workspace_grants WHERE conversation_id=? AND runtime_identity=? ORDER BY permission').all(conversationId, this.#accessPolicyIdentity()).map(row => row.permission) };
   }
   clearWorkspaceGrants(conversationId, projectId) {
     this.store.conversation(conversationId, projectId);
@@ -1193,12 +1239,17 @@ export class AgentHost {
       run.materialRoot = materialRoot;
       run.materialRoots = [materialRoot];
       if (!run.materialOpen && (citedHosts(text).length || citedPathTokens(text).length)) {
-        text += '\nHost: 用户没有放行这次网址或文件访问。不要抓取，也不要声称已经打开文件。';
+        text += '\nHost: 当前是“询问审批”权限模式，用户这次没有放行这个网址/文件访问——所以你现在读不到它、也不能用 workspace_run 跑脚本解析它。不要抓取，也不要声称已经打开文件。但如果用户是要你分析/解密这个文件：这不是“项目里没有相关数据”，也不是文件不存在，而是缺一个前置授权。请直接用一句话请用户把本对话的「Agent 权限模式」切到「完全访问」（或在弹出的首次访问确认里点允许）——这是你读取原文件并跑脚本解密它的唯一前置；放行后你就一次性读原文件、写解密器用 workspace_run 跑到出明文。绝不要改用 inventory/project_overview/scan_list 等项目库查询来搪塞，也不要把“没放行”说成“没有可用数据”或“读不到就是没有”。';
       } else if (run.materialOpen) {
         const cited = await importCitedFiles(text, workspace);
         if (cited.note) text += `\n${cited.note}`;
         for (const hop of fileHops([...(cited.imported || []), ...(cited.external || [])])) this.#recordHop(conversation.id, hop);
         for (const file of cited.external || []) run.materialRoots.push(dirname(file.source));
+        // Persist this turn's external-file roots and reload every root the user has
+        // ever cited in this conversation, so a later "继续" turn (no re-pasted path)
+        // can still read the big file via workspace_run. Returns roots NOT re-cited now.
+        const carriedRoots = this.#persistAndLoadCitedRoots(conversation.id, run);
+        if (carriedRoots.length) text += `\nHost: 本对话此前已放行、现在仍可读的文件/目录：${carriedRoots.join('、')}。继续解密/分析时，大文件直接写脚本用 workspace_run 从这些目录读取原文件并解析，不要说“沙箱打不开原路径”或“读不到”——读取根已经在位。`;
         const pages = await importCitedPages(text, workspace, { fetchImpl: this.providerFetch });
         if (pages.note) text += `\n${pages.note}`;
         run.citedHosts = citedHosts(text);
@@ -1233,6 +1284,7 @@ export class AgentHost {
       const result = await this.runtime.prompt({ sessionId: run.sessionId, prompt, userText: text, taskContext: { id: taskContext.id, goal: taskContext.goal }, turnId: run.id, answerMode, ...(authorizationContext ? { authorizationContext } : {}) });
       if (result?.replaceText && typeof result.assistantText === 'string') run.text = result.assistantText;
       skills.validate(conversation.id, run.skillScope);
+      if (Array.isArray(result?.suggestedNext) && result.suggestedNext.length) run.suggestedNext = result.suggestedNext;
       run.metrics = result.metrics;
       run.stopReason = result.stopReason; run.outcomeUnknown = false;
       const stopped = ['max_turn_requests', 'paused_budget', 'tool_loop_stalled'].includes(result.stopReason)
@@ -1272,7 +1324,8 @@ export class AgentHost {
       this.#cancelAuthorizations(conversation.id, run.id);
       await this.subagents.cancelTree(run.id);
       const disposition = { outcomeUnknown: Boolean(run.outcomeUnknown), failureCode: run.failureCode ?? '', stopReason: run.stopReason ?? '', cancelRequested: Boolean(run.cancelled),
-        ...(run.authenticationRequired ? { authenticationRequired: true } : {}) };
+        ...(run.authenticationRequired ? { authenticationRequired: true } : {}),
+        ...(Array.isArray(run.suggestedNext) && run.suggestedNext.length ? { suggestedNext: run.suggestedNext } : {}) };
       // One scrub of the finished assistant text. An empty scrub is stored as empty, not the original.
       const assistantText = scrubbedModelText(run.text);
       this.store.finishMessage(run.message.id, assistantText, status, disposition);
@@ -1368,27 +1421,59 @@ export class AgentHost {
   async #allowMaterial(conversation, run, text) {
     const targets = [...citedHosts(text), ...citedPathTokens(text)].slice(0, 8);
     if (!targets.length) return false;
-    const identity = this.runtimeIdentity();
+    const identity = this.#accessPolicyIdentity();
     const granted = this.store.db.prepare('SELECT 1 FROM conversation_material_grants WHERE conversation_id=? AND runtime_identity=?').get(conversation.id, identity);
-    if (granted) return true;
+    if (granted) { this.#grantSandboxWorkspace(conversation.id, identity, run); return true; }
     if (run.nonInteractive) return false;
     const accepted = await this.requestAuthorization(conversation.id, {
       projectId: conversation.projectId,
       identity,
-      question: `首次访问需要确认。确认后，本对话可以抓取网址、用浏览器打开页面、按原样发送请求、在本机运行命令，并直接读取你给出的文件。大文件不会整份复制进工作区。\n${targets.join('\n')}`,
-      offers: [{ appId: 'material', revision: 0, permissions: [{ permission: 'material.open', tools: ['workspace_fetch', 'workspace_read_path'] }] }],
+      question: `放行工作区外访问？确认后，本对话可以直接读取你点名的这些文件/目录、在隔离无网沙箱里跑脚本(workspace_run)、并把结果写进工作区——解析、解密、取证一次确认全程可用，不再逐步追问。对外发请求、开浏览器、本机命令属于更高一档，仍会在需要时单独询问。大文件留在原路径，不整份复制。\n${targets.join('\n')}`,
+      offers: [{ appId: 'material', revision: 0, permissions: [{ permission: 'material.open', tools: ['workspace_read_path', 'workspace_run', 'workspace_write'] }] }],
     });
     if (run.cancelled) throw hostError('host_reply_cancelled');
     if (accepted !== true) return false;
     this.store.db.prepare("INSERT OR IGNORE INTO conversation_material_grants(conversation_id,runtime_identity,created_at) VALUES(?,?,datetime('now'))").run(conversation.id, identity);
+    this.#grantSandboxWorkspace(conversation.id, identity, run);
     return true;
+  }
+  /** One material confirmation unlocks the full SANDBOXED-analysis set (read + no-net run +
+   * write), persistently, keyed by the stable account identity. Outward tools (workspace.network:
+   * fetch/http/browser/ws/shell/probe) stay separately gated — the authorization wall is unchanged. */
+  #grantSandboxWorkspace(conversationId, identity, run) {
+    const kinds = ['workspace.read', 'workspace.write', 'workspace.run'];
+    try {
+      const save = this.store.db.prepare('INSERT OR IGNORE INTO conversation_workspace_grants VALUES(?,?,?)');
+      for (const kind of kinds) save.run(conversationId, identity, kind);
+    } catch { /* best effort — the in-memory grant below still lets this run proceed */ }
+    if (run) { if (!run.workspaceAllow) run.workspaceAllow = new Set(); for (const kind of kinds) run.workspaceAllow.add(kind); }
+  }
+  /**
+   * Persist this run's cited external-file roots (already pushed onto run.materialRoots)
+   * and merge back EVERY root the user has cited in this conversation, so a follow-up
+   * "继续" turn — which does not re-paste the path — still has the read-root and can read
+   * the file via workspace_run. Returns the roots that were carried over (not re-cited now),
+   * for a Host note. Best-effort: a DB hiccup never blocks the run.
+   */
+  #persistAndLoadCitedRoots(conversationId, run) {
+    try {
+      const now = new Date().toISOString();
+      const save = this.store.db.prepare('INSERT OR IGNORE INTO conversation_cited_roots(conversation_id,root,created_at) VALUES(?,?,?)');
+      for (const root of run.materialRoots) if (root && root !== run.materialRoot) save.run(conversationId, root, now);
+      const have = new Set(run.materialRoots);
+      const carried = [];
+      for (const { root } of this.store.db.prepare('SELECT root FROM conversation_cited_roots WHERE conversation_id=? ORDER BY created_at').all(conversationId)) {
+        if (root && !have.has(root)) { run.materialRoots.push(root); have.add(root); carried.push(root); }
+      }
+      return carried;
+    } catch { return []; }
   }
   async #authorizeWorkspace(conversation, run, toolName) {
     const kind = workspacePermission(toolName);
     if (!run.workspaceAllow) run.workspaceAllow = new Set();
     if (this.accessPolicy.view(conversation.projectId).mode==='full') return;
     if (run.workspaceAllow.has(kind)) return;
-    if (this.store.db.prepare('SELECT 1 FROM conversation_workspace_grants WHERE conversation_id=? AND runtime_identity=? AND permission=?').get(conversation.id, this.runtimeIdentity(), kind)) { run.workspaceAllow.add(kind); return; }
+    if (this.store.db.prepare('SELECT 1 FROM conversation_workspace_grants WHERE conversation_id=? AND runtime_identity=? AND permission=?').get(conversation.id, this.#accessPolicyIdentity(), kind)) { run.workspaceAllow.add(kind); return; }
     if (!run.workspaceAuthorizations) run.workspaceAuthorizations = new Map();
     if (!run.workspaceAuthorizations.has(kind)) {
       const pending = this.requestAuthorization(conversation.id, {

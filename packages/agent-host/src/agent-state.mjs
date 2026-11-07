@@ -293,3 +293,235 @@ export function noteReviewDone(state, step = 0) {
   next.lastReviewAtStep = step;
   return next;
 }
+
+// ---------------------------------------------------------------------------
+// Pi-inspired finishTurn completion policy (Task 1) and tool-set announcement
+// (Task 2). These are LOOP MECHANICS only. They grant no authority, never
+// weaken a permission/scope/budget gate, and never retry a denied tool. The
+// provider loop still owns cancellation, max_turn_requests and stall stops;
+// these helpers only decide, at a clean end-of-turn, whether to inject one
+// bounded "keep going / produce the deliverable" nudge.
+// ---------------------------------------------------------------------------
+
+const shortToolName = name => String(name ?? '').split(/::|__/).at(-1) || '';
+
+// A finished deliverable for an autonomous analysis/pentest turn.
+const DELIVERABLE_TOOLS = new Set(['record_finding']);
+// Writing a report file (not merely writing a helper script) is a deliverable.
+const REPORT_WRITE_TOOLS = new Set(['workspace_write', 'workspace_edit']);
+// Tools that count as having done real analysis / execution work this turn.
+const ANALYSIS_TOOLS = new Set([
+  'workspace_run', 'workspace_read', 'workspace_grep', 'workspace_glob', 'workspace_write', 'workspace_edit',
+  'scan_results', 'scan_fingerprint_read', 'scan_fingerprint_search',
+  'inventory_query', 'inventory_search', 'inventory_stats',
+  'exposure_overview', 'project_overview', 'journal_read',
+]);
+
+export const FORCED_CONTINUE_BUDGET = 2;
+
+function reportLikePath(args) {
+  const path = String(args?.path ?? args?.file ?? args?.filePath ?? '').toLowerCase();
+  if (!path) return false;
+  return /\.(md|markdown)$/.test(path) || /report|报告|finding|发现|writeup|summary/.test(path);
+}
+
+const okBusinessResult = result => result?.ok === true && result?.isError !== true && result?.advisory !== true;
+
+/** A record_finding or a written report file this turn is a finished deliverable. */
+export function producedDeliverable(toolResultsThisPrompt = []) {
+  if (!Array.isArray(toolResultsThisPrompt)) return false;
+  return toolResultsThisPrompt.some(result => okBusinessResult(result) && (
+    DELIVERABLE_TOOLS.has(shortToolName(result.name))
+    || (REPORT_WRITE_TOOLS.has(shortToolName(result.name)) && reportLikePath(result.arguments))
+  ));
+}
+
+/** Did the turn actually run an analysis/execution/write tool (vs pure chat)? */
+export function didAnalysisWork(toolResultsThisPrompt = []) {
+  if (!Array.isArray(toolResultsThisPrompt)) return false;
+  return toolResultsThisPrompt.some(result => okBusinessResult(result) && ANALYSIS_TOOLS.has(shortToolName(result.name)));
+}
+
+/**
+ * Does the user's goal expect a produced deliverable (a finding, report, written
+ * code, a fix, an exploit/PoC, or an audit/pentest conclusion)? A plain review,
+ * lookup or Q&A does NOT — and must never be force-continued. This is the
+ * "in-scope autonomous analysis/pentest task" gate; it keeps the force-continue
+ * narrowly on the user's actual complaint (partial work on a build/analyze task).
+ */
+export function deliverableExpected(goalText = '') {
+  const text = String(goalText ?? '');
+  if (!text.trim()) return false;
+  return /(审计|渗透|漏洞|利用链|提权|getshell|反序列化|注入|解密|破解|逆向|记录发现|写出?报告|输出报告|生成报告|复现|实现一个|实现个|写(?:一个|个)?(?:脚本|工具|代码|程序|报告|exploit|poc)|修复(?:漏洞|这个|该|问题|bug)|exploit|pentest|vulnerab|writeup|record[_\s-]?finding|report\b|\bpoc\b|implement\b|write (?:a |an )?(?:script|tool|report|exploit|poc|patch)|build (?:a |an )?(?:script|tool|exploit)|fix (?:the )?(?:bug|vuln|vulnerability|issue))/i.test(text);
+}
+
+/** The assistant's final message is a question / decision request directed at the user. */
+export function looksLikeQuestionToUser(assistantText = '') {
+  const text = String(assistantText ?? '').trim();
+  if (!text) return false;
+  const lastLine = text.split('\n').map(line => line.trim()).filter(Boolean).at(-1) ?? '';
+  if (/[?？]\s*$/.test(lastLine)) return true;
+  return /(请确认|请问|需要你|要不要我|是否(?:要|需要)我|要我(?:继续|先|不要|是否)|你(?:希望|想要|要不要|打算)|告诉我|请提供|请告知|等你(?:确认|决定|批准|回复)|由你决定|需要你的(?:确认|批准|决定)|\b(?:should i|shall i|do you want|would you like|let me know|please confirm|please advise|which option|how would you like)\b)/i.test(text);
+}
+
+/**
+ * finishTurn policy: at a clean end-of-turn (model emitted no tool calls), decide
+ * whether to force exactly one more model request. Returns
+ *   { continue: true, reason, hint }  — inject `hint` as context and loop once more
+ *   { continue: false, reason }        — let the turn end
+ *
+ * Forces a continue only when ALL hold:
+ *  - quality answer mode (autonomous runs),
+ *  - the forced-continue budget is not yet exhausted,
+ *  - this is not a read-only/lookup turn,
+ *  - the turn actually did analysis/execution work,
+ *  - no deliverable (record_finding / report file) was produced,
+ *  - the model did NOT end by asking the user a question, and
+ *  - the model did NOT hit an authorization/scope boundary.
+ * Cancellation always wins (never forces when cancelled). The budget makes this
+ * bounded and never unconditional.
+ */
+export function finishTurnDecision({
+  answerMode = 'quality',
+  goalText = '',
+  usedToolThisPrompt = false,
+  toolResultsThisPrompt = [],
+  assistantText = '',
+  readOnlyTurn = false,
+  scopeBoundary = false,
+  forcedContinuesUsed = 0,
+  budget = FORCED_CONTINUE_BUDGET,
+  cancelled = false,
+} = {}) {
+  if (cancelled) return { continue: false, reason: 'cancelled' };
+  if (answerMode !== 'quality') return { continue: false, reason: 'not_quality_mode' };
+  if (!(Number(forcedContinuesUsed) < Number(budget))) return { continue: false, reason: 'budget_exhausted' };
+  if (readOnlyTurn) return { continue: false, reason: 'read_only_turn' };
+  if (!deliverableExpected(goalText)) return { continue: false, reason: 'no_deliverable_expected' };
+  if (!usedToolThisPrompt) return { continue: false, reason: 'no_work_simple_qa' };
+  // A finished deliverable means done, regardless of what else ran this turn.
+  if (producedDeliverable(toolResultsThisPrompt)) return { continue: false, reason: 'deliverable_produced' };
+  if (!didAnalysisWork(toolResultsThisPrompt)) return { continue: false, reason: 'no_analysis_work' };
+  if (looksLikeQuestionToUser(assistantText)) return { continue: false, reason: 'asked_user_question' };
+  if (scopeBoundary) return { continue: false, reason: 'scope_boundary' };
+  return {
+    continue: true,
+    reason: 'incomplete_no_deliverable',
+    hint: 'Host autonomy: 本轮已经做了分析/执行工作，但还没有产出最终交付物（没有 record_finding，也没有写出报告文件）。不要在这里停下、把半成品交回给用户。请继续完成当前任务：产出发现（record_finding）、把结果写成报告文件（workspace_write/workspace_edit 到 .md），或推进到下一个可执行步骤。只有确实遇到授权/范围边界，或必须由用户决定的问题时，才用一句话写清该具体缺口再停止。此自动续跑有次数上限。',
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Deliverable self-check (Task: "交付物自检"). This is NOT a review gate that
+// stops the agent to ask the operator whether it got something right — it
+// fires only AFTER a deliverable already exists, and its only job is to hand
+// the model one bounded pass to re-open that file and fix it itself
+// (workspace_edit) if it contradicts what it just said. It consumes the SAME
+// forced-continue budget as finishTurnDecision above, so it can never become
+// an unbounded loop or a new gate that blocks on its own.
+// ---------------------------------------------------------------------------
+
+// A reply that reads like the model correcting/walking back an earlier claim
+// (the exact shape of the bug this closes: the report said one thing, a later
+// chat turn quietly said another, and the report file was never fixed).
+const CORRECTION_SIGNAL = /(口径修正|更正|纠正|勘误|之前(?:的)?(?:说法|结论|报告)(?:其实|实际上)?(?:有误|不对|错|写错)|实际上(?:是|并不是|不是)|与(?:报告|之前)(?:不一致|矛盾|不符)|跟(?:报告|之前)(?:不一致|矛盾|不符)|\bcorrection\b|\bcorrected\b|actually,? (?:it'?s|that'?s)|contradicts? (?:the )?(?:report|earlier))/i;
+
+/** The path of the most recently written report-like deliverable this turn, or ''. */
+export function latestDeliverableWritePath(toolResultsThisPrompt = []) {
+  if (!Array.isArray(toolResultsThisPrompt)) return '';
+  for (let i = toolResultsThisPrompt.length - 1; i >= 0; i -= 1) {
+    const result = toolResultsThisPrompt[i];
+    if (!okBusinessResult(result)) continue;
+    if (!REPORT_WRITE_TOOLS.has(shortToolName(result.name)) || !reportLikePath(result.arguments)) continue;
+    const path = String(result.arguments?.path ?? result.arguments?.file ?? result.arguments?.filePath ?? '');
+    if (path) return path;
+  }
+  return '';
+}
+
+/**
+ * Decide whether to force one self-check pass before a clean end-of-turn.
+ * Returns { continue: true, reason, path, hint } or { continue: false, reason }.
+ * Fires at most once per turn (`selfCheckDone`) and only within the same
+ * forced-continue budget `finishTurnDecision` already uses — never a second,
+ * separate, unbounded mechanism.
+ *
+ * Two triggers, both already-produced-deliverable only:
+ *  - a report/finding was just written THIS turn → check it against what the
+ *    model just said before letting the turn end;
+ *  - no fresh write this turn, but the reply reads like a correction of an
+ *    earlier claim AND an earlier turn in this session produced a deliverable
+ *    (`lastDeliverablePath`) → check that earlier file, not just the chat.
+ */
+export function deliverableSelfCheckDecision({
+  answerMode = 'quality',
+  toolResultsThisPrompt = [],
+  assistantText = '',
+  lastDeliverablePath = '',
+  selfCheckDone = false,
+  forcedContinuesUsed = 0,
+  budget = FORCED_CONTINUE_BUDGET,
+  cancelled = false,
+} = {}) {
+  if (cancelled) return { continue: false, reason: 'cancelled' };
+  if (answerMode !== 'quality') return { continue: false, reason: 'not_quality_mode' };
+  if (selfCheckDone) return { continue: false, reason: 'already_checked' };
+  if (!(Number(forcedContinuesUsed) < Number(budget))) return { continue: false, reason: 'budget_exhausted' };
+  const freshPath = latestDeliverableWritePath(toolResultsThisPrompt);
+  if (freshPath) {
+    return {
+      continue: true,
+      reason: 'self_check_fresh_deliverable',
+      path: freshPath,
+      hint: `Host self-check（收尾前一次性核对，不是审查门禁）：你刚产出交付物 ${freshPath}。真正结束这轮前，重新打开它，对照你刚才这轮说的结论检查——同一个事实（字段/算法/数值/结论）在文件里和你嘴上说的是否一致？\n发现矛盾：现在就用 workspace_edit 把文件改对，不要只在聊天里口头"修正"而不改正式交付物。\n没有矛盾：什么都不用做，直接按原计划结束。这是收尾动作，不是新任务，不要为此停下来问用户。`,
+    };
+  }
+  if (lastDeliverablePath && CORRECTION_SIGNAL.test(String(assistantText ?? ''))) {
+    return {
+      continue: true,
+      reason: 'self_check_correction_signal',
+      path: lastDeliverablePath,
+      hint: `Host self-check（收尾前一次性核对，不是审查门禁）：你刚才这句回复像是在修正/更正之前的结论，而更早产出的交付物是 ${lastDeliverablePath}。\n如果这句修正和那份文件里写的内容矛盾：现在就用 workspace_edit 把 ${lastDeliverablePath} 改成和你现在的结论一致,不要让正式交付物和你最新的说法对不上。\n如果本来就没有矛盾：什么都不用做，直接结束。这是收尾动作，不是新任务，不要为此停下来问用户。`,
+    };
+  }
+  return { continue: false, reason: 'no_check_needed' };
+}
+
+/**
+ * Structured "what next" options for a final reply that truly finished the
+ * task (a deliverable exists, no scope/authorization gap, no question asked).
+ * Exactly two concepts — continue the same task, or end and wait for a new
+ * one — so the UI never has to invent a third thing for the operator to learn.
+ */
+export function buildSuggestedNext(harness) {
+  const state = normalizeAgentState(harness ?? emptyAgentState());
+  const nextIntent = state.openIntents.at(-1) || '';
+  return [
+    { id: 'continue_current', ...(nextIntent ? { prompt: `继续：${nextIntent}` } : {}) },
+    { id: 'end_topic' },
+  ];
+}
+
+// Tools whose arrival is worth flagging explicitly: the model has been seen to
+// falsely conclude "I have no execution tools" right after a grant unlocks them.
+const EXECUTION_TOOL_HINTS = new Set(['workspace_run', 'workspace_write', 'workspace_edit', 'record_finding']);
+
+/**
+ * Diff the currently-granted tool set against what the model was last told, and
+ * build a short announcement for the newly-available tools. Returns
+ *   { added: [...hostNames], executionAdded: [...shortNames], message }  or  null.
+ * `previousNames === null` means no baseline yet (first step) → returns null.
+ * `exclude` removes tools already announced by another path this step (by short name).
+ */
+export function toolSetAnnouncement(previousNames, currentNames = [], { exclude = [] } = {}) {
+  if (!Array.isArray(previousNames)) return null;
+  const prev = new Set(previousNames);
+  const excluded = new Set((Array.isArray(exclude) ? exclude : []).map(shortToolName));
+  const added = (Array.isArray(currentNames) ? currentNames : []).filter(name => !prev.has(name) && !excluded.has(shortToolName(name)));
+  if (!added.length) return null;
+  const executionAdded = added.map(shortToolName).filter(name => EXECUTION_TOOL_HINTS.has(name));
+  const message = `Host: 以下工具现在可用（本次会话中新增）：${JSON.stringify(added.map(shortToolName))}。`
+    + (executionAdded.length ? `其中 ${JSON.stringify(executionAdded)} 是执行/读写能力——你现在确实具备执行手段，不要再说自己没有可用的执行工具。` : '')
+    + '只使用当前 tools/list 的 schema；实际执行仍由 Host 和业务 owner 复核，不要重发已发送或结果未知的控制。';
+  return { added, executionAdded, message };
+}

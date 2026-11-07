@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
+import { useVirtualRows } from "./virtualRows";
 import SourceReviewEvidence from "../SourceReviewEvidence.vue";
 import {
   Activity,
@@ -22,7 +23,6 @@ import {
   attemptTime,
   createSentinelLabels,
   formatNumber,
-  json,
   scanSummary,
   scanTokenTotal,
   text,
@@ -81,6 +81,8 @@ const props = defineProps<{
   rescan: (...args: any[]) => any;
   resumeScan: (...args: any[]) => any;
   sourceLocations: (item: any) => any[];
+  /** Memoized record_json parse (keyed by finding id) — use instead of recordOf(item) to avoid reparsing per field per render. */
+  recordOf: (item: any) => any;
   sourceTypeLabel: (value: string) => string;
   validationFor: (item: any) => SentinelValidation | undefined;
 }>();
@@ -111,6 +113,25 @@ const savedLineStats = computed(() => {
 const incompleteLineStats = computed(() => ["physical", "code", "comments", "blank"]
   .some(key => savedCount(savedLineStats.value[key]) === undefined));
 const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skippedLargeFiles));
+
+// A large scan can have thousands of findings/dependencies; rendering every row at
+// once is what freezes the page (not just the JSON.parse recordOf() now fixes).
+// Each big list below gets its own bounded, independently-scrollable window — only the
+// rows near the visible area are actually mounted (same spacer-based technique as the
+// chat transcript in AgentHostChat.vue), so DOM size stays flat no matter the scan size.
+const findingIndexItems = computed(() => props.sourceFindingRows);
+const findingIndexVirt = useVirtualRows(findingIndexItems, (item: any) => item.id, { defaultHeight: 42 });
+const findingCardItems = computed(() => props.focusedSourceFindingRows);
+const findingCardVirt = useVirtualRows(findingCardItems, (item: any) => item.id, { defaultHeight: 280, gap: 10 });
+const dependencyItems = computed(() => props.sourceDependencies);
+const dependencyVirt = useVirtualRows(dependencyItems, (item: any) => item.id, { defaultHeight: 90, gap: 8 });
+const appsecItems = computed(() => props.appsecVulnerabilities);
+const appsecVirt = useVirtualRows(appsecItems, (item: any) => item.id, { defaultHeight: 220, gap: 10 });
+const cicdItems = computed(() => props.cicdBlockingFindings);
+const cicdVirt = useVirtualRows(cicdItems, (item: any) => item.id, { defaultHeight: 50 });
+watch(() => props.selected.id, () => {
+  findingIndexVirt.reset(); findingCardVirt.reset(); dependencyVirt.reset(); appsecVirt.reset(); cicdVirt.reset();
+});
 </script>
 
 <template>
@@ -415,21 +436,23 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
       <div class="block-title">
         <FileJson :size="16" />
         <div>
-          <strong>{{ tr("发现索引", "Finding index") }}</strong
+          <strong>{{ tr(`发现索引 · ${sourceFindingRows.length}`, `Finding index · ${sourceFindingRows.length}`) }}</strong
           ><small
             >{{ tr("先在索引选择一条发现，下方只展示当前发现的完整证据。", "Pick a finding in the index; only that finding's full evidence is shown below.") }}</small
           >
         </div>
       </div>
-      <div class="source-finding-index">
+      <div class="source-finding-index" :ref="findingIndexVirt.setContainer" @scroll="findingIndexVirt.onScroll">
         <div class="table-head">
           <span>{{ tr("等级", "Severity") }}</span><span>{{ tr("标题", "Title") }}</span
           ><span>{{ tr("引擎 / Rule ID", "Engine / Rule ID") }}</span><span>CWE / CVE</span
           ><span>{{ tr("文件", "File") }}</span><span>{{ tr("行号", "Line") }}</span>
         </div>
+        <div v-if="findingIndexVirt.spacerBefore.value > 0" class="virt-spacer" :style="{ height: findingIndexVirt.spacerBefore.value + 'px' }" aria-hidden="true"></div>
         <div
-          v-for="item in sourceFindingRows"
+          v-for="item in findingIndexVirt.windowed.value"
           :key="`index-${item.id}`"
+          :ref="findingIndexVirt.bindRow(item.id)"
           :class="{ active: selectedFindingId === item.id }"
           role="button"
           tabindex="0"
@@ -442,25 +465,25 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
           >
           <strong>{{
             item.title ||
-            json(item.recordJson).title ||
+            recordOf(item).title ||
             item.recordKey
           }}</strong>
           <code
             >{{
-              json(item.recordJson).engine ||
-              json(item.recordJson).source ||
+              recordOf(item).engine ||
+              recordOf(item).source ||
               "Agent"
             }}
             ·
             {{
-              json(item.recordJson).rule_id ||
-              json(item.recordJson).ruleId ||
+              recordOf(item).rule_id ||
+              recordOf(item).ruleId ||
               item.recordKey
             }}</code
           >
           <span
-            >{{ json(item.recordJson).cwe || "—" }} /
-            {{ json(item.recordJson).cve || "—" }}</span
+            >{{ recordOf(item).cwe || "—" }} /
+            {{ recordOf(item).cve || "—" }}</span
           >
           <code>{{ sourceLocations(item)[0]?.file || "—" }}</code>
           <span>{{
@@ -469,6 +492,7 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
             "—"
           }}</span>
         </div>
+        <div v-if="findingIndexVirt.spacerAfter.value > 0" class="virt-spacer" :style="{ height: findingIndexVirt.spacerAfter.value + 'px' }" aria-hidden="true"></div>
         <div v-if="!sourceFindingRows.length" class="empty-inline">
           {{ tr("没有可索引的安全发现。", "No security findings to index.") }}
         </div>
@@ -478,7 +502,7 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
       <div class="block-title">
         <Bug :size="16" />
         <div>
-          <strong>{{ tr("代码发现与审计证据", "Code findings and audit evidence") }}</strong
+          <strong>{{ tr(`代码发现与审计证据 · ${focusedSourceFindingRows.length}`, `Code findings and audit evidence · ${focusedSourceFindingRows.length}`) }}</strong
           ><small
             >{{ tr("仅展示结构化安全问题与漏洞证据；扫描总结和质量门禁摘要不作为问题加载。", "Only structured security issues and vulnerability evidence are shown; scan summaries and quality gate digests are not loaded as issues.") }}</small
           >
@@ -498,10 +522,12 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
           <small v-else>{{ tr("无高风险项", "No high-risk items") }}</small>
         </article>
       </div>
-      <div class="source-finding-list">
+      <div class="source-finding-list" :ref="findingCardVirt.setContainer" @scroll="findingCardVirt.onScroll">
+        <div v-if="findingCardVirt.spacerBefore.value > 0" class="virt-spacer" :style="{ height: findingCardVirt.spacerBefore.value + 'px' }" aria-hidden="true"></div>
         <article
-          v-for="item in focusedSourceFindingRows"
+          v-for="item in findingCardVirt.windowed.value"
           :key="item.id"
+          :ref="findingCardVirt.bindRow(item.id)"
           :class="`source-finding-card severity-border-${effectiveSeverity(item)}`"
         >
           <header>
@@ -512,24 +538,24 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
             <div>
               <strong>{{
                 item.title ||
-                json(item.recordJson).title ||
+                recordOf(item).title ||
                 item.recordKey
               }}</strong
               ><small
                 >{{
-                  json(item.recordJson).rule_id ||
-                  json(item.recordJson).ruleId ||
+                  recordOf(item).rule_id ||
+                  recordOf(item).ruleId ||
                   tr("未标注规则", "No rule")
                 }}
-                · {{ json(item.recordJson).cwe || tr("无 CWE", "No CWE") }} ·
-                {{ json(item.recordJson).cve || tr("无 CVE", "No CVE") }} · {{ tr("置信度", "Confidence") }}
-                {{ json(item.recordJson).confidence || "—" }}</small
+                · {{ recordOf(item).cwe || tr("无 CWE", "No CWE") }} ·
+                {{ recordOf(item).cve || tr("无 CVE", "No CVE") }} · {{ tr("置信度", "Confidence") }}
+                {{ recordOf(item).confidence || "—" }}</small
               >
             </div>
             <span
-              v-if="json(item.recordJson).status"
+              v-if="recordOf(item).status"
               class="finding-state"
-              >{{ json(item.recordJson).status }}</span
+              >{{ recordOf(item).status }}</span
             >
           </header>
           <div class="source-finding-grid">
@@ -537,8 +563,8 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
               <span>{{ tr("描述", "Description") }}</span>
               <p>
                 {{
-                  json(item.recordJson).description ||
-                  json(item.recordJson).message ||
+                  recordOf(item).description ||
+                  recordOf(item).message ||
                   "—"
                 }}
               </p>
@@ -547,9 +573,9 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
               <span>{{ tr("技术分析 / 影响", "Technical analysis / impact") }}</span>
               <p>
                 {{
-                  json(item.recordJson).technical_analysis ||
-                  json(item.recordJson).impact ||
-                  json(item.recordJson).detail ||
+                  recordOf(item).technical_analysis ||
+                  recordOf(item).impact ||
+                  recordOf(item).detail ||
                   "—"
                 }}
               </p>
@@ -581,17 +607,17 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
             </div>
             <div
               v-if="
-                json(item.recordJson).data_flow ||
-                json(item.recordJson).taint_flow ||
-                json(item.recordJson).call_chain
+                recordOf(item).data_flow ||
+                recordOf(item).taint_flow ||
+                recordOf(item).call_chain
               "
             >
               <span>{{ tr("数据流 / 调用链", "Data flow / call chain") }}</span>
               <pre>{{
                 text(
-                  json(item.recordJson).data_flow ||
-                    json(item.recordJson).taint_flow ||
-                    json(item.recordJson).call_chain,
+                  recordOf(item).data_flow ||
+                    recordOf(item).taint_flow ||
+                    recordOf(item).call_chain,
                 )
               }}</pre>
             </div>
@@ -599,37 +625,37 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
               <span>{{ tr("修复建议", "Remediation") }}</span>
               <p>
                 {{
-                  json(item.recordJson).recommendation ||
-                  json(item.recordJson).remediation_steps ||
+                  recordOf(item).recommendation ||
+                  recordOf(item).remediation_steps ||
                   "—"
                 }}
               </p>
             </div>
             <div
               v-if="
-                json(item.recordJson).fix_before ||
-                json(item.recordJson).fix_after
+                recordOf(item).fix_before ||
+                recordOf(item).fix_after
               "
             >
               <span>{{ tr("修复前 / 修复后", "Before / after fix") }}</span>
               <pre
                 >{{
-                  json(item.recordJson).fix_before || "—"
+                  recordOf(item).fix_before || "—"
                 }}\n\n→\n\n{{
-                  json(item.recordJson).fix_after || "—"
+                  recordOf(item).fix_after || "—"
                 }}</pre>
             </div>
             <div
               v-if="
-                json(item.recordJson).dependency_metadata ||
-                json(item.recordJson).package
+                recordOf(item).dependency_metadata ||
+                recordOf(item).package
               "
             >
               <span>{{ tr("依赖信息", "Dependency info") }}</span>
               <pre>{{
                 JSON.stringify(
-                  json(item.recordJson).dependency_metadata ||
-                    json(item.recordJson).package,
+                  recordOf(item).dependency_metadata ||
+                    recordOf(item).package,
                   null,
                   2,
                 )
@@ -637,21 +663,21 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
             </div>
             <div
               v-if="
-                json(item.recordJson).evidence ||
-                json(item.recordJson).pocRequest
+                recordOf(item).evidence ||
+                recordOf(item).pocRequest
               "
             >
               <span>{{ tr("证据 / 验证", "Evidence / validation") }}</span>
               <pre>{{
                 text(
-                  json(item.recordJson).evidence ||
-                    json(item.recordJson).pocRequest,
+                  recordOf(item).evidence ||
+                    recordOf(item).pocRequest,
                 )
               }}</pre>
             </div>
-            <div v-if="json(item.recordJson).assumptions">
+            <div v-if="recordOf(item).assumptions">
               <span>{{ tr("前提与限制", "Assumptions and limitations") }}</span>
-              <p>{{ text(json(item.recordJson).assumptions) }}</p>
+              <p>{{ text(recordOf(item).assumptions) }}</p>
             </div>
           </div>
           <footer>
@@ -673,6 +699,7 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
             >
           </footer>
         </article>
+        <div v-if="findingCardVirt.spacerAfter.value > 0" class="virt-spacer" :style="{ height: findingCardVirt.spacerAfter.value + 'px' }" aria-hidden="true"></div>
         <div v-if="!sourceFindingRows.length" class="empty-inline">
           {{ tr("当前源码任务没有结构化发现。", "This source task has no structured findings.") }}
         </div>
@@ -682,50 +709,53 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
       <div class="block-title">
         <Layers3 :size="16" />
         <div>
-          <strong>{{ tr("依赖与供应链风险", "Dependencies and supply chain risk") }}</strong
+          <strong>{{ tr(`依赖与供应链风险 · ${sourceDependencies.length}`, `Dependencies and supply chain risk · ${sourceDependencies.length}`) }}</strong
           ><small
             >{{ tr("展示包生态、已安装版本、修复版本和 CVE/CVSS。", "Shows package ecosystem, installed version, fixed version, and CVE/CVSS.") }}</small
           >
         </div>
       </div>
-      <div class="source-dependency-list">
+      <div class="source-dependency-list" :ref="dependencyVirt.setContainer" @scroll="dependencyVirt.onScroll">
+        <div v-if="dependencyVirt.spacerBefore.value > 0" class="virt-spacer" :style="{ height: dependencyVirt.spacerBefore.value + 'px' }" aria-hidden="true"></div>
         <article
-          v-for="item in sourceDependencies"
+          v-for="item in dependencyVirt.windowed.value"
           :key="`dep-${item.id}`"
+          :ref="dependencyVirt.bindRow(item.id)"
         >
           <strong>{{
-            json(item.recordJson).package_name ||
-            json(item.recordJson).package ||
-            json(item.recordJson).dependency_metadata?.name ||
+            recordOf(item).package_name ||
+            recordOf(item).package ||
+            recordOf(item).dependency_metadata?.name ||
             item.title
           }}</strong
           ><span
             >{{
-              json(item.recordJson).dependency_metadata
+              recordOf(item).dependency_metadata
                 ?.ecosystem ||
-              json(item.recordJson).package_ecosystem ||
+              recordOf(item).package_ecosystem ||
               "—"
             }}
             ·
             {{
-              json(item.recordJson).dependency_metadata
+              recordOf(item).dependency_metadata
                 ?.installed_version ||
-              json(item.recordJson).installed_version ||
+              recordOf(item).installed_version ||
               "—"
             }}</span
           ><b
-            >{{ json(item.recordJson).cve || tr("无 CVE", "No CVE") }} · CVSS
-            {{ json(item.recordJson).cvss ?? "—" }}</b
+            >{{ recordOf(item).cve || tr("无 CVE", "No CVE") }} · CVSS
+            {{ recordOf(item).cvss ?? "—" }}</b
           ><em
             >{{ tr("修复版本", "Fixed version") }}
             {{
-              json(item.recordJson).dependency_metadata
+              recordOf(item).dependency_metadata
                 ?.fixed_version ||
-              json(item.recordJson).fixed_version ||
+              recordOf(item).fixed_version ||
               "—"
             }}</em
           >
         </article>
+        <div v-if="dependencyVirt.spacerAfter.value > 0" class="virt-spacer" :style="{ height: dependencyVirt.spacerAfter.value + 'px' }" aria-hidden="true"></div>
       </div>
     </section>
     <section
@@ -779,10 +809,12 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
           >
         </article>
       </div>
-      <div class="appsec-correlation-list">
+      <div class="appsec-correlation-list" :ref="appsecVirt.setContainer" @scroll="appsecVirt.onScroll">
+        <div v-if="appsecVirt.spacerBefore.value > 0" class="virt-spacer" :style="{ height: appsecVirt.spacerBefore.value + 'px' }" aria-hidden="true"></div>
         <article
-          v-for="vulnerability in appsecVulnerabilities"
+          v-for="vulnerability in appsecVirt.windowed.value"
           :key="`appsec-${vulnerability.id}`"
+          :ref="appsecVirt.bindRow(vulnerability.id)"
           :class="`appsec-correlation-card severity-border-${vulnerability.severity}`"
         >
           <header>
@@ -853,6 +885,7 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
             </span>
           </div>
         </article>
+        <div v-if="appsecVirt.spacerAfter.value > 0" class="virt-spacer" :style="{ height: appsecVirt.spacerAfter.value + 'px' }" aria-hidden="true"></div>
         <div
           v-if="!appsecVulnerabilities.length"
           class="empty-inline"
@@ -962,14 +995,16 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
           </div>
         </dl>
       </div>
-      <div class="cicd-blocking-table">
+      <div class="cicd-blocking-table" :ref="cicdVirt.setContainer" @scroll="cicdVirt.onScroll">
         <div class="table-head">
           <span>{{ tr("等级", "Severity") }}</span><span>{{ tr("问题", "Issue") }}</span><span>{{ tr("位置 / 端点", "Location / endpoint") }}</span
           ><span>{{ tr("状态", "Status") }}</span><span>{{ tr("生命周期", "Lifecycle") }}</span><span>{{ tr("负责人", "Owner") }}</span>
         </div>
+        <div v-if="cicdVirt.spacerBefore.value > 0" class="virt-spacer" :style="{ height: cicdVirt.spacerBefore.value + 'px' }" aria-hidden="true"></div>
         <div
-          v-for="vulnerability in cicdBlockingFindings"
+          v-for="vulnerability in cicdVirt.windowed.value"
           :key="`gate-${vulnerability.id}`"
+          :ref="cicdVirt.bindRow(vulnerability.id)"
         >
           <span
             :class="`severity-badge ${vulnerability.severity}`"
@@ -989,6 +1024,7 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
           >
           <span>{{ vulnerability.owner || tr("未分配", "Unassigned") }}</span>
         </div>
+        <div v-if="cicdVirt.spacerAfter.value > 0" class="virt-spacer" :style="{ height: cicdVirt.spacerAfter.value + 'px' }" aria-hidden="true"></div>
         <div
           v-if="!cicdBlockingFindings.length"
           class="empty-inline"

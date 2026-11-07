@@ -1,14 +1,16 @@
 <script setup lang="ts">
 import { refreshFeedback as vRefreshFeedback } from '../../../shared/directives/refreshFeedback';
-import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { invoke } from '@tauri-apps/api/core';
-import { Plus, Square, ArrowUp, ChevronDown, Copy, Check, Pencil, CornerDownRight, ShieldCheck, Search } from "@lucide/vue";
-import { providerDisplayName, SESSION_MODEL_PRESETS } from "../providerPresets";
+import { Plus, Square, ArrowUp, ChevronDown, Copy, Check, Pencil, CornerDownRight, ShieldCheck, Search, Wifi, Loader2, AlertTriangle } from "@lucide/vue";
+import { configurationApi } from "../../configuration/api";
+import { directoryConnections, type ModelDirectoryConnection } from "../../configuration/modelConnections";
 import { useI18n } from "../../../i18n";
-import type { AgentHostSettings, AgentTask } from "../types";
+import type { AgentAccessPolicy, AgentHostSettings, AgentTask } from "../types";
 import { describeAgentHostError } from "../errors";
-import { agentRuntimeHeader, type AgentHostChatClient, type AgentHostConversation, type AgentHostMessage, type AgentModelUsage } from "../chatClient";
+import { agentRuntimeHeader, type AgentHostChatClient, type AgentHostConversation, type AgentHostMessage, type AgentModelUsage, type AgentSuggestedNext, type ModelConnectionTest } from "../chatClient";
 import ConversationMessage from "../../conversations/ConversationMessage.vue";
+import { messageTimestamp } from "../../conversations/messageTime";
 import AgentPermissionMode from "./AgentPermissionMode.vue";
 import AgentTaskCollaboration from "./AgentTaskCollaboration.vue";
 import DiscoveryAssistPanel from "./DiscoveryAssistPanel.vue";
@@ -136,10 +138,68 @@ let messageGeneration = 0;
 let disposed = false;
 const error = ref("");
 const transcript = ref<HTMLElement>();
-const followingTail = ref(true), unreadBelow = ref(false), loadingMessages = ref(false), loadingEarlier = ref(false), hasEarlier = ref(false), discoveryPanelOpen = ref(false), workspacePanelOpen = ref(false);
+const followingTail = ref(true), unreadBelow = ref(false), loadingMessages = ref(false), loadingEarlier = ref(false), hasEarlier = ref(false), discoveryPanelOpen = ref(false), workspacePanelOpen = ref(false), chainPanelOpen = ref(false);
 let earlierCursor: string | undefined, historyLoaded = false;
 let messageLoad: {id:string;projectId:number;promise:Promise<void>} | undefined;
-function observeTranscript(){const el=transcript.value;if(el){followingTail.value=el.scrollHeight-el.scrollTop-el.clientHeight<80;if(followingTail.value)unreadBelow.value=false;}}
+// --- Transcript virtualization --------------------------------------------
+// Only a windowed slice of <article> elements stays mounted; off-window
+// messages are represented by two spacer divs sized from measured (or, until
+// measured, estimated) heights. el.scrollHeight/scrollTop stay real DOM
+// metrics throughout, so loadEarlierMessages' scroll-anchor math, scroll()'s
+// stick-to-bottom, and observeTranscript's followingTail detection all keep
+// working unmodified — they never know the list is windowed.
+const ITEM_GAP = 14; // matches .ahc-column / .ahc-msg-list { gap: 14px }
+const DEFAULT_ITEM_HEIGHT = 160;
+const VIRT_BUFFER_PX = 800;
+const measuredHeights = new Map<string, number>();
+const articleEls = new Map<string, HTMLElement>();
+let avgMeasuredHeight = DEFAULT_ITEM_HEIGHT;
+let resizeObserver: ResizeObserver | undefined;
+const windowStart = ref(0), windowEnd = ref(0), spacerBefore = ref(0), spacerAfter = ref(0);
+const windowedMessages = computed(() => messages.value.slice(windowStart.value, windowEnd.value));
+function recomputeAverageHeight() {
+  if (!measuredHeights.size) return;
+  let sum = 0; for (const h of measuredHeights.values()) sum += h;
+  avgMeasuredHeight = sum / measuredHeights.size;
+}
+function strideFor(id: string) { return (measuredHeights.get(id) ?? avgMeasuredHeight) + ITEM_GAP; }
+function lowerBound(offsets: number[], value: number): number {
+  let lo = 0, hi = offsets.length - 1;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (offsets[mid] < value) lo = mid + 1; else hi = mid; }
+  return lo;
+}
+function updateWindow() {
+  const list = messages.value, total = list.length;
+  if (!total) { windowStart.value = 0; windowEnd.value = 0; spacerBefore.value = 0; spacerAfter.value = 0; return; }
+  const offsets = new Array<number>(total + 1);
+  offsets[0] = 0;
+  for (let i = 0; i < total; i++) offsets[i + 1] = offsets[i] + strideFor(list[i].id);
+  const el = transcript.value;
+  if (!el) { windowStart.value = 0; windowEnd.value = total; spacerBefore.value = 0; spacerAfter.value = 0; return; }
+  const viewTop = Math.max(0, el.scrollTop - VIRT_BUFFER_PX);
+  const viewBottom = el.scrollTop + el.clientHeight + VIRT_BUFFER_PX;
+  const start = Math.max(0, lowerBound(offsets, viewTop) - 1);
+  const end = Math.min(total, Math.max(start, lowerBound(offsets, viewBottom)));
+  windowStart.value = start; windowEnd.value = end;
+  spacerBefore.value = offsets[start];
+  spacerAfter.value = offsets[total] - offsets[end];
+}
+// A fresh closure per render would make Vue unbind/rebind the ref every patch;
+// cache one stable callback per message id instead.
+const articleRefCallbacks = new Map<string, (el: unknown) => void>();
+function bindArticle(id: string) {
+  let fn = articleRefCallbacks.get(id);
+  if (!fn) {
+    fn = (el) => {
+      if (el instanceof HTMLElement) { el.dataset.msgId = id; articleEls.set(id, el); resizeObserver?.observe(el); }
+      else { const prev = articleEls.get(id); if (prev) { resizeObserver?.unobserve(prev); articleEls.delete(id); } }
+    };
+    articleRefCallbacks.set(id, fn);
+  }
+  return fn;
+}
+watch(messages, () => updateWindow());
+function observeTranscript(){const el=transcript.value;if(el){followingTail.value=el.scrollHeight-el.scrollTop-el.clientHeight<80;if(followingTail.value)unreadBelow.value=false;}updateWindow();}
 function jumpToLatest(){followingTail.value=true;unreadBelow.value=false;void scroll(true);}
 async function loadEarlierMessages(){
  const id=selectedId.value,pid=hostProjectId.value,cursor=earlierCursor,el=transcript.value;if(!id||pid===undefined||!cursor||loadingEarlier.value||!props.client.messagePage)return;
@@ -177,12 +237,29 @@ const { timeline: toolTimeline, totalElapsedMs: toolTimelineElapsedMs } = useToo
 });
 type GrantOffer = { appId: string; revision: number; permissions: Array<{ permission: string; tools: string[] }> };
 const grantPrompt = ref<{ conversationId: string; runId?: string; requestId?: string; projectId: number; identity: string; offers: GrantOffer[]; question: string } | null>(null);
+const accessPolicy = ref<AgentAccessPolicy>();
+const reconfirming = ref(false);
+const savedModeLabel = computed(() => accessPolicy.value?.savedMode === "full" ? tr("完全访问", "Full access") : accessPolicy.value?.savedMode === "auto" ? tr("自动审批", "Auto-approve") : tr("询问审批", "Ask each time"));
+function onPermissionModeChanged(policy: AgentAccessPolicy) { accessPolicy.value = policy; if (permissionsOpen.value) void loadPermissions(); }
+async function reconfirmAccess() {
+  const policy = accessPolicy.value, projectId = hostProjectId.value;
+  if (!policy || !projectId || reconfirming.value) return;
+  reconfirming.value = true;
+  try {
+    const value = await props.client.setAccessPolicy({ projectId, mode: policy.savedMode, expectedRevision: policy.revision, expectedRuntimeIdentity: policy.runtimeIdentity, operatorConfirmed: policy.savedMode !== "ask" });
+    void invoke("set_operator_permission_tier", { tier: policy.savedMode }).catch(() => {});
+    accessPolicy.value = value;
+    if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("oviraptor:access-policy-changed", { detail: { projectId } }));
+  } catch (e) { error.value = String((e as Error).message || e); }
+  finally { reconfirming.value = false; }
+}
 type RuntimePermission = { id: string; conversationId: string; description: string; options: Array<{ id: string; label: string }> };
 const runtimePermission = ref<RuntimePermission | null>(null);
 const granting = ref(false);
 const rememberWorkspace = ref(true);
 const pendingApproval = ref<{ id: string; scopeHash: string; choice: string } | null>(null);
 const grantIsWorkspace = computed(() => !!grantPrompt.value?.offers.some(offer => offer.appId === "workspace"));
+const grantIsMaterial = computed(() => !!grantPrompt.value?.offers.some(offer => offer.appId === "material"));
 function permissionLabel(id: string) {
   const known: Record<string, string> = {
     "inventory.read": tr("读取资产", "Read assets"),
@@ -198,6 +275,7 @@ function permissionLabel(id: string) {
     "workspace.write": tr("写入工作区文件", "Write workspace files"),
     "workspace.run": tr("在工作区运行脚本", "Run scripts in the workspace"),
     "material.open": tr("放行网址和本地文件。确认后本对话不再询问；大文件按原路径读取，不整份复制", "Allow URLs and local files. This conversation will not ask again; large files stay in place"),
+    "workspace.network": tr("联网、浏览器与本机命令等对外操作", "Network, browser, and local-command actions"),
   };
   return known[id] || id;
 }
@@ -226,6 +304,7 @@ const innerPhaseText = computed(() => {
   const pair = known[innerPhase.value];
   return pair ? tr(...pair) : (inner.value?.phaseLabel || "");
 });
+function messageTime(message: AgentHostMessage) { return messageTimestamp(message.createdAt, tr("zh-CN", "en-GB")); }
 const copiedId = ref<string>();
 async function copyMessage(message: AgentHostMessage) {
   try { await navigator.clipboard.writeText(message.content); copiedId.value = message.id; setTimeout(() => { if (copiedId.value === message.id) copiedId.value = undefined; }, 1500); }
@@ -244,14 +323,44 @@ const liveSettings = ref<AgentHostSettings>(props.settings);
 watch(() => props.settings, value => { liveSettings.value = value; });
 const header = computed(() => agentRuntimeHeader(liveSettings.value));
 const currentModel = computed(() => liveSettings.value?.apiProvider?.model || "");
+// The switcher must only offer models the user actually configured (saved connection,
+// real credentials) — never static presets with no key/oauth behind them. Source of
+// truth is the same model directory ConfigModelsSection reads/writes.
+const modelConnections = ref<ModelDirectoryConnection[]>([]);
+async function loadModelConnections() {
+  try {
+    const category = await configurationApi.getCategory("models");
+    if (category.section === "models") modelConnections.value = directoryConnections(category);
+  } catch { /* chat still works with whatever model is currently active */ }
+}
+function onAgentHostSettingsChanged() { void loadModelConnections(); }
+onMounted(() => {
+  void loadModelConnections();
+  if (typeof window !== "undefined") window.addEventListener("oviraptor:agent-host-settings", onAgentHostSettingsChanged);
+  if (typeof ResizeObserver !== "undefined") {
+    resizeObserver = new ResizeObserver(entries => {
+      let changed = false;
+      for (const entry of entries) {
+        const id = (entry.target as HTMLElement).dataset.msgId;
+        if (!id) continue;
+        const height = entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height;
+        if (height <= 0) continue;
+        const prev = measuredHeights.get(id);
+        if (prev === undefined || Math.abs(prev - height) > 1) { measuredHeights.set(id, height); changed = true; }
+      }
+      if (changed) { recomputeAverageHeight(); updateWindow(); }
+    });
+    for (const el of articleEls.values()) resizeObserver.observe(el);
+  }
+  updateWindow();
+});
+onBeforeUnmount(() => { if (typeof window !== "undefined") window.removeEventListener("oviraptor:agent-host-settings", onAgentHostSettingsChanged); resizeObserver?.disconnect(); });
 const modelOptions = computed(() => {
-  const oauth = Boolean(liveSettings.value?.apiProvider?.oauthConfigured);
-  const list = SESSION_MODEL_PRESETS.map(item => {
-    const name = item.provider === "xai"
-      ? (oauth && currentModel.value === item.model ? "xAI Grok (OAuth)" : "xAI Grok (API key)")
-      : providerDisplayName(item.provider, item.baseUrl);
-    return { value: item.model, label: `${name} · ${item.model}` };
-  });
+  const list: { value: string; label: string }[] = [];
+  for (const connection of modelConnections.value) {
+    if (list.some(item => item.value === connection.profile.llm)) continue;
+    list.push({ value: connection.profile.llm, label: `${connection.name} · ${connection.profile.llm}` });
+  }
   if (currentModel.value && !list.some(item => item.value === currentModel.value)) {
     list.unshift({ value: currentModel.value, label: header.value || currentModel.value });
   }
@@ -269,6 +378,33 @@ async function switchModel(event: Event) {
     error.value = String((e as Error).message || e);
     (event.target as HTMLSelectElement).value = currentModel.value;
   } finally { switchingModel.value = false; }
+}
+const connTest = ref<ModelConnectionTest | null>(null);
+const connTestBusy = ref(false);
+function connTestReasonLabel(reason?: string) {
+  return reason === "not_configured" ? tr("未配置模型", "No model configured")
+    : reason === "no_credential" ? tr("缺少凭据", "Missing credential")
+    : reason === "timeout" ? tr("连接超时", "Connection timed out")
+    : reason === "unreachable" ? tr("无法访问", "Unreachable")
+    : reason === "http_error" ? tr("接口返回错误", "API returned an error")
+    : tr("连接失败", "Connection failed");
+}
+const connTestTitle = computed(() => {
+  if (connTestBusy.value) return tr("正在测试模型连接…", "Testing the model connection…");
+  const result = connTest.value;
+  if (!result) return tr("测试当前模型是否能连通", "Test whether the current model can connect");
+  if (result.ok) {
+    const listedNote = result.modelListed === false ? tr("；模型未出现在列表中，仍可能可用", "; model not listed, may still work") : "";
+    return tr(`已连通 ${result.model || currentModel.value}@${result.baseUrl || ""} · ${result.latencyMs ?? "—"}ms${listedNote}`, `Connected to ${result.model || currentModel.value}@${result.baseUrl || ""} · ${result.latencyMs ?? "—"}ms${listedNote}`);
+  }
+  return tr(`${connTestReasonLabel(result.reason)}：${result.error || ""}`, `${connTestReasonLabel(result.reason)}: ${result.error || ""}`);
+});
+async function testConnection() {
+  if (connTestBusy.value) return;
+  connTestBusy.value = true; connTest.value = null;
+  try { connTest.value = await props.client.testModelConnection(); }
+  catch (e) { connTest.value = { ok: false, error: String((e as Error).message || e) }; }
+  finally { connTestBusy.value = false; }
 }
 const errorView = computed(() => (error.value ? describeAgentHostError(error.value) : null));
 const failure = (code?: string) => describeAgentHostError(code);
@@ -309,7 +445,7 @@ async function loadProject() {
   ++messageGeneration;
   const { projectName, projectId, personal } = props;
   hostProjectId.value = undefined; selectedId.value = undefined; messages.value = []; task.value = null; conversations.value = [];
-  grantPrompt.value = null; runtimePermission.value = null; running.value = false; draft.value = "";
+  grantPrompt.value = null; runtimePermission.value = null; running.value = false; draft.value = ""; accessPolicy.value = undefined;
   permissionsOpen.value = false; ++permissionGeneration; savedFilePermissions.value = []; workspaceFullAccess.value=false; savedAppPermissions.value = []; historyQuery.value = ""; finderOpen.value=false;
   loadingProject.value = true;
   error.value = "";
@@ -336,11 +472,11 @@ async function acceptGrant() {
   const generation = projectGeneration;
   const valid = () => generation === projectGeneration && !disposed && prompt.conversationId === selectedId.value && prompt.projectId === hostProjectId.value && grantPrompt.value?.conversationId === prompt.conversationId && grantPrompt.value?.requestId === prompt.requestId && grantPrompt.value?.runId === prompt.runId;
   try {
-    const listed = prompt.offers.some(offer => offer.appId !== "workspace") ? await props.client.listApps() : { items: [] };
+    const listed = prompt.offers.some(offer => offer.appId !== "workspace" && offer.appId !== "material") ? await props.client.listApps() : { items: [] };
     if (!valid()) return;
     for (const offer of prompt.offers) {
       if (!valid()) return;
-      if (offer.appId === 'workspace') continue;
+      if (offer.appId === 'workspace' || offer.appId === 'material') continue;
       const app = listed.items.find(item => item.id === offer.appId);
       const existing = app?.grants?.find(item => item.projectId === prompt.projectId)?.permissions ?? [];
       const permissions = [...new Set([...existing, ...offer.permissions.map(item => item.permission)])];
@@ -475,6 +611,13 @@ async function confirmIntent() {
     if (confirmed.startsScan) error.value = tr("确认不应启动扫描", "Confirming this choice should not start a scan");
     pendingApproval.value = null;
   } catch (e) { error.value = String((e as Error).message || e); }
+}
+/** The two "what next" options on a reply whose task is truly done — never a third concept. */
+async function chooseSuggestedNext(option: AgentSuggestedNext) {
+  if (option.id === "end_topic") { await newConversation(); return; }
+  if (running.value || continuingTask.value || hostProjectId.value === undefined) return;
+  draft.value = option.prompt || tr("继续当前任务的下一步", "Continue with the next step");
+  await send();
 }
 async function send() {
   const text = draft.value.trim();
@@ -644,7 +787,7 @@ const stop = props.client.events(handleEvent);
 onBeforeUnmount(() => { ++permissionGeneration; disposed = true; ++projectGeneration; ++messageGeneration; stop(); stopHeartbeatTicker(); });
 watch(() => [props.projectName, props.projectId, props.personal], () => void loadProject(), { immediate: true, flush: "sync" });
 watch(running, value => { if (!value) clearHeartbeat(); });
-watch(selectedId, (id,previous) => { if(previous)conversationDrafts.set(previous,draft.value);++messageGeneration;messageLoad=undefined;messages.value=[];loadingMessages.value=false;loadingEarlier.value=false;historyLoaded=false;earlierCursor=undefined;hasEarlier.value=false;followingTail.value=true;unreadBelow.value=false;error.value='';discoveryPanelOpen.value=!!props.draftRequest?.analysis;workspacePanelOpen.value=false;draft.value=id?conversationDrafts.get(id)||"":""; permissionsOpen.value = false; ++permissionGeneration; resetActivity(); task.value = null; cancellingChildren.value = []; grantPrompt.value = null; runtimePermission.value = null; running.value = false; void loadMessages(); void loadChain(); void restoreStatus(); }, { flush: "sync" });
+watch(selectedId, (id,previous) => { if(previous)conversationDrafts.set(previous,draft.value);++messageGeneration;messageLoad=undefined;messages.value=[];measuredHeights.clear();articleRefCallbacks.clear();avgMeasuredHeight=DEFAULT_ITEM_HEIGHT;loadingMessages.value=false;loadingEarlier.value=false;historyLoaded=false;earlierCursor=undefined;hasEarlier.value=false;followingTail.value=true;unreadBelow.value=false;error.value='';discoveryPanelOpen.value=!!props.draftRequest?.analysis;workspacePanelOpen.value=false;chainPanelOpen.value=false;draft.value=id?conversationDrafts.get(id)||"":""; permissionsOpen.value = false; ++permissionGeneration; resetActivity(); task.value = null; cancellingChildren.value = []; grantPrompt.value = null; runtimePermission.value = null; running.value = false; void loadMessages(); void loadChain(); void restoreStatus(); }, { flush: "sync" });
 watch([()=>props.draftRequest,loadingProject,running,continuingTask,hostProjectId],()=>void applyDiscoveryDraft(),{immediate:true});
 watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{immediate:true});
 </script>
@@ -656,7 +799,7 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
       <button type="button" class="ahc-side-new" :disabled="loadingProject" @click="newConversation"><Plus :size="16" />{{ tr('新对话', 'New chat') }}</button>
       <label class="ahc-history-search"><Search :size="14" /><input v-model="historyQuery" type="search" :placeholder="tr('搜索对话', 'Search chats')" :aria-label="tr('搜索对话', 'Search chats')" /><button type="button" :aria-label="tr('查找全部会话','Find all conversations')" title="⌘K / Ctrl+K" @click="finderOpen=true">⌘K</button></label>
       <div class="ahc-history-heading"><span>{{ tr('对话', 'Chats') }}</span><button type="button" @click="finderOpen=true">{{tr(`全部 ${conversations.length}`,`All ${conversations.length}`)}}</button></div>
-      <ConversationHistoryList :items="recentConversations" :selected-id="selectedId" :project-id="hostProjectId" :loading="loadingProject" :deleting-disabled="running||continuingTask" :empty-label="historyQuery?tr('没有匹配的对话','No matching chats'):tr('新对话会显示在这里','Your chats appear here')" :update-conversation="updateHistoryConversation" :reveal-conversation="revealHistoryConversation" :remove-conversation="removeConversation" :personal="personal" :attach-conversation="attachHistoryConversation" :attach-targets="attachTargets" @select="selectedId=$event"/>
+      <ConversationHistoryList :items="recentConversations" :selected-id="selectedId" :project-id="hostProjectId" :loading="loadingProject" :running-conversation-id="(running||continuingTask)?selectedId:undefined" :empty-label="historyQuery?tr('没有匹配的对话','No matching chats'):tr('新对话会显示在这里','Your chats appear here')" :update-conversation="updateHistoryConversation" :reveal-conversation="revealHistoryConversation" :remove-conversation="removeConversation" :personal="personal" :attach-conversation="attachHistoryConversation" :attach-targets="attachTargets" @select="selectedId=$event"/>
     </nav>
   </Teleport>
   <ConversationFinder v-model:open="finderOpen" v-model:query="historyQuery" :items="finderConversations" :selected-id="selectedId" :project-name="projectName" :loading="loadingProject" @select="findConversation"/>
@@ -673,23 +816,43 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
       <AgentTaskCollaboration :task="task" :cancelling="cancellingChildren" @cancel-child="cancelChild" />
       <button v-if="task.status !== 'completed' && !running && (!readOnlyAnswered || task.readOnlyAnswer?.historicalWorkPending)" class="button secondary compact" type="button" :disabled="continuingTask || loadingProject" data-testid="agent-task-continue" @click="continueTask">{{ continuingTask ? tr('接续中…', 'Continuing…') : readOnlyAnswered ? tr('继续历史任务', 'Continue historical task') : tr('继续原任务', 'Continue task') }}</button>
     </details>
+    <div v-if="accessPolicy?.needsReview" class="ahc-review-banner" role="alert" data-testid="agent-access-review-banner">
+      <AlertTriangle :size="16" aria-hidden="true" />
+      <span>{{ tr(`模型接收方已变化，“${savedModeLabel}”暂未生效，请重新确认。`, `The model recipient changed. "${savedModeLabel}" is paused until you reconfirm.`) }}</span>
+      <button type="button" class="button primary compact" :disabled="reconfirming" @click="reconfirmAccess">{{ reconfirming ? tr('确认中…', 'Confirming…') : tr(`重新确认${savedModeLabel}`, `Reconfirm ${savedModeLabel}`) }}</button>
+    </div>
     <div ref="transcript" class="agent-host-chat-transcript" @scroll="observeTranscript">
       <div class="ahc-column">
       <details v-if="selectedId&&hostProjectId" class="ahc-discovery-details" :open="discoveryPanelOpen" @toggle="discoveryPanelOpen=($event.target as HTMLDetailsElement).open"><summary>{{tr('项目资产发现','Project asset discovery')}}</summary><DiscoveryAssistPanel v-if="discoveryPanelOpen" :client="client" :conversation-id="selectedId" :project-id="hostProjectId" :refresh-key="task?.revision" /></details>
       <details v-if="selectedId" class="ahc-discovery-details" :open="workspacePanelOpen" @toggle="workspacePanelOpen=($event.target as HTMLDetailsElement).open"><summary>{{tr('产物与脚本 · 报告','Artifacts, scripts & report')}}</summary><AgentWorkspacePanel v-if="workspacePanelOpen" :client="client" :conversation-id="selectedId" /></details>
+      <details v-if="chainHops.length" class="ahc-discovery-details ahc-chain" :open="chainPanelOpen" @toggle="chainPanelOpen=($event.target as HTMLDetailsElement).open">
+        <summary><Search :size="12" /> {{ tr('本轮访问来源', 'Sources accessed this turn') }} <span class="ahc-chain-count">{{ chainHops.length }}</span></summary>
+        <ul :aria-label="tr('访问来源记录（读取记录，非选项）', 'Access log (read record, not options)')">
+          <li v-for="hop in chainHops" :key="hop.id">
+            <b>{{ hop.factLabel }}</b>
+            <span v-if="hop.factValue" :title="hop.factValue">{{ hop.factValue }}</span>
+            <small>{{ hop.source }} · {{ hop.opensNext ? tr('可继续读取', 'resumable') : tr('已到末尾', 'end') }}</small>
+          </li>
+        </ul>
+      </details>
       <ConversationFiles :state="conversationFiles" />
       <button v-if="hasEarlier" type="button" class="text-button" :disabled="loadingEarlier" @click="loadEarlierMessages">{{loadingEarlier?tr('读取中…','Loading…'):tr('加载更早消息','Load earlier messages')}}</button>
       <p v-if="loadingMessages&&!messages.length" role="status">{{tr('正在读取此会话…','Loading this conversation…')}}</p>
       <p v-if="!messages.length" class="ahc-empty">{{ tr(`当前模型：${header || '尚未选择'}。权限不足时会说明用途；已保存的授权会在原范围内复用。`, `Model: ${header || 'not selected'}. Missing permissions are explained; saved grants are reused within their scope.`) }}</p>
       <p v-if="!messages.length" class="ahc-empty ahc-empty-note">{{ tr('执行过程显示在回复下方，点击箭头可查看工具记录与证据。', 'Expand the activity below a reply to view tool records and evidence.') }}</p>
-      <article v-for="message in messages" :key="message.id" :class="['agent-host-chat-message', message.role]">
-        <ConversationMessage v-if="message.content" :message="message" :show-actions="false" :files="conversationFiles.references.value" @open-file="conversationFiles.showPreview($event)" />
+      <div v-if="messages.length" class="ahc-msg-list">
+      <div v-if="spacerBefore > 0" class="ahc-virt-spacer" :style="{ height: spacerBefore + 'px' }" aria-hidden="true"></div>
+      <article v-for="message in windowedMessages" :key="message.id" :ref="bindArticle(message.id)" :class="['agent-host-chat-message', message.role]">
+        <ConversationMessage v-if="message.content" :message="message" :show-actions="false" :hide-timestamp="true" :files="conversationFiles.references.value" @open-file="conversationFiles.showPreview($event)" />
         <p v-else-if="message.status === 'running' && activityMessage?.id !== message.id" class="ahc-reply-pending">{{ tr('正在准备回复…', 'Preparing reply…') }}</p>
         <small v-if="message.role === 'user' && message.stopReason?.startsWith('steer_')" class="ahc-steer-state">{{ message.stopReason === 'steer_delivered' ? tr('补充要求已交给 Agent', 'Correction delivered to Agent') : message.stopReason === 'steer_interrupted' ? tr('补充要求已保存，将在你继续时交付', 'Correction saved for your next continuation') : tr('补充要求已保存，等待 Agent 接收', 'Correction saved, awaiting delivery') }}</small>
         <small v-if="message.role === 'assistant' && message.usage?.requests" class="ahc-model-usage">{{tr('模型请求', 'Model requests')}} {{message.usage.requests}} · {{tr('输入', 'Input')}} {{message.usage.inputTokens?.toLocaleString() ?? tr('未知','unknown')}} / {{tr('输出','Output')}} {{message.usage.outputTokens?.toLocaleString() ?? tr('未知','unknown')}} Token<span v-if="message.usage.unknownRequests"> · {{message.usage.unknownRequests}} {{tr('次用量未返回，未计入上述数量','requests did not report usage and are excluded from these totals')}}</span></small>
-        <div v-if="message.content && message.status !== 'running'" class="ahc-msg-actions">
-          <button type="button" data-testid="agent-host-copy" :title="tr('复制', 'Copy')" :aria-label="tr('复制', 'Copy')" @click="copyMessage(message)"><Check v-if="copiedId === message.id" :size="13" /><Copy v-else :size="13" /></button>
-          <button v-if="message.role === 'user'" type="button" data-testid="agent-host-edit" :title="tr('编辑后重发', 'Edit & resend')" :aria-label="tr('编辑后重发', 'Edit & resend')" @click="editMessage(message)"><Pencil :size="13" /></button>
+        <div v-if="message.content" class="ahc-msg-footer">
+          <time v-if="messageTime(message)" class="ahc-msg-time" :datetime="messageTime(message)!.iso" :title="messageTime(message)!.full">{{ messageTime(message)!.label }}</time>
+          <div v-if="message.status !== 'running'" class="ahc-msg-actions">
+            <button type="button" data-testid="agent-host-copy" :title="tr('复制', 'Copy')" :aria-label="tr('复制', 'Copy')" @click="copyMessage(message)"><Check v-if="copiedId === message.id" :size="13" /><Copy v-else :size="13" /></button>
+            <button v-if="message.role === 'user'" type="button" data-testid="agent-host-edit" :title="tr('编辑后重发', 'Edit & resend')" :aria-label="tr('编辑后重发', 'Edit & resend')" @click="editMessage(message)"><Pencil :size="13" /></button>
+          </div>
         </div>
         <p v-if="message.role === 'assistant' && (message.status === 'refused' || message.stopReason === 'refusal')" class="ahc-refusal">{{ tr('模型拒绝继续。这一轮没有改写问题，也没有再调用工具。', 'The model refused. This turn did not rephrase the request or call more tools.') }}</p>
         <div v-if="message.role === 'assistant' && message.stopReason === 'intent_preview'" class="ahc-intent" data-testid="agent-host-intent">
@@ -697,6 +860,11 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
           <button type="button" @click="chooseIntent('import_asset', message)">{{ tr('查询或导入资产', 'Look up or import assets') }}</button>
           <button type="button" @click="chooseIntent('prepare_authorized_scan', message)">{{ tr('准备授权扫描', 'Prepare an authorized scan') }}</button>
           <button v-if="pendingApproval" type="button" data-testid="agent-host-confirm-intent" @click="confirmIntent">{{ tr('确认这个选择', 'Confirm this choice') }}</button>
+        </div>
+        <div v-if="message.role === 'assistant' && message.status === 'completed' && message.suggestedNext?.length && message.id === messages[messages.length - 1]?.id" class="ahc-suggested-next" data-testid="agent-host-suggested-next">
+          <button v-for="option in message.suggestedNext" :key="option.id" type="button" :disabled="running || continuingTask" @click="chooseSuggestedNext(option)">
+            {{ option.id === 'end_topic' ? tr('结束，等新的话题', 'End here, wait for a new topic') : tr('继续当前任务的下一步', 'Continue with the next step') }}
+          </button>
         </div>
         <div v-if="message.status === 'failed'" class="agent-host-chat-failure" role="note">
           <strong>{{ tr(...failure(message.failureCode).title) }}</strong>
@@ -729,6 +897,8 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
           </div>
         </details>
       </article>
+      <div v-if="spacerAfter > 0" class="ahc-virt-spacer" :style="{ height: spacerAfter + 'px' }" aria-hidden="true"></div>
+      </div>
       </div>
     </div>
       <button v-if="unreadBelow" class="button secondary compact ahc-jump-latest" type="button" @click="jumpToLatest">{{tr('有新消息 · 回到底部','New messages · Jump to latest')}}</button>
@@ -736,8 +906,8 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
       <strong>{{ tr(...errorView.title) }}</strong> <span>{{ tr(...errorView.hint) }}</span>
       <code>{{ errorView.code }}</code>
     </div>
-    <div v-if="grantPrompt" class="ahc-grant" role="dialog" aria-modal="true" :aria-label="tr('授权', 'Grant access')">
-      <strong>{{ grantPrompt.offers.some(offer => offer.appId === 'material') ? tr('放行这次访问', 'Allow this access') : (grantIsWorkspace ? tr('需要授权才能继续', 'Permission needed to continue') : tr('需要授权才能查', 'Permission needed')) }}</strong>
+    <div v-if="grantPrompt" class="ahc-grant" :class="{ 'ahc-grant-material': grantIsMaterial }" role="dialog" aria-modal="true" :aria-label="tr('授权', 'Grant access')">
+      <strong>{{ grantIsMaterial ? tr('放行工作区外访问', 'Allow access outside the workspace') : (grantIsWorkspace ? tr('需要授权才能继续', 'Permission needed to continue') : tr('需要授权才能查', 'Permission needed')) }}</strong>
       <p v-if="grantPrompt.question">{{ grantPrompt.question }}</p>
       <p v-else>{{ tr('这次操作要用到还没打开的权限。授权只作用于当前工作空间，也可以先不授。', 'This step needs a permission that is still off. Granting applies only to this workspace.') }}</p>
       <p v-if="grantPrompt.offers.some(offer => offer.appId === 'workspace')">{{ tr('此请求只授予列出的文件权限。脚本执行将在隔离运行环境接通后开放。', 'This request grants only the listed file permissions. Script execution requires an isolated runtime.') }}</p>
@@ -747,21 +917,11 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
       <label v-if="grantPrompt.offers.some(offer => offer.appId === 'workspace')" class="ahc-remember"><input v-model="rememberWorkspace" type="checkbox" />{{ tr('记住本对话的这些文件权限；切换模型后需重新确认', 'Remember these file permissions for this conversation; changing models requires confirmation') }}</label>
       <footer>
         <button type="button" class="button ghost compact" :disabled="granting" @click="declineGrant">{{ tr('暂不', 'Not now') }}</button>
-        <button type="button" class="button primary compact" :disabled="granting" @click="acceptGrant">{{ granting ? tr('授权中…', 'Granting…') : (grantIsWorkspace ? tr('授权并继续', 'Grant and continue') : tr('授权并继续', 'Grant and continue')) }}</button>
+        <button type="button" class="button primary compact" :disabled="granting" @click="acceptGrant">{{ granting ? tr('放行中…', 'Allowing…') : (grantIsMaterial ? tr('放行', 'Allow') : tr('授权并继续', 'Grant and continue')) }}</button>
       </footer>
     </div>
     <div v-if="runtimePermission" class="ahc-grant" role="dialog" :aria-label="tr('运行时授权','Runtime permission')"><strong>{{tr('请审核运行时操作','Review runtime operation')}}</strong><p>{{runtimePermission.description}}</p><footer><button v-for="option in runtimePermission.options" :key="option.id" type="button" class="button secondary compact" @click="decidePermission(option.id)">{{option.label}}</button></footer></div>
     <p v-if="!connected" class="ahc-connection" role="status">{{tr('连接中断，正在重连。已运行的任务状态会重新核实。','Connection lost. Reconnecting and checking the running task.')}}</p>
-    <details v-if="chainHops.length" class="ahc-chain" open>
-      <summary><Search :size="12" /> {{ tr('本轮访问来源', 'Sources accessed this turn') }} <span class="ahc-chain-count">{{ chainHops.length }}</span></summary>
-      <ul :aria-label="tr('访问来源记录（读取记录，非选项）', 'Access log (read record, not options)')">
-        <li v-for="hop in chainHops" :key="hop.id">
-          <b>{{ hop.factLabel }}</b>
-          <span v-if="hop.factValue" :title="hop.factValue">{{ hop.factValue }}</span>
-          <small>{{ hop.source }} · {{ hop.opensNext ? tr('可继续读取', 'resumable') : tr('已到末尾', 'end') }}</small>
-        </li>
-      </ul>
-    </details>
     <div class="ahc-compose-dock">
     <form class="ahc-composer" @submit.prevent="send">
       <textarea ref="composerInput" v-model="draft" rows="1" :disabled="loadingProject" :placeholder="running ? tr('输入插话：会在下一步带入当前回复', 'Steer: injected before the next step') : tr('问点什么…（Enter 发送，Shift+Enter 换行）', 'Ask anything… (Enter to send)')" @keydown="onComposerKeydown" />
@@ -775,7 +935,13 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
             <option v-for="item in modelOptions" :key="item.value" :value="item.value">{{ item.label }}</option>
           </select><ChevronDown :size="13" class="ahc-select-caret" />
         </label>
-        <AgentPermissionMode :client="client" :project-id="hostProjectId" :runtime-identity="liveSettings.runtime?.identity" :disabled="loadingProject||continuingTask" compact @changed="permissionsOpen&&loadPermissions()" />
+        <button type="button" class="ahc-conn-test" :class="{ ok: connTest?.ok, err: connTest && !connTest.ok }" :disabled="connTestBusy" :title="connTestTitle" :aria-label="connTestTitle" @click="testConnection">
+          <Loader2 v-if="connTestBusy" :size="13" class="spinning" />
+          <AlertTriangle v-else-if="connTest && !connTest.ok" :size="13" />
+          <Check v-else-if="connTest?.ok" :size="13" />
+          <Wifi v-else :size="13" />
+        </button>
+        <AgentPermissionMode :client="client" :project-id="hostProjectId" :runtime-identity="liveSettings.runtime?.identity" :disabled="loadingProject||continuingTask" compact @changed="onPermissionModeChanged" />
         <button type="button" class="ahc-permissions-toggle" :aria-expanded="permissionsOpen" aria-controls="agent-chat-permissions" :disabled="!selectedId" @click="togglePermissions"><ShieldCheck :size="14" />{{ tr('权限详情', 'Permission details') }}</button>
         <span class="ahc-composer-hint">{{ running ? tr('可随时停止或补充要求', 'Stop or steer at any time') : tr('Enter 发送 · Shift+Enter 换行', 'Enter to send · Shift+Enter for a new line') }}</span>
       </div>
@@ -808,6 +974,8 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
 .agent-host-chat-transcript { flex: 1; min-height: 0; overflow: auto; padding: 18px 28px 8px; }
 .ahc-jump-latest{align-self:center;margin:4px 0 8px;flex-shrink:0}.ahc-discovery-details{border-bottom:1px solid var(--line,#e1e3e7);padding:4px 0 10px;color:var(--app-muted,#687078);font-size:12px}.ahc-discovery-details>summary{cursor:pointer}.ahc-discovery-details[open]>summary{margin-bottom:10px}.text-button{align-self:center;border:1px solid var(--line,#e1e3e7);border-radius:7px;background:transparent;color:inherit;padding:6px 12px;font-size:12px;cursor:pointer}
 .ahc-column { width: min(760px, 100%); margin: 0 auto; min-height: 100%; display: flex; flex-direction: column; gap: 14px; }
+.ahc-msg-list { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.ahc-virt-spacer { flex-shrink: 0; width: 100%; }
 .agent-host-chat-message { position: relative; width: 100%; min-width: 0; padding: 0; white-space: normal; font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; }
 .agent-host-chat-message :deep(.conversation-message) { margin-bottom: 0; }
 .agent-host-chat-message.user { align-self: stretch; background: transparent; }
@@ -848,6 +1016,9 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
 .ahc-refusal { margin: 6px 0 0; color: var(--app-muted, #72746f); font-size: 12px; line-height: 1.5; }
 .ahc-intent { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .ahc-intent button { border: 1px solid var(--line, #e5e6e1); border-radius: 999px; background: transparent; color: var(--app-ink, #252624); font: inherit; font-size: 12px; padding: 4px 10px; cursor: pointer; }
+.ahc-suggested-next { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.ahc-suggested-next button { border: 1px solid var(--line, #e5e6e1); border-radius: 999px; background: transparent; color: var(--app-ink, #252624); font: inherit; font-size: 12px; padding: 4px 10px; cursor: pointer; }
+.ahc-suggested-next button:disabled { opacity: 0.5; cursor: default; }
 .agent-host-chat-alert { margin: 0 16px; padding: 8px 12px; border-radius: 8px; font-size: 12px; background: color-mix(in srgb, #d14343 9%, transparent); }
 .ahc-select-wrap { position: relative; display: inline-flex; align-items: center; }
 .ahc-select { appearance: none; -webkit-appearance: none; height: 30px; max-width: 180px; padding: 0 26px 0 10px; font: inherit; font-size: 12px; color: inherit; border: 1px solid color-mix(in srgb, var(--app-ink, #172033) 14%, transparent); border-radius: 8px; background: var(--app-surface, #fff); box-shadow: none !important; cursor: pointer; text-overflow: ellipsis; }
@@ -857,7 +1028,12 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
 .ahc-model .ahc-select { max-width: 280px; font-weight: 550; }
 .ahc-empty { margin: auto; text-align: center; font-size: 14px; line-height: 1.7; color: var(--app-muted, var(--muted, #6b7280)); max-width: 420px; }
 .ahc-grant{width:min(480px,calc(100% - 40px));margin:0 auto 10px;padding:14px 16px;border:1px solid var(--line,#e5e6e1);border-radius:14px;background:var(--app-surface,#fff);box-shadow:0 10px 28px #00000014}
+.ahc-grant-material{border-color:color-mix(in srgb,var(--blue,#416b9c) 45%,transparent);box-shadow:0 10px 28px #00000014,0 0 0 1px color-mix(in srgb,var(--blue,#416b9c) 12%,transparent)}
 .ahc-grant strong{display:block;font-size:14px}
+.ahc-review-banner{display:flex;align-items:center;gap:10px;margin:0 16px 10px;padding:10px 14px;border-radius:10px;flex-shrink:0;border:1px solid color-mix(in srgb,var(--amber,#b8860b) 45%,transparent);background:color-mix(in srgb,var(--amber,#b8860b) 14%,transparent);color:color-mix(in srgb,var(--amber,#b8860b) 85%,var(--app-ink,#24272d));font-size:12px}
+.ahc-review-banner svg{flex-shrink:0;color:var(--amber,#b8860b)}
+.ahc-review-banner span{flex:1;line-height:1.5}
+.ahc-review-banner button{flex-shrink:0}
 .ahc-grant p,.ahc-grant li{margin:6px 0 0;color:var(--app-muted,#72746f);font-size:12px;line-height:1.6}
 .ahc-grant ul{margin:8px 0 0;padding-left:18px}
 .ahc-grant footer{display:flex;justify-content:flex-end;gap:8px;margin-top:12px}
@@ -868,11 +1044,20 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
 .ahc-heartbeat { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 12px; color: var(--app-muted, var(--muted, #6b7280)); }
 .ahc-pulse { width: 7px; height: 7px; border-radius: 50%; background: #22a06b; animation: ahc-pulse 1.4s ease-in-out infinite; }
 @keyframes ahc-pulse { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
+.ahc-conn-test { display: grid; place-items: center; flex-shrink: 0; width: 28px; height: 28px; padding: 0; border: 1px solid var(--line, #e5e6e1); border-radius: 7px; background: transparent; color: var(--app-muted, #72746f); cursor: pointer; }
+.ahc-conn-test:hover:not(:disabled) { color: var(--app-ink, #252624); background: color-mix(in srgb, var(--app-ink, #252624) 6%, transparent); }
+.ahc-conn-test.ok { color: #22a06b; border-color: #22a06b; }
+.ahc-conn-test.err { color: var(--red, #b63f3f); border-color: var(--red, #b63f3f); }
+.ahc-conn-test:disabled { cursor: default; opacity: .7; }
+.spinning { animation: ahc-spin .8s linear infinite; }
+@keyframes ahc-spin { to { transform: rotate(360deg); } }
 .ahc-steer { background: var(--app-accent, #3b82f6); }
 .ahc-steer-state,.ahc-model-usage { display: block; color: var(--app-text-muted, #737373); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
-.ahc-msg-actions { display: flex; gap: 2px; margin-top: 4px; opacity: 0; transition: opacity .15s; }
+.ahc-msg-footer { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.agent-host-chat-message.user .ahc-msg-footer { justify-content: flex-end; }
+.ahc-msg-time { font-size: 11px; color: var(--app-muted, var(--muted, #6b7280)); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ahc-msg-actions { display: flex; gap: 2px; opacity: 0; transition: opacity .15s; }
 .agent-host-chat-message:hover .ahc-msg-actions, .ahc-msg-actions:focus-within { opacity: 1; }
-.agent-host-chat-message.user .ahc-msg-actions { justify-content: flex-end; }
 .ahc-msg-actions button { width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--app-muted, var(--muted, #6b7280)); cursor: pointer; }
 .ahc-msg-actions button:hover { background: color-mix(in srgb, var(--app-ink, #172033) 8%, transparent); }
 .ahc-send:disabled { opacity: .3; cursor: default; }
@@ -880,11 +1065,9 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
 .ahc-remember input { flex:0 0 auto; width:16px; height:16px; margin:2px 0 0; }
 @media(max-width:900px){.agent-host-chat-transcript{padding:16px}.ahc-model .ahc-select{max-width:240px}}
 
-.ahc-chain{width:min(800px,calc(100% - 40px));margin:0 auto 4px;font-size:12px;line-height:1.5}
-.ahc-chain>summary{display:flex;align-items:center;gap:6px;cursor:pointer;color:var(--muted,#666);font-size:11px;padding:4px 0;list-style:none}
-.ahc-chain>summary::-webkit-details-marker{display:none}
+.ahc-chain>summary{display:flex;align-items:center;gap:6px}
 .ahc-chain-count{color:var(--muted,#999);font-weight:400}
-.ahc-chain ul{list-style:none;margin:0;padding:0}
+.ahc-chain ul{list-style:none;margin:0;padding:0;max-height:38vh;overflow:auto}
 .ahc-chain li{display:grid;gap:2px;padding:6px 0;border-top:1px solid var(--line,#e6e6e6)}
 .ahc-chain b{font-weight:600}
 .ahc-chain span,.ahc-chain small{overflow-wrap:anywhere;color:var(--muted,#666)}

@@ -10,7 +10,8 @@ import {useI18n} from '../../i18n';
 const {tr}=useI18n();
 const source=ref(''),content=ref(''),busy=ref(false),error=ref(''),notice=ref(''),search=ref('');
 const entries=ref<AgentKnowledgeEntry[]>([]),packages=ref<SkillPackage[]>([]),autoAssign=ref(true),targets=ref<Record<number,string>>({});
-const visible=computed(()=>entries.value.filter(e=>!e.projectId&&`${e.title} ${e.summary} ${JSON.stringify(e.patterns.methodCards||[])}`.toLowerCase().includes(search.value.trim().toLowerCase())));
+const nonProjectEntries=computed(()=>entries.value.filter(e=>!e.projectId));
+const visible=computed(()=>nonProjectEntries.value.filter(e=>`${e.title} ${e.summary} ${JSON.stringify(e.patterns.methodCards||[])}`.toLowerCase().includes(search.value.trim().toLowerCase())));
 async function load(){
  [entries.value,packages.value]=await Promise.all([knowledgeCatalogApi.listAgentKnowledge(),skillsApi.listPackages()]);
  for(const entry of entries.value) if(targets.value[entry.id]===undefined) targets.value[entry.id]='';
@@ -27,14 +28,15 @@ async function pick(){const p=await open({multiple:false,filters:[{name:tr('技�
 </script>
 <template>
 <section class="distillation">
- <header><div><p>{{ tr('技术文章 → AI 提炼 → 知识归档 → 技能包复用。技能包统一在设置中管理。', 'Technical article → AI distillation → knowledge archive → reuse in skill packages. Skill packages are managed in Settings.') }}</p></div><span>{{ tr(`${entries.filter(e=>!e.projectId).length} 条知识`, `${entries.filter(e=>!e.projectId).length} knowledge entries`) }}</span></header>
+ <header><div><p>{{ tr('完成的授权扫描会自动蒸馏出知识（按扫描去重，无需手动添加）；也可以在下方粘贴技术文章手动蒸馏。两者都归档为知识，供技能包统一在设置中管理、复用。', 'Knowledge is distilled automatically from completed authorized scans (deduplicated per scan — nothing to add by hand); you can also paste a technical article below to distill one manually. Either way it is archived as knowledge and reused via skill packages, managed in Settings.') }}</p></div><span>{{ tr(`${nonProjectEntries.length} 条知识`, `${nonProjectEntries.length} knowledge entries`) }}</span></header>
  <div class="distill-source"><h3>{{ tr('添加技术资料', 'Add technical material') }}</h3><label>{{ tr('文章链接或本地文件', 'Article URL or local file') }}<div class="source-row"><input v-model="source" :disabled="busy" :placeholder="tr('https://… 或 Markdown / HTML / TXT 路径', 'https://… or a Markdown / HTML / TXT path')"/><button class="button ghost compact" :disabled="busy" @click="pick">{{ tr('选择文件', 'Choose file') }}</button></div></label>
  <label>{{ tr('或粘贴正文', 'Or paste the text') }}<textarea v-model="content" :disabled="busy" rows="7" :placeholder="tr('编程、架构、调试、运维、安全等技术文章；粘贴正文时优先分析正文。', 'Technical articles on programming, architecture, debugging, operations, security, and more. Pasted text takes priority.')"/></label>
  <footer><label class="check"><input v-model="autoAssign" type="checkbox" :disabled="busy"/>{{ tr('蒸馏后由 AI 选择合适的技能包', 'Let AI pick a suitable skill package after distillation') }}</label><button class="button primary compact" :disabled="busy||(!source.trim()&&!content.trim())" @click="distill">{{busy?tr('正在处理…', 'Processing…'):tr('开始蒸馏', 'Start distillation')}}</button></footer>
  <small>{{ tr('支持可读取的网页和文本资料，单篇最多 8 万字符；PDF、图片请先转换为正文。归类失败时仍保留已蒸馏知识。', 'Supports readable web pages and text, up to 80,000 characters each. Convert PDFs and images to text first. Distilled knowledge is kept even if categorization fails.') }}</small></div>
  <p v-if="error" role="alert" class="error">{{error}}</p><p v-if="notice" role="status">{{notice}}</p>
  <div class="library-head"><h3>{{ tr('已沉淀知识', 'Saved knowledge') }}</h3><input v-model="search" type="search" :placeholder="tr('搜索标题或知识内容', 'Search titles or knowledge content')" :aria-label="tr('搜索知识', 'Search knowledge')"/></div>
- <p v-if="!visible.length" class="empty">{{ tr('暂无匹配的知识，添加一篇技术文章开始。', 'No matching knowledge. Add a technical article to get started.') }}</p>
+ <p v-if="!visible.length&&nonProjectEntries.length" class="empty">{{ tr('没有匹配当前搜索的知识。', 'No knowledge matches this search.') }}</p>
+ <p v-else-if="!visible.length" class="empty">{{ tr('这里还没有知识——这是正常的。完成的授权扫描会自动蒸馏出知识，无需手动添加；也可以在上方粘贴一篇技术文章手动蒸馏。', 'No knowledge yet — that is expected. It is distilled automatically from completed authorized scans, nothing to add by hand; you can also paste a technical article above to distill one manually.') }}</p>
  <article v-for="entry in visible" :key="entry.id"><header><h3>{{entry.title}}</h3><span>{{entry.skillId ? (packages.find(p=>p.skills.some(s=>s.id===entry.skillId))?.name || tr('已归入技能', 'Assigned to a skill')) : tr('待归类', 'Unassigned')}}</span></header><p>{{entry.summary}}</p>
  <p v-if="entry.patterns.packageAssignment" class="assignment">{{(entry.patterns.packageAssignment as any).reason}}</p>
  <details><summary>{{ tr('查看知识与来源', 'View knowledge and source') }}</summary><pre>{{JSON.stringify(entry.patterns.methodCards||entry.patterns,null,2)}}</pre><small>{{entry.patterns.sourceUrl}}</small><details v-if="entry.patterns.originalText"><summary>{{ tr('保留的原文', 'Preserved original text') }}</summary><pre>{{entry.patterns.originalText}}</pre></details></details>

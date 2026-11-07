@@ -199,7 +199,10 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
+  max-height: 70vh;
+  overflow-y: auto;
 }
+.virt-spacer { flex-shrink: 0; width: 100%; }
 .source-finding-card {
   border: 1px solid var(--ui-line);
   border-left: 4px solid #7f8da0;
@@ -300,8 +303,10 @@
 }
 .source-dependency-list {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
+  max-height: 46vh;
+  overflow-y: auto;
 }
 .source-dependency-list article {
   display: grid;
@@ -438,8 +443,7 @@
   .source-scan-meta,
   .source-metric-grid,
   .source-severity-grid,
-  .source-finding-grid,
-  .source-dependency-list {
+  .source-finding-grid {
     grid-template-columns: 1fr;
   }
   .source-finding-card header {
@@ -508,6 +512,7 @@
   border: 1px solid var(--ui-line);
   border-radius: var(--radius-sm);
   overflow: auto;
+  max-height: 50vh;
 }
 .source-language-table > div {
   display: grid;
@@ -557,7 +562,7 @@
   font-size:var(--text-heading);
   overflow-wrap: anywhere;
 }
-.source-finding-index > div {
+.source-finding-index > div:not(.virt-spacer) {
   display: grid;
   grid-template-columns:
     75px minmax(180px, 1.4fr) minmax(180px, 1fr)
@@ -1063,6 +1068,8 @@
   flex-direction: column;
   gap: 10px;
   margin-top: 10px;
+  max-height: 60vh;
+  overflow-y: auto;
 }
 .appsec-correlation-card {
   border: 1px solid var(--ui-line);
@@ -1248,8 +1255,9 @@
   border: 1px solid var(--ui-line);
   border-radius: var(--radius-sm);
   overflow: auto;
+  max-height: 46vh;
 }
-.cicd-blocking-table > div {
+.cicd-blocking-table > div:not(.virt-spacer) {
   display: grid;
   grid-template-columns:
     75px minmax(180px, 1.3fr) minmax(180px, 1fr)

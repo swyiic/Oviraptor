@@ -3,7 +3,10 @@ import { providerDisplayName, resolveProviderForModel } from "./providerPresets"
 import type { DiscoveryView, DiscoveryWitness } from './discoveryTypes';
 
 export type AgentModelUsage = { requests: number; reportedRequests: number; unknownRequests: number; inputTokens: number | null; outputTokens: number | null; cachedInputTokens?: number | null; reasoningTokens?: number | null };
-export type AgentHostMessage = { id: string; role: "user" | "assistant"; content: string; status: string; runId?: string | null; createdAt: string; failureCode?: string; stopReason?: string; usage?: AgentModelUsage };
+/** Structured "what next" option on a reply whose task is truly done. `prompt`, when given, is what
+ *  clicking `continue_current` sends verbatim; with no `prompt` the UI falls back to a generic nudge. */
+export type AgentSuggestedNext = { id: "continue_current" | "end_topic"; prompt?: string };
+export type AgentHostMessage = { id: string; role: "user" | "assistant"; content: string; status: string; runId?: string | null; createdAt: string; failureCode?: string; stopReason?: string; usage?: AgentModelUsage; suggestedNext?: AgentSuggestedNext[] };
 export type AgentHostConversation = { id: string; projectId: number; title: string; metadataRevision?: number; createdAt: string; lastActivityAt?: string; updatedAt?: string; pinned?: boolean; titleManuallySet?: boolean };
 export type AgentProjectMemoryEntry = { entryId: string; note: string; kind: string; tags: string[]; sourceConversationId: string | null; createdAt: string; updatedAt: string };
 export type AgentConversationWorkspace = { projectId: number; conversationId: string; path: string; exists: boolean; shared: true; description: string };
@@ -28,8 +31,11 @@ export type AgentWorkspaceFileContent = { path: string; bytes: number; truncated
 export type AgentHostEvent = { type: string; conversationId?: string; runId?: string; messageId?: string; delta?: string; status?: string; content?: string; title?: string; code?: string; [key: string]: unknown };
 /** External MCP decision connector (jev-studio): advisory typed-decision tools, surfaced to
  *  the agent as `jev_*`. Disabled by default; any failure degrades to "no extra tools". */
-export type McpJevStatus = { enabled: boolean; command: string; args: string[]; state: "disabled" | "starting" | "ready" | "error"; error: string; tools: Array<{ name: string; title: string; description: string }> };
-export type McpJevConfigInput = { enabled?: boolean; command?: string; args?: string[] };
+export type McpJevStatus = { enabled: boolean; command: string; args: string[]; apiKeyEnv: string; hasApiKey: boolean; envKeys: string[]; state: "disabled" | "starting" | "ready" | "error"; error: string; tools: Array<{ name: string; title: string; description: string }> };
+// Result of a live reachability check of the configured model provider (GET {baseUrl}/models).
+export type ModelConnectionTest = { ok: boolean; reason?: "not_configured" | "no_credential" | "http_error" | "timeout" | "unreachable"; status?: number; baseUrl?: string; model?: string; latencyMs?: number; modelListed?: boolean | null; error?: string };
+// apiKey: write-only — send to set (empty string clears); never returned. env: extra spawn env, advanced.
+export type McpJevConfigInput = { enabled?: boolean; command?: string; args?: string[]; apiKey?: string; apiKeyEnv?: string; env?: Record<string, string> };
 
 /** Header label for the session page: runtime + model from the live agent-host, never the legacy desktop profile. */
 export function agentRuntimeHeader(settings: AgentHostSettings | null | undefined): string {
@@ -109,6 +115,7 @@ export function createAgentHostChatClient(endpoint: AgentHostEndpoint, fetchImpl
     /** Global cross-workspace memory (scope='global'): visible from every project. */
     globalMemory: () => request<{ items: AgentProjectMemoryEntry[] }>("/api/memory/global").then(r => r.items),
     forgetGlobalMemory: (entryId: string) => request<{ ok: boolean; removed: boolean }>(`/api/memory/global/${encodeURIComponent(entryId)}`, { method: "DELETE" }),
+    testModelConnection: () => request<ModelConnectionTest>("/api/settings/provider/test", { method: "POST", body: "{}" }),
     mcpJevStatus: () => request<McpJevStatus>("/api/mcp/jev"),
     setMcpJev: (input: McpJevConfigInput) => request<McpJevStatus>("/api/mcp/jev", { method: "POST", body: JSON.stringify(input) }),
     /** Agent-recorded findings (record_finding tool). No project filter server-side —

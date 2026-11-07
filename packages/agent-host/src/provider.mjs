@@ -52,6 +52,14 @@ import {
   verifyBeforeEnd,
   qualifyUnverifiedEnd,
   publicInnerState,
+  finishTurnDecision,
+  FORCED_CONTINUE_BUDGET,
+  toolSetAnnouncement,
+  deliverableSelfCheckDecision,
+  latestDeliverableWritePath,
+  producedDeliverable,
+  looksLikeQuestionToUser,
+  buildSuggestedNext,
 } from './agent-state.mjs';
 import { admitContext, resolveModelCapability } from './workflow-guard.mjs';
 import { compressSessionMessages } from './memory.mjs';
@@ -1598,6 +1606,7 @@ export class OpenAiCompatibleRuntime {
     let forcedEmptyBlock = false;
     let lengthContinued = false;
     let forcedVerifier = false;
+    let forcedSelfCheck = false;
     let injectedReview = false;
     let countAnswerHint = false;
     let certificateStatusHint = false;
@@ -1613,6 +1622,12 @@ export class OpenAiCompatibleRuntime {
     let cleanupHint = false;
     let apiUsed = options.useResponsesApi ? 'responses' : 'chat';
     let stepLimit = options.maxSteps;
+    // Pi-inspired loop mechanics (grant no authority; see agent-state.mjs):
+    // finishTurn force-continue budget, and the tool-set the model was last told.
+    let forcedContinues = 0;
+    let forcedContinueReason = null;
+    let toolSetAnnouncements = 0;
+    let announcedToolNames = null;
     try {
       for (let step = 0; step < stepLimit; step++) {
         if (session.abort.signal.aborted) throw hostError('host_reply_cancelled');
@@ -1629,6 +1644,19 @@ export class OpenAiCompatibleRuntime {
           session.messages=session.messages.filter(message=>!message._hostAuthorizationContext);
           session.messages.push({role:'user',_hostAuthorizationContext:true,content:`Host: 最新 tools/list 已实际提供这些业务工具：${JSON.stringify(restoredAppTools.map(tool=>tool._hostName))}。原先相应权限缺口已由 Host 核验更新，不要再把旧拒绝当作当前限制；只用当前 schema，实际执行仍由 Host 和业务 owner 复核，不重发已发送或结果未知的控制。${unavailableThisTurn.size?`仍不可用且本轮不重复询问：${JSON.stringify([...unavailableThisTurn])}。`:''}`});
         }
+        // Task 2: announce a mid-conversation tool-set change so the model stops
+        // falsely concluding it has no execution tools after a grant unlocks them.
+        // Diff the raw granted list (real authority), not the turn-narrowed list.
+        const currentToolNames = grantedTools.map(tool => tool._hostName);
+        if (announcedToolNames !== null) {
+          const announcement = toolSetAnnouncement(announcedToolNames, currentToolNames, { exclude: restoredAppTools.map(tool => tool._hostName) });
+          if (announcement) {
+            session.messages.push({ role: 'user', _hostAuthorizationContext: true, content: announcement.message });
+            toolSetAnnouncements += 1;
+            emitInner('model', '工具集有变化，已告知模型');
+          }
+        }
+        announcedToolNames = currentToolNames;
         let tools = grantedTools.filter(tool => !matchesToolRestriction(tool._hostName, unavailableThisTurn));
         const readOnlyTurn=isReadOnlyDataRequest(goalText);
         if(readOnlyTurn){
@@ -1991,7 +2019,77 @@ export class OpenAiCompatibleRuntime {
               harness: session.harness,
             };
           }
+          // Deliverable self-check: a deliverable already exists (just written
+          // this turn, or an earlier turn's path plus a correction-sounding
+          // reply now) → one bounded pass to have the model re-open it and fix
+          // it itself (workspace_edit) before the turn is allowed to end clean.
+          // Shares forcedContinues' budget; never a second unbounded loop.
+          if (!session.abort.signal.aborted && !forcedSelfCheck) {
+            const selfCheck = deliverableSelfCheckDecision({
+              answerMode: options.answerMode,
+              toolResultsThisPrompt,
+              assistantText: turn.text || '',
+              lastDeliverablePath: session.lastDeliverablePath || '',
+              forcedContinuesUsed: forcedContinues,
+              budget: FORCED_CONTINUE_BUDGET,
+              cancelled: session.abort.signal.aborted,
+            });
+            if (selfCheck.continue) {
+              forcedSelfCheck = true;
+              forcedContinues += 1;
+              forcedContinueReason = selfCheck.reason;
+              session.lastDeliverablePath = selfCheck.path;
+              stepLimit = Math.max(stepLimit, step + 2);
+              emitInner('hold', '交付物已产出，收尾前先自检一致性');
+              emit({ type: 'tool_call', toolCallId: `selfcheck-${step}`, title: '交付物自检', status: 'in_progress' });
+              emit({ type: 'tool_update', toolCallId: `selfcheck-${step}`, title: '交付物自检', status: 'completed', summary: selfCheck.reason });
+              session.messages.push({ role: 'user', content: selfCheck.hint });
+              continue;
+            }
+          }
+          {
+            const freshPath = latestDeliverableWritePath(toolResultsThisPrompt);
+            if (freshPath) session.lastDeliverablePath = freshPath;
+          }
+          // Task 1: finishTurn completion policy. On a clean end-of-turn, force
+          // one more model request (bounded by FORCED_CONTINUE_BUDGET) when an
+          // in-scope autonomous analysis task did real work but produced no
+          // deliverable and did not end by asking the user or hitting a scope
+          // boundary. Cancellation and every existing stop still take precedence:
+          // this runs only after the no-tool-calls guards above have declined.
+          if (!session.abort.signal.aborted) {
+            const decision = finishTurnDecision({
+              answerMode: options.answerMode,
+              goalText,
+              usedToolThisPrompt,
+              toolResultsThisPrompt,
+              assistantText: turn.text || '',
+              readOnlyTurn,
+              scopeBoundary: unavailableThisTurn.size > 0 || authorizationAttempted.size > 0,
+              forcedContinuesUsed: forcedContinues,
+              budget: FORCED_CONTINUE_BUDGET,
+              cancelled: session.abort.signal.aborted,
+            });
+            if (decision.continue) {
+              forcedContinues += 1;
+              forcedContinueReason = decision.reason;
+              stepLimit = Math.max(stepLimit, step + 2);
+              emitInner('hold', '任务还没产出成果，再推进一步');
+              emit({ type: 'tool_call', toolCallId: `finish-${step}`, title: '继续完成任务', status: 'in_progress' });
+              emit({ type: 'tool_update', toolCallId: `finish-${step}`, title: '继续完成任务', status: 'completed', summary: decision.reason });
+              session.messages.push({ role: 'user', content: decision.hint });
+              continue;
+            }
+          }
           emitInner('done');
+          // Structured "what next": only once the task is truly done — a
+          // deliverable exists, nothing was left for the user to decide (no
+          // scope/authorization gap, no question asked this turn). Exactly
+          // two options; never a third new concept for the operator to learn.
+          const taskTrulyDone = !session.abort.signal.aborted
+            && producedDeliverable(toolResultsThisPrompt)
+            && unavailableThisTurn.size === 0 && authorizationAttempted.size === 0
+            && !looksLikeQuestionToUser(turn.text || '');
           return {
             stopReason: turn.finishReason === 'length' ? 'max_tokens' : turn.finishReason === 'content_filter' ? 'refusal' : 'end_turn',
             // Tool-wave progress was streamed, but the completed message is
@@ -1999,9 +2097,11 @@ export class OpenAiCompatibleRuntime {
             ...((cleanupTurn&&unresolvedCleanupControlNote(toolResultsThisPrompt))||(exposureTurn&&unresolvedExposureControlNote(toolResultsThisPrompt))
               ? {replaceText:true,assistantText:cleanupTurn?unresolvedCleanupControlNote(toolResultsThisPrompt):unresolvedExposureControlNote(toolResultsThisPrompt)}
               : turn.text?.trim() ? { replaceText: true, assistantText: turn.text } : {}),
+            ...(taskTrulyDone ? { suggestedNext: buildSuggestedNext(session.harness) } : {}),
             metrics: {
               toolSelection, firstTextMs, firstToolMs, totalMs: performance.now() - started,
               forcedToolHint, forcedEmptyBlock, forcedVerifier,
+              forcedContinues, forcedContinueReason, toolSetAnnouncements,
               api: apiUsed, reasoningEffort: options.reasoningEffort,
               messageCount: session.messages.length,
             },
@@ -2163,6 +2263,7 @@ export class OpenAiCompatibleRuntime {
           modelHttpAttempts: session.httpAttempts,
           firstTextMs, firstToolMs, totalMs: performance.now() - started,
           forcedToolHint, forcedEmptyBlock, forcedVerifier,
+          forcedContinues, forcedContinueReason, toolSetAnnouncements,
           api: apiUsed, reasoningEffort: options.reasoningEffort,
           messageCount: session.messages.length,
         },
