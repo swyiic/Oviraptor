@@ -108,7 +108,11 @@ export const WORKSPACE_TOOL_SPECS = [
 export function workspacePermission(toolName) {
   if (toolName === 'workspace_run') return 'workspace.run';
   if (toolName === 'workspace_write' || toolName === 'workspace_edit') return 'workspace.write';
-  if (toolName === 'workspace_list' || toolName === 'workspace_read' || toolName === 'workspace_grep' || toolName === 'workspace_glob' || toolName === 'workspace_fetch' || toolName === 'workspace_read_path' || toolName === 'workspace_http' || toolName === 'workspace_browser' || toolName === 'workspace_ws' || toolName === 'workspace_shell' || toolName === 'workspace_probe_sql' || toolName === 'workspace_probe_command' || toolName === 'workspace_source_list' || toolName === 'workspace_source_search' || toolName === 'workspace_chain_read' || toolName === 'workspace_chain_add') return 'workspace.read';
+  // Outward/dangerous tools — reach the network, a browser, or the host shell. A
+  // distinct, more-gated class so that granting sandboxed ANALYSIS (read + run +
+  // write, all confined/no-net) never also grants these. The authorization wall.
+  if (toolName === 'workspace_fetch' || toolName === 'workspace_http' || toolName === 'workspace_browser' || toolName === 'workspace_ws' || toolName === 'workspace_shell' || toolName === 'workspace_probe_sql' || toolName === 'workspace_probe_command') return 'workspace.network';
+  if (toolName === 'workspace_list' || toolName === 'workspace_read' || toolName === 'workspace_grep' || toolName === 'workspace_glob' || toolName === 'workspace_read_path' || toolName === 'workspace_source_list' || toolName === 'workspace_source_search' || toolName === 'workspace_chain_read' || toolName === 'workspace_chain_add') return 'workspace.read';
   throw workspaceError('workspace_tool_unknown');
 }
 

@@ -97,7 +97,7 @@ export class AgentHost {
     this.heartbeatMs = Number.isFinite(heartbeatMs) && heartbeatMs > 0 ? heartbeatMs : RUNTIME_HEARTBEAT_MS;
     this.apps.onActivity = event => this.emit({ type: 'application.activity', appId: event.appId, ...(typeof event.busy === 'boolean' ? { busy: event.busy } : {}) });
     this.runtimeRevision = Number(this.store.db.prepare("SELECT value FROM host_settings WHERE key='runtime_revision'").get()?.value ?? 1);
-    this.accessPolicy = new ProjectAccessPolicy(this.store, () => this.runtimeIdentity());
+    this.accessPolicy = new ProjectAccessPolicy(this.store, () => this.#accessPolicyIdentity());
     this.apps.agentGrant = (app, projectId, base, identity) => this.accessPolicy.grant(app, projectId, base, identity);
     this.subagents = new ReadOnlySubagents(this);
     this.runtimeState = this.runtime ? 'configured' : 'unconfigured';
@@ -234,6 +234,11 @@ export class AgentHost {
     return { conversation, created: true, bound };
   }
   runtimeIdentity() { return `${this.runtime ? this.runtimeId : 'none'}:${this.runtimeRevision}`; }
+  // Elevated access (full/auto) binds to the model RECIPIENT (endpoint+provider+auth+credential),
+  // NOT the volatile runtime revision. Switching models on the same account keeps full access
+  // active; only changing provider/endpoint/credential forces a deliberate re-confirm. This fixes
+  // full access silently reverting to "ask" on every model switch (revision bump).
+  #accessPolicyIdentity() { return `${this.runtime ? this.runtimeId : 'none'}:${this.#permissionRecipient()}`; }
   #providerRuntime() {
     const config = this.providerStore.read();
     const bearer = this.providerStore.bearer();
@@ -792,7 +797,7 @@ export class AgentHost {
       this.store.db.exec('BEGIN IMMEDIATE');
       try {
         const save = this.store.db.prepare('INSERT OR IGNORE INTO conversation_workspace_grants VALUES(?,?,?)');
-        for (const kind of kinds) save.run(id, pending.runtimeIdentity, kind);
+        for (const kind of kinds) save.run(id, this.#accessPolicyIdentity(), kind);
         this.store.db.exec('COMMIT');
       } catch (error) { this.store.db.exec('ROLLBACK'); throw error; }
     }
@@ -804,7 +809,7 @@ export class AgentHost {
   }
   workspaceGrants(conversationId, projectId) {
     this.store.conversation(conversationId, projectId);
-    return { permissions: this.store.db.prepare('SELECT permission FROM conversation_workspace_grants WHERE conversation_id=? AND runtime_identity=? ORDER BY permission').all(conversationId, this.runtimeIdentity()).map(row => row.permission) };
+    return { permissions: this.store.db.prepare('SELECT permission FROM conversation_workspace_grants WHERE conversation_id=? AND runtime_identity=? ORDER BY permission').all(conversationId, this.#accessPolicyIdentity()).map(row => row.permission) };
   }
   clearWorkspaceGrants(conversationId, projectId) {
     this.store.conversation(conversationId, projectId);
@@ -1403,27 +1408,39 @@ export class AgentHost {
   async #allowMaterial(conversation, run, text) {
     const targets = [...citedHosts(text), ...citedPathTokens(text)].slice(0, 8);
     if (!targets.length) return false;
-    const identity = this.runtimeIdentity();
+    const identity = this.#accessPolicyIdentity();
     const granted = this.store.db.prepare('SELECT 1 FROM conversation_material_grants WHERE conversation_id=? AND runtime_identity=?').get(conversation.id, identity);
-    if (granted) return true;
+    if (granted) { this.#grantSandboxWorkspace(conversation.id, identity, run); return true; }
     if (run.nonInteractive) return false;
     const accepted = await this.requestAuthorization(conversation.id, {
       projectId: conversation.projectId,
       identity,
-      question: `首次访问需要确认。确认后，本对话可以抓取网址、用浏览器打开页面、按原样发送请求、在本机运行命令，并直接读取你给出的文件。大文件不会整份复制进工作区。\n${targets.join('\n')}`,
-      offers: [{ appId: 'material', revision: 0, permissions: [{ permission: 'material.open', tools: ['workspace_fetch', 'workspace_read_path'] }] }],
+      question: `放行工作区外访问？确认后，本对话可以直接读取你点名的这些文件/目录、在隔离无网沙箱里跑脚本(workspace_run)、并把结果写进工作区——解析、解密、取证一次确认全程可用，不再逐步追问。对外发请求、开浏览器、本机命令属于更高一档，仍会在需要时单独询问。大文件留在原路径，不整份复制。\n${targets.join('\n')}`,
+      offers: [{ appId: 'material', revision: 0, permissions: [{ permission: 'material.open', tools: ['workspace_read_path', 'workspace_run', 'workspace_write'] }] }],
     });
     if (run.cancelled) throw hostError('host_reply_cancelled');
     if (accepted !== true) return false;
     this.store.db.prepare("INSERT OR IGNORE INTO conversation_material_grants(conversation_id,runtime_identity,created_at) VALUES(?,?,datetime('now'))").run(conversation.id, identity);
+    this.#grantSandboxWorkspace(conversation.id, identity, run);
     return true;
+  }
+  /** One material confirmation unlocks the full SANDBOXED-analysis set (read + no-net run +
+   * write), persistently, keyed by the stable account identity. Outward tools (workspace.network:
+   * fetch/http/browser/ws/shell/probe) stay separately gated — the authorization wall is unchanged. */
+  #grantSandboxWorkspace(conversationId, identity, run) {
+    const kinds = ['workspace.read', 'workspace.write', 'workspace.run'];
+    try {
+      const save = this.store.db.prepare('INSERT OR IGNORE INTO conversation_workspace_grants VALUES(?,?,?)');
+      for (const kind of kinds) save.run(conversationId, identity, kind);
+    } catch { /* best effort — the in-memory grant below still lets this run proceed */ }
+    if (run) { if (!run.workspaceAllow) run.workspaceAllow = new Set(); for (const kind of kinds) run.workspaceAllow.add(kind); }
   }
   async #authorizeWorkspace(conversation, run, toolName) {
     const kind = workspacePermission(toolName);
     if (!run.workspaceAllow) run.workspaceAllow = new Set();
     if (this.accessPolicy.view(conversation.projectId).mode==='full') return;
     if (run.workspaceAllow.has(kind)) return;
-    if (this.store.db.prepare('SELECT 1 FROM conversation_workspace_grants WHERE conversation_id=? AND runtime_identity=? AND permission=?').get(conversation.id, this.runtimeIdentity(), kind)) { run.workspaceAllow.add(kind); return; }
+    if (this.store.db.prepare('SELECT 1 FROM conversation_workspace_grants WHERE conversation_id=? AND runtime_identity=? AND permission=?').get(conversation.id, this.#accessPolicyIdentity(), kind)) { run.workspaceAllow.add(kind); return; }
     if (!run.workspaceAuthorizations) run.workspaceAuthorizations = new Map();
     if (!run.workspaceAuthorizations.has(kind)) {
       const pending = this.requestAuthorization(conversation.id, {
