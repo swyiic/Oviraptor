@@ -22,10 +22,25 @@ export function blockedAddress(address) {
   return blocked.check(address, family === 6 ? 'ipv6' : 'ipv4');
 }
 
+// A URL match is restricted to the RFC 3986 unreserved/reserved/pct-encoding
+// character set (all ASCII). Earlier this was a negative class excluding
+// whitespace/quotes/angle-brackets only, which let a URL glued directly to
+// trailing CJK instruction text with no separating space (a common way to
+// phrase a request in Chinese -- "https://site.com/路径的说明" with no space
+// before the hanzi) get swallowed whole into the match, turning a real URL
+// into a bogus one that then actually got fetched (typically 404s) and
+// reported on as if it were the real page.
+// An earlier attempt excluded \x80-\uffff instead of allowlisting, but under
+// the /i flag with /u, V8 case-folds character class ranges: U+017F (ſ, LATIN
+// SMALL LETTER LONG S) folds to plain "s", so excluding \x80-\uffff silently
+// excluded the literal ASCII letter "s" too and truncated matches mid-host
+// (e.g. ".../omsatt/..." cut to ".../om"). An explicit ASCII allowlist has no
+// such fold ambiguity, so it no longer needs the /u flag either.
+const URL_MATCH = /https?:\/\/[A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=%]{1,2000}/gi;
 export function citedHosts(text) {
   const hosts = new Set();
   const value = String(text ?? '');
-  for (const match of value.matchAll(/https?:\/\/[^\s"'<>]{1,2000}/giu)) {
+  for (const match of value.matchAll(URL_MATCH)) {
     try {
       const url = new URL(match[0].replace(/[。，、；;,.!?）)】\]]+$/u, ''));
       if (!url.username && !url.password && (url.protocol === 'http:' || url.protocol === 'https:')) hosts.add(url.hostname.toLowerCase());
@@ -54,7 +69,7 @@ export function pastedRequest(text) {
 export function citedPageUrls(text) {
   const value = String(text ?? '');
   const urls = [];
-  for (const match of value.matchAll(/https?:\/\/[^\s"'<>]{1,2000}/giu)) {
+  for (const match of value.matchAll(URL_MATCH)) {
     let raw = match[0].replace(/[。，、；;,.!?）)】\]]+$/u, '');
     try {
       const url = new URL(raw);

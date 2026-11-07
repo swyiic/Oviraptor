@@ -13,6 +13,17 @@ test('a hash route is fetched without the fragment', () => {
   assert.equal(url.href, 'https://hzwb.it.chinamobile.com/omsatt/engine/');
 });
 
+// A real failure: "https://www.hldjob.com/进行开启测试" with no space before
+// the hanzi got swallowed whole into the URL match, so the Host fetched that
+// bogus path (a 404) and reported on it as if it were the real page, while
+// never recognizing the actual site root.
+test('CJK instruction text glued directly after a URL (no space) is not swallowed into it', () => {
+  const glued = '创建一个扫描任务，对https://www.hldjob.com/进行开启测试';
+  const [url] = citedPageUrls(glued);
+  assert.equal(url.href, 'https://www.hldjob.com/');
+  assert.deepEqual(citedHosts(glued), ['www.hldjob.com']);
+});
+
 function fakeFetch(routes) {
   return async input => {
     const href = String(input);
