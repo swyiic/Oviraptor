@@ -9,7 +9,14 @@ export const DISCOVERY_ASSIST_TOOLS = new Map([
   ['discovery_seed_list', 'seeds'], ['discovery_seed_detail', 'seed_detail'],
   ['discovery_cleanup_start','cleanup_start'], ['discovery_cleanup_status','cleanup_status'],
   ['discovery_cleanup_pause','cleanup_pause'], ['discovery_cleanup_resume','cleanup_resume'], ['discovery_cleanup_restore','cleanup_restore'],
+  ['reprobe_assets', 'reprobe'],
+  ['hunter_expansion_start', 'hunter_start'],
 ]);
+// These start a write/paid background task (reprobe write-back, or an envelope-
+// bounded Hunter expansion) and are never reads: a transport failure leaves the
+// outcome genuinely unknown, while the desktop marks every pre-admission refusal
+// (busy, gate deny, bad scope) not_started so the agent is never misled.
+export const DISCOVERY_PASSTHROUGH_TOOLS = new Set(['reprobe_assets', 'hunter_expansion_start']);
 export const DISCOVERY_CLEANUP_PERMISSION = 'inventory.seed.cleanup';
 export const DISCOVERY_CLEANUP_DISCLOSURE = '按用户明确目标，对整个项目种子持久分组并查证公开资料，自动排除有充分依据且无冲突的无关种子，可暂停、恢复并整批撤销；保留资产、原证据与历史，可使用已配置模型并记录实际用量与费用，不新增探测范围，不调用 Hunter。';
 export const DISCOVERY_CLEANUP_PERMISSIONS = new Map([
@@ -32,6 +39,7 @@ export class DiscoveryAssist extends CertificateTasks {
   }
   async call(store, projectId, name, args, operationId) {
     if(name==='discovery_cleanup_status'&&args.pageSize===undefined)args={...args,pageSize:5};
+    if (DISCOVERY_PASSTHROUGH_TOOLS.has(name)) return super.call(store, projectId, name, args, operationId);
     const result = await super.call(store, projectId, name, args, operationId), body = result.structuredContent;
     if (name === 'discovery_seed_list' || name === 'discovery_seed_detail' || DISCOVERY_CLEANUP_PERMISSIONS.has(name)) {
       if (Buffer.byteLength(JSON.stringify(body)) > 48 * 1024) throw hostError('host_discovery_result_too_large', 409, { retryable: false, operationId, outcomeUnknown: !reads.has(name), phase: reads.has(name) ? 'not_started' : 'unknown', ...(name==='discovery_cleanup_status'?{reason:'种子清洗状态响应过大；请缩小 pageSize 后继续读取，未读完不代表全量已查证。'}:{}) });

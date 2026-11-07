@@ -89,3 +89,31 @@ Agent 的有效授权来自 operator 的项目访问策略：**`full` 模式（o
 2. Hunter 信封（4.2）→ 测试（重点测闸）→ 合。
 3. create_workspace+incremental（4.3）+ 提示（4.4）。
 硬要求：真实现+真测试，诚实报告每项"已实现+测过/仅设计/未做"，不写桩；不破坏现有 agent-host 测试；不碰第 0 节不变量。
+
+## 7. 落地结论（2026-11-07，诚实记录）
+- **4.1 reprobe_assets — 已实现 + 已测。** Rust 桥 `reprobe` 动作(项目绑定服务端强制)、
+  Node 翻译/透传、清单工具(权限 inventory.write)。测试：Rust reprobe_tests ×4 + Node
+  reprobe-tool ×5。详见提交 16856e6。
+- **4.2 Hunter 信封 — 已实现 + 已测(门穷尽)；真实付费整链未现场验证。** 新模块
+  `agent_hunter`(信封表 + operator-only Tauri 命令 + 纯 hunter_gate + 账户哈希绑定)、
+  桥 `hunter_start`、capped 后台起、Node 预门、清单工具(权限 inventory.hunter.run)。
+  测试：Rust agent_hunter ×10(门 7 + 信封回灌/账户绑定/预算边界 3)+ Node hunter-tool ×3。
+  **诚实边界**：对 api.hunter 的真实付费分页+记账+超额自停端到端运行需 operator 付费
+  账户与额度，本会话不真花钱跑；capped 起复用既有经测 run_existing + 预算 stopped 闭包，
+  门与上限有单测但整链付费未执行。详见提交 62a04da。
+- **4.4 异步编排 + 提示 — 已实现。** quality-prompt.mjs 新增第 29–31 条：提交即返回/只读
+  一次 status 验收/不轮询；同项目一次一个写任务、读不被写阻塞、transient lock 自动重试
+  不当失败；reprobe_assets 与 hunter_expansion_start 的用法与边界。
+- **4.3 create_workspace + incremental 透传 — 仅设计，未实现（诚实说明原因）。**
+  - *create_workspace*：Agent 桥(certificate-tasks/discovery-assist)按设计是**项目绑定**的——
+    每次调用都携带当前会话映射的桌面 projectId，Rust 校验 `result.projectId===desktopId`
+    (certificate-tasks.mjs:42)。而 create_workspace 要**新建**一个与当前会话无绑定的桌面项目，
+    其返回 id 必然不等于当前 desktopId，直接违反这条绑定不变量；要落地需要另开一条"无项目绑定"
+    的桥路径，触碰项目绑定安全墙。对一个价值有限的"小补"不值当，宁可仅设计不强塞半成品。
+    host↔desktop 的项目绑定(externalId)本就是 operator 建空间/开会话时建立的，Agent 既不能建
+    host 项目也不能设 externalId，故 Agent 新建的桌面项目在本会话内也无法被 Agent 使用。
+  - *incremental 透传*：Agent 当前的资产交接面没有 incremental 语义——`scan_from_assets` 产出
+    的是扫描草稿(非 start_job)，reprobe 走 start_job 但 incremental 对复测无意义(已固定 None)；
+    真正带 incremental 的采集(collect/full)触发走 operator 的 human_discovery_start(collectFirst
+    为 operator-only)。给 Agent 加 incremental 需新开一个 Agent 采集触发工具，与"付费首采/采集
+    为 operator 决定"的边界重叠，故仅设计、未实现。

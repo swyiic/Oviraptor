@@ -2,7 +2,7 @@
   "manifest": {
     "schemaVersion": 1,
     "id": "org.oviraptor.assets",
-    "version": "1.2.17",
+    "version": "1.2.19",
     "hostApi": "^1.0.0",
     "entry": "worker.mjs",
     "dataSchemaVersion": 2,
@@ -45,6 +45,10 @@
       {
         "id": "inventory.seed.cleanup",
         "description": "按用户明确目标，对整个项目种子持久分组并查证公开资料，自动排除有充分依据且无冲突的无关种子，可暂停、恢复并整批撤销；保留资产、原证据与历史，可使用已配置模型并记录实际用量与费用，不新增探测范围，不调用 Hunter。"
+      },
+      {
+        "id": "inventory.hunter.run",
+        "description": "仅在 operator 预先开启 Hunter 信封(allow+积分预算+已绑定账户)后，才允许对已确认范围内的精确种子后台发起 Hunter 分页补查，且花费严格不超过预算剩余、逐页记账、超额自动停。此权限不授予设置信封/预算、不绑定账户、不确认或扩大范围，也不自行开启付费开关；账户变化、预算用尽或项目有任务在跑时一律拒绝。"
       }
     ],
     "tools": [
@@ -812,6 +816,111 @@
           },
           "required": [
             "seedId"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "reprobe_assets",
+        "description": "对当前项目已有资产发起二次存活复测（后台任务），把最新存活状态回写入库，不新增目标、不扩大范围、不消耗积分。scope.kind=selection 时传 assetIds(来自 inventory_query/search 的行 id 或 source=desktop-assets 的 externalId，用 assetIdNamespace 指明是 inventory 还是 desktop)；scope.kind=query 时用 query.search 过滤当前项目资产，省略 query 表示全项目资产。expectedCount 必填，须等于当前匹配数量——先用 inventory_stats/query 读准数量再调用；数量已变会被拒绝，刷新后重试。同一项目同时只允许一个任务，有任务在跑会拒绝；调用成功返回 runId，随后读 scan/assets 状态或任务进度验收，不要循环轮询。",
+        "permission": "inventory.write",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "scope": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "query",
+                    "selection"
+                  ]
+                },
+                "assetIds": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "minItems": 1,
+                  "maxItems": 128
+                },
+                "assetIdNamespace": {
+                  "type": "string",
+                  "enum": [
+                    "inventory",
+                    "desktop"
+                  ]
+                },
+                "query": {
+                  "type": "object",
+                  "properties": {
+                    "search": {
+                      "type": "string",
+                      "maxLength": 240
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "expectedCount": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100000
+                }
+              },
+              "required": [
+                "kind",
+                "expectedCount"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "scope"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "hunter_expansion_start",
+        "description": "仅当 operator 已开启 Hunter 信封(discovery_assist_status.agentHunter.allow=true 且 remaining>0、账户已绑定)时，才对一个已确认范围内的精确种子后台发起 Hunter 分页补查。seedScope.kind 取 domain/cname/fingerprint，target 必须来自 discovery_seed_list 的已确认精确种子(不接受查询语句、通配符或域名树)。maxPoints 为本次允许消耗的积分上限，必须≤agentHunter.remaining；超额、账户变化、未开信封或项目有任务在跑都会被拒绝且不花一分。后台起任务后读 discovery_assist_status.pipeline.hunter.{spentPoints,pages,added} 或 discovery_seed_detail 验收，不要循环轮询。模型不能设置信封/预算、不能绑定账户、不能确认或扩大范围。",
+        "permission": "inventory.hunter.run",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "seedScope": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "domain",
+                    "cname",
+                    "fingerprint"
+                  ]
+                },
+                "target": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 253
+                }
+              },
+              "required": [
+                "kind",
+                "target"
+              ],
+              "additionalProperties": false
+            },
+            "maxPoints": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000000
+            }
+          },
+          "required": [
+            "seedScope",
+            "maxPoints"
           ],
           "additionalProperties": false
         }

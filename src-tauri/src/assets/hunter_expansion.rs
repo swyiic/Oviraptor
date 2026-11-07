@@ -970,6 +970,67 @@ pub async fn start_hunter_expansion(
     .await
     .map_err(err)?
 }
+/// Start an agent-initiated expansion in the background, bounded by `cap` points
+/// of spend for THIS expansion. It reuses the exact pagination path; the only
+/// difference from the operator start is a budget-aware stop closure, so the run
+/// can never page past the operator's remaining budget. The caller has already
+/// cleared `hunter_gate`; `cap` is the per-run point slice it returned.
+pub(crate) fn start_agent_capped(
+    path: &Path,
+    data: &Path,
+    input: &ExpansionInput,
+    cap: i64,
+) -> Result<String, String> {
+    let mut c = db::open(path)?;
+    c.execute_batch(TABLES).map_err(err)?;
+    let (_, key, _, _) = setting(&c)?;
+    if key.is_empty() {
+        return Err("请先保存 Hunter Key".into());
+    }
+    // evidence_anchor inside prepare still gates the target to a confirmed seed;
+    // the agent cannot widen scope here.
+    let id = prepare(&mut c, input, &key)?;
+    super::agent_hunter::record_run(&c, input.project_id, &id, cap)?;
+    let start_spent: i64 = c
+        .query_row(
+            "SELECT spent FROM hunter_expansions WHERE id=?1 AND project_id=?2",
+            params![id, input.project_id],
+            |r| r.get(0),
+        )
+        .map_err(err)?;
+    // Absolute ceiling for this expansion's recorded spend. run_existing checks
+    // `stopped()` each page; a fresh WAL read never blocks the writer.
+    let ceiling = start_spent.saturating_add(cap.max(0));
+    let path2 = path.to_path_buf();
+    let data2 = data.to_path_buf();
+    let p = input.project_id;
+    let worker = id.clone();
+    std::thread::Builder::new()
+        .name("hunter-agent-capped".into())
+        .spawn(move || {
+            let stop_path = path2.clone();
+            let stop_id = worker.clone();
+            let stopped = move || {
+                db::open(&stop_path)
+                    .ok()
+                    .and_then(|c| {
+                        c.query_row(
+                            "SELECT spent FROM hunter_expansions WHERE id=?1",
+                            [&stop_id],
+                            |r| r.get::<_, i64>(0),
+                        )
+                        .ok()
+                    })
+                    .map(|spent| spent >= ceiling)
+                    .unwrap_or(false)
+            };
+            if let Err(e) = run_existing(&path2, &data2, p, &worker, &key, stopped) {
+                record_start_failure(&path2, &worker, &e);
+            }
+        })
+        .map_err(err)?;
+    Ok(id)
+}
 #[tauri::command]
 pub async fn stop_hunter_expansion(
     app: tauri::AppHandle,

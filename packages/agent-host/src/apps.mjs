@@ -288,8 +288,21 @@ export class AppManager {
           &&!grant.permissions.includes('inventory.discovery.run'))throw hostError('host_tool_permission_denied',403,{retryable:false});
         this.#current(id, scope, app.revision, grant.revision, grant.accessPolicyRevision, grant.accessRuntimeIdentity);
       }
+      if(name==='hunter_expansion_start'){
+        // Node-side wall: the agent's Hunter tool stays inert unless the operator
+        // has set the envelope (allow + bound account + remaining budget) and the
+        // request fits the remaining budget. The desktop re-checks this plus the
+        // account-hash and project idleness authoritatively, and caps the run.
+        const current=await this.discoveryAssist.readFull(this.store,scope);
+        const env=current.agentHunter,maxPoints=args?.maxPoints;
+        if(!env||env.allow!==true||env.accountBound!==true||!Number.isSafeInteger(maxPoints)||maxPoints<1||maxPoints>env.remaining)throw hostError('host_tool_permission_denied',403,{retryable:false});
+        this.#current(id, scope, app.revision, grant.revision, grant.accessPolicyRevision, grant.accessRuntimeIdentity);
+      }
+      let reprobeBinding;
+      if (name === 'reprobe_assets') ({ args, binding: reprobeBinding } = this.#prepareReprobe(app, scope, args));
       const result = await this.discoveryAssist.call(this.store, scope, name, args, operationId);
       this.#current(id, scope, app.revision, grant.revision, grant.accessPolicyRevision, grant.accessRuntimeIdentity);
+      if (reprobeBinding) { const structuredContent = { ...result.structuredContent, assetBinding: reprobeBinding }; return { ...result, structuredContent, content: [{ type: 'text', text: JSON.stringify(structuredContent) }] }; }
       return result;
     }
     if (app.id === ASSETS_APP_ID && ENRICHMENT_TOOLS.has(name)) {
@@ -345,6 +358,31 @@ export class AppManager {
     catch (error) { this.#current(id, scope, app.revision, grant.revision, grant.accessPolicyRevision, grant.accessRuntimeIdentity); throw error; }
     this.#current(id, scope, app.revision, grant.revision, grant.accessPolicyRevision, grant.accessRuntimeIdentity);
     return result;
+  }
+  /**
+   * Validate and translate a reprobe scope. Selection asset ids arrive in the
+   * model's namespace (inventory row id or desktop externalId) and are resolved
+   * to desktop asset ids through the same owned-mirror binding scan the scan and
+   * certificate hand-offs use; the desktop project binding is forced there and
+   * again in Rust, so the model can never reprobe another project. Query scope
+   * passes through untouched (Rust forces its project id). No scope widening,
+   * no spend.
+   */
+  #prepareReprobe(app, scope, args) {
+    const spec = args?.scope;
+    if (!spec || typeof spec !== 'object' || Array.isArray(spec)) throw hostError('host_tool_input_invalid', 400, { retryable: false });
+    if (spec.kind === 'selection') {
+      if (!Array.isArray(spec.assetIds) || typeof spec.assetIdNamespace !== 'string') throw hostError('host_tool_input_invalid', 400, { retryable: false });
+      let binding;
+      try { binding = resolveDesktopAssetIds({ inventoryDbPath: join(this.dataDirectoryFor(app), 'inventory.sqlite3'), hostProjectId: scope, assetIds: spec.assetIds, assetIdNamespace: spec.assetIdNamespace }); }
+      catch (error) { throw hostError('host_reprobe_asset_identity_unavailable', 409, { reason: error.code, retryable: false, outcomeUnknown: false }); }
+      return { args: { ...args, scope: { kind: 'selection', assetIds: binding.desktopAssetIds, expectedCount: spec.expectedCount } }, binding };
+    }
+    if (spec.kind === 'query') {
+      if (spec.assetIds !== undefined || spec.assetIdNamespace !== undefined) throw hostError('host_tool_input_invalid', 400, { retryable: false });
+      return { args: { ...args, scope: { kind: 'query', ...(spec.query !== undefined ? { query: spec.query } : {}), expectedCount: spec.expectedCount } }, binding: undefined };
+    }
+    throw hostError('host_tool_input_invalid', 400, { retryable: false });
   }
   #callContext(app, grant, scope, operationId, permission) {
     const base = { hostBoundProjectId: scope, grantRevision: grant.revision, operationId };

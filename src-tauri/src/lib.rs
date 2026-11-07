@@ -514,6 +514,7 @@ pub fn run() {
             asset_discovery::get_hunter_discovery_settings,
             asset_discovery::save_hunter_discovery_settings,
             asset_discovery::test_hunter_discovery_api,
+            asset_discovery::agent_hunter::set_agent_hunter_envelope,
             asset_discovery::certificate_tasks::certificate_task_action,
             asset_discovery::enrichment::enrichment_action,
             asset_discovery::get_asset_discovery,

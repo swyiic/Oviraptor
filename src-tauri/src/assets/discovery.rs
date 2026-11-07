@@ -36,6 +36,8 @@ pub(crate) mod harvest;
 mod hunter_diagnostics;
 #[path = "hunter_expansion.rs"]
 pub(crate) mod hunter_expansion;
+#[path = "agent_hunter.rs"]
+pub(crate) mod agent_hunter;
 #[path = "hunter_network.rs"]
 mod hunter_network;
 #[path = "discovery_local.rs"]

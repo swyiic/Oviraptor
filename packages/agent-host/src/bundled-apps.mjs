@@ -46,6 +46,22 @@ function knownAssetsCleanupAddition(before, after) {
     && permissionContract(before) === permissionContract({ permissions: after.permissions.filter(p => p.id !== DISCOVERY_CLEANUP_PERMISSION) });
 }
 
+// 1.2.18 added no permission (reprobe reuses inventory.write); 1.2.19 adds the
+// Hunter envelope permission. Preserve only the operator's PRIOR sets across the
+// bump; inventory.hunter.run is a new paid category and is NOT auto-granted —
+// it rides a fresh full-access snapshot or an explicit grant, and stays inert
+// until the operator sets the allow_hunter envelope.
+const HUNTER_RUN_PERMISSION = 'inventory.hunter.run';
+function knownAssetsHunterAddition(before, after) {
+  if (before.id !== 'org.oviraptor.assets' || after.id !== before.id
+    || compareVersion(before.version, '1.2.17') < 0 || compareVersion(after.version, '1.2.19') < 0
+    || before.permissions.some(p => p.id === HUNTER_RUN_PERMISSION)) return false;
+  const added = after.permissions.filter(p => p.id === HUNTER_RUN_PERMISSION);
+  return added.length === 1
+    && after.permissions.length === before.permissions.length + 1
+    && permissionContract(before) === permissionContract({ permissions: after.permissions.filter(p => p.id !== HUNTER_RUN_PERMISSION) });
+}
+
 function restoreCompatibleBundledGrants(host, app, previous) {
   const db = host.store.db;
   db.exec('BEGIN IMMEDIATE');
@@ -235,7 +251,7 @@ async function ensureBundledAppsOnce(host, { root = bundledAppsRoot({ dataDir: h
         if (compareVersion(checked.manifest.version, existing.version) > 0) {
           if (FIRST_PARTY_APPS.has(existing.id) && existing.builtin && next.builtin && existing.enabled && next.enable
             && (permissionContract(existing.manifest) === permissionContract(checked.manifest)
-              || existing.uninstallable === false && next.uninstallable === false && (knownAssetsExecutionAddition(existing.manifest, checked.manifest)||knownAssetsExposureAddition(existing.manifest, checked.manifest)||knownAssetsCleanupAddition(existing.manifest, checked.manifest)))) {
+              || existing.uninstallable === false && next.uninstallable === false && (knownAssetsExecutionAddition(existing.manifest, checked.manifest)||knownAssetsExposureAddition(existing.manifest, checked.manifest)||knownAssetsCleanupAddition(existing.manifest, checked.manifest)||knownAssetsHunterAddition(existing.manifest, checked.manifest)))) {
             // Preserve only the operator's original sets. The known new paid
             // permission is NOT appended; Ask still requires an explicit grant.
             retainedGrants = host.store.grants(existing.id);
