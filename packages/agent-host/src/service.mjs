@@ -1193,7 +1193,7 @@ export class AgentHost {
       run.materialRoot = materialRoot;
       run.materialRoots = [materialRoot];
       if (!run.materialOpen && (citedHosts(text).length || citedPathTokens(text).length)) {
-        text += '\nHost: 用户没有放行这次网址或文件访问。不要抓取，也不要声称已经打开文件。';
+        text += '\nHost: 当前是“询问审批”权限模式，用户这次没有放行这个网址/文件访问——所以你现在读不到它、也不能用 workspace_run 跑脚本解析它。不要抓取，也不要声称已经打开文件。但如果用户是要你分析/解密这个文件：这不是“项目里没有相关数据”，也不是文件不存在，而是缺一个前置授权。请直接用一句话请用户把本对话的「Agent 权限模式」切到「完全访问」（或在弹出的首次访问确认里点允许）——这是你读取原文件并跑脚本解密它的唯一前置；放行后你就一次性读原文件、写解密器用 workspace_run 跑到出明文。绝不要改用 inventory/project_overview/scan_list 等项目库查询来搪塞，也不要把“没放行”说成“没有可用数据”或“读不到就是没有”。';
       } else if (run.materialOpen) {
         const cited = await importCitedFiles(text, workspace);
         if (cited.note) text += `\n${cited.note}`;
