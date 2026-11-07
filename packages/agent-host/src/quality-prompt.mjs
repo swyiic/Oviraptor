@@ -74,12 +74,26 @@ export const AUTONOMY_GUIDANCE = '自主完成（在已确认授权与 scope 内
 // SAME flowing text it already streams, while it keeps calling tools.
 export const PROGRESS_NARRATION_GUIDANCE = 'Host 透明度（不是门禁，不要为此停下或等待，说完立刻继续调用工具）：你在做主动测试/分析类任务时，用户界面只会显示"思考中·N 项操作"，完全看不到你的推理过程——哪怕你做对了，用户也会以为你卡住了。每当你进入一个新阶段（而不是每一次工具调用）时，先用一行"阶段：具体动作"说清楚你现在在做什么、对什么对象做，例如"解析目标前端：定位登录与查询接口" "提取请求：枚举 /api/search 的参数" "发送请求：对 id 参数做布尔盲注测试" "发现疑似漏洞：id 参数响应随真假条件变化，疑似 SQL 注入" "确认漏洞：时间盲注复现，确认存在盲注且已取得数据库版本" "评估影响/下一步：核对库名范围，决定是否继续横向"。一句话说完立刻接着做，不要等待、不要只写这一句就结束这一轮。';
 
-// Transparency, not a gate: a decrypt/reverse/protocol-analysis deliverable that only
-// states the conclusion ("AES-CBC decrypts successfully") gives the operator no way to
+// Transparency, not a gate: a deliverable that only states the conclusion ("AES-CBC
+// decrypts successfully" / "confirmed SQL injection") gives the operator no way to
 // verify the reasoning or spot a later self-contradiction. This only asks the model to
 // write down a narrative it already implicitly worked through — it never blocks or
-// replaces finishTurnDecision/the deliverable self-check.
-export const DISCOVERY_CHAIN_GUIDANCE = 'Host 透明度（解密/逆向/协议分析类任务才适用，不是门禁，只是报告要多写一段）：如果这个任务是解密、逆向、协议/流量分析一类，最终报告文件除了结论，必须再写一段"分析过程/发现链路"，按时间顺序交代：①最初在哪里看到了什么异常或特征而怀疑有加密/漏洞（例如响应字段是乱码、字段名是 queryKey/encryptedData）；②沿着这条线索做了哪些跳转（看了哪个接口/文件）；③具体分析了哪个函数/方法，这一步揭示了什么关键信息（密钥来源、算法、IV 从哪推出）；④据此怎么推出下一步；⑤最终解密/确认的是哪个具体请求或字段。让读者能照这条链路复核你的推理，不是只能看到答案。普通渗透任务不需要这一段。';
+// replaces finishTurnDecision/the deliverable self-check. NOT scoped to decrypt/reverse
+// tasks only: the user explicitly tried this with both a decrypt task and a plain SQLi
+// pentest task and wanted the chain in both reports, so the trigger is "a confirmed
+// finding exists" (record_finding) OR "this is a decrypt/reverse analysis", not task
+// *type* by keyword.
+export const DISCOVERY_CHAIN_GUIDANCE = 'Host 透明度（这一轮确认了发现/漏洞，或完成了解密逆向类分析才适用，不是门禁，只是报告要多写一段）：只要这一轮调用过 record_finding 确认了任何漏洞/风险点，或者完成了解密、逆向、协议/流量分析一类任务，最终报告文件除了结论，都必须再写一段"分析过程/发现链路"，按时间顺序交代：①最初在哪里看到了什么异常或特征而怀疑有问题（例如响应长度随参数变化、字段是乱码、字段名是 queryKey/encryptedData）；②沿着这条线索做了哪些跳转（看了哪个接口/文件/函数）；③具体验证了什么、这一步揭示了什么关键信息（例如先用布尔盲注初步验证，再用时间盲注二次复现确认；或密钥来源、算法、IV 从哪推出）；④据此怎么推出下一步；⑤最终确认/解密的是哪个具体请求或字段。不限定任务类型——一个纯 SQL 注入渗透任务同样要写清楚从"参数响应差异"到"盲注双证"这条推理过程，不只是解密/逆向类才要。让读者能照这条链路复核你的推理，不是只能看到答案。纯只读查询、这一轮没有任何确认发现的任务不需要这一段。';
+
+// Transparency + a richer deliverable form — decrypt/reverse-engineering tasks only.
+// Two gaps the user found in a real decrypt task: (a) crypto-feature discovery must not
+// stop at files the user happened to paste — it should actively pull and parse the
+// target's own front-end JS; (b) beyond a one-shot offline decrypt script, if asked for
+// live traffic the model should also be able to hand back a standalone local proxy
+// script the user runs on their own machine. Neither is a new tool or capability — the
+// agent already has workspace_fetch/workspace_browser/workspace_run; this only asks it
+// to use them this way and to say so in the report.
+export const DECRYPT_ARTIFACT_GUIDANCE = 'Host 透明度/交付物（只适用于解密、逆向加密类任务，不是门禁）：①定位加密特征不能只看用户给的抓包或文件——主动用已有工具把目标站点自己的前端 JS 全部抓下来解析（workspace_fetch/workspace_browser 保存，再 workspace_read/workspace_grep 定位），一步步说清楚怎么从 JS 里找到具体的加密函数、变量名、key、iv、模式；这条定位过程本身要写进上面的"发现链路"。②产出物除了一次性的离线批量解密脚本，如果用户想对实时流量做解密/加密，再额外产出一个"本地代理"脚本——一个独立的、给用户在自己机器上单独运行的 Node/Python 反向代理/中间人脚本，挂着已发现的 key/iv/算法实时拦截并解密/加密流量；报告里要说清楚这是一个独立脚本，需要用户自己在自己的环境里启动，不是 Oviraptor 内置能力的一部分。';
 
 export const DATA_TOOL_HINT = 'Host quality guard: 你刚才在未调用只读数据工具的情况下断言了项目/资产/扫描等具体事实。请立即调用已授权的 inventory_query / inventory_stats / inventory_search / project_overview / exposure_overview / task_status / journal_read 等只读工具核实，或明确说明当前没有可用数据。不要编造数字。此提示最多出现一次。';
 
@@ -529,6 +543,7 @@ export function buildTurnPrompt({
     mode === 'speed' ? '' : AUTONOMY_GUIDANCE,
     mode === 'speed' ? '' : PROGRESS_NARRATION_GUIDANCE,
     mode === 'speed' ? '' : DISCOVERY_CHAIN_GUIDANCE,
+    mode === 'speed' ? '' : DECRYPT_ARTIFACT_GUIDANCE,
     permissionDirective(permissionMode),
     chainBlock,
     PLANNING_GUIDANCE,
