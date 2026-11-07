@@ -8,6 +8,14 @@
 // ticks the legal-authorization attestation themselves. The agent cannot
 // drive this panel or pre-tick the attestation on its behalf — see
 // scanAuthorizationConversationAction in packages/agent-host/src/scanning-tasks.mjs.
+//
+// Presentation: a three-mode depth selector on top of the capability-class
+// authorization. 普通测试 (no high-risk classes), 框架深入分析 (= target_write),
+// and 高危操作深入 (the dangerous class group) — the two deep modes are
+// multi-select and accent-highlighted. The detailed per-class picker and the
+// legal attestation only appear once a deep mode is on. Mode selection is pure
+// presentation over the same `classes` set the backend authorizes; it grants
+// nothing on its own.
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { ShieldAlert } from "@lucide/vue";
 import { useI18n } from "../../../i18n";
@@ -25,6 +33,15 @@ const { tr } = useI18n();
 // AgentWorkbench.vue::HIGH_RISK_CLASSES and the agent-host's
 // SCAN_AUTH_LEGAL_CLASSES. Keep all four in sync.
 const HIGH_RISK_CLASSES = ["internal_scope", "target_write", "code_exec", "egress", "post_write", "persistence", "exfil", "waf_evasion"] as const;
+// "框架深入分析" maps to this single class (open-source framework deep analysis
+// means the agent may write/modify the target to reproduce an upstream issue).
+const FRAMEWORK_CLASS = "target_write";
+// "高危操作深入" is the dangerous group — everything except the framework class.
+const HIGH_RISK_GROUP: string[] = HIGH_RISK_CLASSES.filter(c => c !== FRAMEWORK_CLASS);
+// Turning the high-risk group on pre-selects the core offensive set; the
+// irreversible / evasion classes (persistence, exfil, waf_evasion) stay opt-in
+// through the detailed picker so "deep" is never silently maximal.
+const HIGH_RISK_DEFAULT = ["code_exec", "egress", "post_write", "internal_scope"];
 function classLabel(cls: string): string {
   switch (cls) {
     case "code_exec": return tr("命令执行 / RCE", "Command execution / RCE");
@@ -60,22 +77,48 @@ const error = ref("");
 const notice = ref("");
 const resolved = ref(false);
 const legalAttestation = ref(false);
+const showDetail = ref(false);
 // Final say is the operator's: pre-select the model's proposal as a starting
 // point only, never auto-authorized.
 const classes = ref<string[]>([...new Set(props.request.proposedClasses)].filter(c => (HIGH_RISK_CLASSES as readonly string[]).includes(c)));
 let disposed = false;
 
-const ossDeepAnalysis = computed<boolean>({
-  get: () => classes.value.includes("target_write"),
-  set: (on: boolean) => { toggleClass("target_write", on); },
-});
+// A class is only offerable if the backend's legal set allows it this turn.
+const allowed = (cls: string) => legalClasses.value.includes(cls);
+function setClasses(next: string[]) {
+  classes.value = [...new Set(next)].filter(allowed);
+  if (!deepHighRisk.value) showDetail.value = false;
+}
+
+// Mode state derived from the single authorized `classes` set.
+const frameworkDeep = computed(() => classes.value.includes(FRAMEWORK_CLASS));
+const deepHighRisk = computed(() => HIGH_RISK_GROUP.some(c => classes.value.includes(c)));
+const plain = computed(() => classes.value.length === 0);
+const anyDeep = computed(() => classes.value.length > 0);
+
+function choosePlain() { if (busy.value) return; setClasses([]); }
+function toggleFramework() {
+  if (busy.value) return;
+  setClasses(frameworkDeep.value ? classes.value.filter(c => c !== FRAMEWORK_CLASS) : [...classes.value, FRAMEWORK_CLASS]);
+}
+function toggleHighRisk() {
+  if (busy.value) return;
+  if (deepHighRisk.value) setClasses(classes.value.filter(c => !HIGH_RISK_GROUP.includes(c)));
+  else { setClasses([...classes.value, ...HIGH_RISK_DEFAULT]); showDetail.value = true; }
+}
 function toggleClass(cls: string, on?: boolean) {
   const has = classes.value.includes(cls);
   const want = on === undefined ? !has : on;
   if (want === has) return;
-  classes.value = want ? [...classes.value, cls] : classes.value.filter(c => c !== cls);
+  setClasses(want ? [...classes.value, cls] : classes.value.filter(c => c !== cls));
 }
-const canAuthorize = computed(() => !loading.value && !busy.value && !resolved.value && Boolean(witness.value) && (classes.value.length === 0 || legalAttestation.value));
+
+const canAuthorize = computed(() => !loading.value && !busy.value && !resolved.value && Boolean(witness.value) && (plain.value || legalAttestation.value));
+const submitLabel = computed(() => {
+  if (busy.value) return tr("正在授权…", "Authorizing…");
+  if (plain.value) return tr("开始普通测试", "Start plain test");
+  return tr(`授权并开始（${classes.value.length} 项能力）`, `Authorize & start (${classes.value.length} classes)`);
+});
 
 async function load() {
   loading.value = true; error.value = "";
@@ -84,6 +127,8 @@ async function load() {
     if (disposed) return;
     witness.value = status.confirmationWitness;
     if (Array.isArray(status.legalClasses) && status.legalClasses.length) legalClasses.value = status.legalClasses;
+    // Drop any pre-selected class the backend does not permit this turn.
+    setClasses(classes.value);
   } catch (e) {
     if (!disposed) error.value = String((e as Error).message || e);
   } finally { if (!disposed) loading.value = false; }
@@ -91,16 +136,16 @@ async function load() {
 
 function describeError(code: string): string {
   if (code === "host_scan_authorization_stale") return tr("授权状态已变化，已重新读取；请核对后再次提交。", "The authorization state changed. Reloaded — please review and submit again.");
-  if (code === "host_scan_authorization_attestation_required") return tr("勾选的能力类非空，必须先勾选合法授权确认。", "A non-empty class selection requires the legal-authorization checkbox first.");
+  if (code === "host_scan_authorization_attestation_required") return tr("已选深入能力：必须先勾选合法授权确认。", "A deep-capability selection requires the legal-authorization checkbox first.");
   if (code === "host_tool_permission_denied" || code === "host_tool_authority_changed") return tr("当前 Agent 接收方没有执行权限，或权限已变化；请到「数据权限」重新确认。", "The current Agent recipient lacks execute permission, or authority changed. Reconfirm under Data permissions.");
   if (code === "host_scan_executor_unavailable") return tr("扫描执行器暂不可用。", "The scan executor is unavailable.");
   return code;
 }
 
-async function authorize(decline = false) {
+async function authorize() {
   if (busy.value || loading.value || resolved.value || !witness.value) return;
-  const submitClasses = decline ? [] : [...classes.value];
-  const submitAttestation = decline ? false : legalAttestation.value;
+  const submitClasses = [...classes.value];
+  const submitAttestation = submitClasses.length > 0 ? legalAttestation.value : false;
   if (submitClasses.length > 0 && !submitAttestation) { error.value = describeError("host_scan_authorization_attestation_required"); return; }
   busy.value = true; error.value = ""; notice.value = "";
   try {
@@ -110,8 +155,8 @@ async function authorize(decline = false) {
     if (disposed) return;
     resolved.value = true;
     notice.value = submitClasses.length
-      ? tr(`已授权 ${submitClasses.length} 项高危能力类；每次具体高危动作仍需人工逐次批准。`, `Authorized ${submitClasses.length} high-risk class(es); each concrete high-risk action still needs per-action approval.`)
-      : tr("已记录：不授权任何高危能力类。", "Recorded: no high-risk classes authorized.");
+      ? tr(`已授权 ${submitClasses.length} 项能力类；每次具体高危动作仍需人工逐次批准。`, `Authorized ${submitClasses.length} class(es); each concrete high-risk action still needs per-action approval.`)
+      : tr("已按普通测试开始：未授权任何高危能力类。", "Started as a plain test: no high-risk classes authorized.");
     setTimeout(() => { if (!disposed) emit("resolved", props.request.taskId); }, 1400);
   } catch (e) {
     if (disposed) return;
@@ -130,35 +175,56 @@ onBeforeUnmount(() => { disposed = true; });
     <header>
       <ShieldAlert :size="16" aria-hidden="true" />
       <div>
-        <strong>{{ tr("扫描能力授权请求", "Scan capability authorization request") }}</strong>
-        <small>{{ tr("Agent 仅提议，授权永远由你点选决定。", "The agent only proposes — you decide and click to authorize.") }}</small>
+        <strong>{{ tr("选择本次测试的深度", "Choose this test's depth") }}</strong>
+        <small>{{ tr("Agent 仅提议，深度与授权永远由你点选决定。", "The agent only proposes — depth and authorization are always your click.") }}</small>
       </div>
     </header>
     <p v-if="request.reason" class="scan-auth-reason">{{ request.reason }}</p>
     <p v-if="loading" role="status">{{ tr("正在读取当前授权状态…", "Reading the current authorization state…") }}</p>
     <template v-else-if="!resolved">
-      <ul class="scan-auth-classes">
-        <li v-for="cls in HIGH_RISK_CLASSES" :key="cls" :class="{ proposed: request.proposedClasses.includes(cls) }">
-          <label>
-            <input type="checkbox" :checked="classes.includes(cls)" :disabled="busy" data-testid="scan-auth-class" @change="toggleClass(cls, ($event.target as HTMLInputElement).checked)" />
-            <span><strong>{{ classLabel(cls) }}</strong><small>{{ classHint(cls) }}</small></span>
-          </label>
-          <small v-if="request.proposedClasses.includes(cls)" class="scan-auth-proposed-tag">{{ tr("Agent 建议", "Agent-suggested") }}</small>
-        </li>
-      </ul>
-      <label class="scan-auth-oss">
-        <input type="checkbox" v-model="ossDeepAnalysis" :disabled="busy" data-testid="scan-auth-oss-toggle" />
-        <span>{{ tr("开源框架深度分析（等同勾选“对目标写入或改动”）", "Open-source framework deep analysis (equivalent to ticking “write / modify the target”)") }}</span>
-      </label>
-      <label class="scan-auth-attest" :class="{ 'attest-missing': classes.length > 0 && !legalAttestation }">
-        <input type="checkbox" v-model="legalAttestation" :disabled="busy" data-testid="scan-auth-attestation" />
-        {{ tr("我确认已获得对以上目标的合法书面授权，并对使用这些能力负责。", "I confirm I hold written legal authorization for these targets and take responsibility for using these capabilities.") }}
-      </label>
-      <small v-if="classes.length > 0 && !legalAttestation" class="scan-auth-warn">{{ tr("已勾选能力类：必须先勾选合法授权确认才能授权。", "Classes selected: the legal-authorization checkbox is required before you can authorize.") }}</small>
+      <!-- Three depth modes: 普通 is "neither deep"; 框架 and 高危 are multi-select, accent. -->
+      <div class="scan-auth-modes" role="group" :aria-label="tr('测试深度','Test depth')">
+        <button type="button" class="scan-auth-mode" :class="{ active: plain }" :disabled="busy" data-testid="scan-auth-mode-plain" @click="choosePlain">
+          <strong>{{ tr("普通测试", "Plain test") }}</strong>
+          <small>{{ tr("不深入：只做常规探测，不动用任何高危能力，无需授权确认。", "Not deep: routine probing only, no high-risk capability, no attestation needed.") }}</small>
+        </button>
+        <button type="button" class="scan-auth-mode deep" :class="{ active: frameworkDeep }" :disabled="busy || !allowed(FRAMEWORK_CLASS)" data-testid="scan-auth-mode-framework" @click="toggleFramework">
+          <strong>{{ tr("框架深入分析", "Framework deep analysis") }}</strong>
+          <small>{{ tr("识别到开源框架时，拉取上游源码做灰盒复现（等同“对目标写入或改动”）。", "For an identified OSS framework, fetch upstream for greybox reproduction (= “write / modify the target”).") }}</small>
+        </button>
+        <button type="button" class="scan-auth-mode deep" :class="{ active: deepHighRisk }" :disabled="busy" data-testid="scan-auth-mode-highrisk" @click="toggleHighRisk">
+          <strong>{{ tr("高危操作深入", "High-risk deep") }}</strong>
+          <small>{{ tr("命令执行 / 出网外带 / 上传 / 内网等高危能力；每个真实高危动作仍逐次人工批准。", "RCE / egress / upload / internal reach etc.; every real high-risk action still needs per-action approval.") }}</small>
+        </button>
+      </div>
+      <p class="scan-auth-modehint">{{ tr("「框架深入」与「高危深入」可同时选；选「普通测试」则两者都不开。", "“Framework” and “high-risk” can both be on; choosing “plain” turns both off.") }}</p>
+
+      <!-- Detailed per-class fine-tune, only when the high-risk group is on. -->
+      <details v-if="deepHighRisk" class="scan-auth-detail" :open="showDetail" @toggle="showDetail=($event.target as HTMLDetailsElement).open">
+        <summary>{{ tr(`微调高危能力类 · 已选 ${classes.filter(c => HIGH_RISK_GROUP.includes(c)).length} / ${HIGH_RISK_GROUP.filter(allowed).length}`, `Fine-tune high-risk classes · ${classes.filter(c => HIGH_RISK_GROUP.includes(c)).length} / ${HIGH_RISK_GROUP.filter(allowed).length} selected`) }}</summary>
+        <ul class="scan-auth-classes">
+          <li v-for="cls in HIGH_RISK_GROUP.filter(allowed)" :key="cls" :class="{ proposed: request.proposedClasses.includes(cls) }">
+            <label>
+              <input type="checkbox" :checked="classes.includes(cls)" :disabled="busy" data-testid="scan-auth-class" @change="toggleClass(cls, ($event.target as HTMLInputElement).checked)" />
+              <span><strong>{{ classLabel(cls) }}</strong><small>{{ classHint(cls) }}</small></span>
+            </label>
+            <small v-if="request.proposedClasses.includes(cls)" class="scan-auth-proposed-tag">{{ tr("Agent 建议", "Agent-suggested") }}</small>
+          </li>
+        </ul>
+      </details>
+
+      <!-- Attestation is required the moment any deep capability is selected. -->
+      <template v-if="anyDeep">
+        <label class="scan-auth-attest" :class="{ 'attest-missing': !legalAttestation }">
+          <input type="checkbox" v-model="legalAttestation" :disabled="busy" data-testid="scan-auth-attestation" />
+          {{ tr("我确认已获得对以上目标的合法书面授权，并对使用这些能力负责。", "I confirm I hold written legal authorization for these targets and take responsibility for using these capabilities.") }}
+        </label>
+        <small v-if="!legalAttestation" class="scan-auth-warn">{{ tr("已选深入能力：必须先勾选合法授权确认才能开始。", "Deep capability selected: the legal-authorization checkbox is required before you can start.") }}</small>
+      </template>
+
       <p v-if="error" class="scan-auth-error" role="alert">{{ error }}</p>
       <div class="scan-auth-actions">
-        <button type="button" class="button ghost compact" :disabled="busy || loading" data-testid="scan-auth-decline" @click="authorize(true)">{{ busy ? tr("提交中…", "Submitting…") : tr("不授权任何能力", "Authorize none") }}</button>
-        <button type="button" class="button primary compact" :disabled="!canAuthorize" data-testid="scan-auth-submit" @click="authorize(false)">{{ busy ? tr("正在授权…", "Authorizing…") : tr(`授权所选 ${classes.length} 项`, `Authorize ${classes.length} selected`) }}</button>
+        <button type="button" class="button primary compact" :disabled="!canAuthorize" data-testid="scan-auth-submit" @click="authorize">{{ submitLabel }}</button>
       </div>
     </template>
     <p v-if="notice" class="scan-auth-notice" role="status">{{ notice }}</p>
@@ -172,8 +238,21 @@ onBeforeUnmount(() => { disposed = true; });
 .scan-auth-panel header strong{display:block;font-size:var(--text-body);font-weight:600}
 .scan-auth-panel header small{display:block;margin-top:2px;color:var(--ui-muted)}
 .scan-auth-reason{margin:10px 0 0;padding:8px 10px;border:1px solid var(--ui-line);border-radius:var(--radius-sm);background:var(--ui-surface-raised);color:var(--ui-muted);overflow-wrap:anywhere}
-.scan-auth-classes{list-style:none;margin:12px 0;padding:0;display:grid;gap:8px}
-.scan-auth-classes li{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:8px 10px;border:1px solid var(--ui-line);border-radius:var(--radius-sm);background:var(--ui-surface)}
+.scan-auth-modes{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr));gap:9px;margin:12px 0 0}
+.scan-auth-mode{display:flex;flex-direction:column;gap:4px;align-items:flex-start;text-align:left;padding:11px 12px;border:1px solid var(--ui-line);border-radius:var(--radius-md);background:var(--ui-surface);cursor:pointer;min-width:0;transition:border-color .12s,background .12s}
+.scan-auth-mode:hover:not(:disabled){border-color:color-mix(in srgb,var(--ui-accent,#2878ff) 40%,var(--ui-line))}
+.scan-auth-mode:disabled{cursor:default;opacity:.55}
+.scan-auth-mode strong{font-size:var(--text-meta);font-weight:600}
+.scan-auth-mode small{color:var(--ui-muted);line-height:1.5}
+.scan-auth-mode.active{border-color:var(--ui-line);background:var(--ui-surface-raised)}
+/* The two deep modes carry the accent highlight when active. */
+.scan-auth-mode.deep.active{border-color:var(--ui-accent,#2878ff);background:color-mix(in srgb,var(--ui-accent,#2878ff) 12%,var(--ui-surface));box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--ui-accent,#2878ff) 45%,transparent)}
+.scan-auth-mode.deep.active strong{color:color-mix(in srgb,var(--ui-accent,#2878ff) 75%,var(--ui-ink))}
+.scan-auth-modehint{margin:8px 0 0;color:var(--ui-muted);font-size:var(--text-micro);line-height:1.6}
+.scan-auth-detail{margin-top:10px;border:1px solid var(--ui-line);border-radius:var(--radius-sm);background:var(--ui-surface);padding:8px 10px}
+.scan-auth-detail>summary{cursor:pointer;color:var(--ui-muted);font-size:var(--text-micro)}
+.scan-auth-classes{list-style:none;margin:10px 0 2px;padding:0;display:grid;gap:8px}
+.scan-auth-classes li{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:8px 10px;border:1px solid var(--ui-line);border-radius:var(--radius-sm);background:var(--ui-surface-raised)}
 .scan-auth-classes li.proposed{border-color:color-mix(in srgb,var(--ui-accent,#2878ff) 45%,var(--ui-line))}
 .scan-auth-classes label{display:flex;align-items:flex-start;gap:9px;cursor:pointer;min-width:0}
 .scan-auth-classes label>span{min-width:0}
@@ -181,8 +260,7 @@ onBeforeUnmount(() => { disposed = true; });
 .scan-auth-classes label>span>small{display:block;margin-top:2px;color:var(--ui-muted);line-height:1.5}
 .scan-auth-classes input{margin-top:2px;flex-shrink:0}
 .scan-auth-proposed-tag{flex-shrink:0;color:color-mix(in srgb,var(--ui-accent,#2878ff) 80%,var(--ui-ink));white-space:nowrap}
-.scan-auth-oss{display:flex;align-items:flex-start;gap:9px;margin:0 0 10px;padding:8px 10px;border:1px dashed var(--ui-line);border-radius:var(--radius-sm);cursor:pointer}
-.scan-auth-attest{display:flex;align-items:flex-start;gap:9px;padding:9px 10px;border:1px solid var(--ui-line);border-radius:var(--radius-sm);background:var(--ui-surface-raised);cursor:pointer;line-height:1.6}
+.scan-auth-attest{display:flex;align-items:flex-start;gap:9px;margin-top:10px;padding:9px 10px;border:1px solid var(--ui-line);border-radius:var(--radius-sm);background:var(--ui-surface-raised);cursor:pointer;line-height:1.6}
 .scan-auth-attest.attest-missing{border-color:color-mix(in srgb,var(--red,#ac3939) 45%,var(--ui-line))}
 .scan-auth-warn{display:block;margin-top:6px;color:#95641e}
 .scan-auth-error{margin-top:8px;color:var(--red,#ac3939)}
