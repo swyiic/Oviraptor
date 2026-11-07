@@ -2,7 +2,7 @@
   "manifest": {
     "schemaVersion": 1,
     "id": "org.oviraptor.scanning",
-    "version": "1.4.3",
+    "version": "1.4.4",
     "hostApi": "^1.0.0",
     "entry": "worker.mjs",
     "dataSchemaVersion": 1,
@@ -57,6 +57,41 @@
           "required": [
             "title",
             "targets"
+          ],
+          "additionalProperties": false
+        },
+        "permission": "investigation.draft.write"
+      },
+      {
+        "name": "request_scan_authorization",
+        "description": "Ask the operator to authorize high-risk capability classes for this scan task by opening the in-conversation authorization panel. This is advisory only: it records your proposal and shows the panel. It NEVER grants authorization, never signs the legal attestation, and never starts a scan. The operator must tick the classes and the legal-authorization checkbox and click Authorize in the panel; until they do, deep-test/exploit tools stay undispatched. proposedClasses must be a subset of the canonical high-risk classes (code_exec, target_write, post_write, egress, internal_scope, persistence, exfil, waf_evasion).",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "taskId": {
+              "type": "string",
+              "maxLength": 128,
+              "minLength": 1
+            },
+            "proposedClasses": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 8,
+              "items": {
+                "type": "string",
+                "maxLength": 32,
+                "minLength": 1
+              }
+            },
+            "reason": {
+              "type": "string",
+              "maxLength": 600,
+              "minLength": 1
+            }
+          },
+          "required": [
+            "taskId",
+            "proposedClasses"
           ],
           "additionalProperties": false
         },

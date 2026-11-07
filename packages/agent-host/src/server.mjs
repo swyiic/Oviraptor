@@ -1,5 +1,6 @@
 import { forwardOAuthModelRequest } from './model-bridge.mjs';
 import { discoveryConversationAction } from './discovery-assist.mjs';
+import { scanAuthorizationConversationAction } from './scanning-tasks.mjs';
 import http from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -243,6 +244,13 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
         if (parts[1] === 'conversations' && parts[3] === 'discovery' && parts.length === 4) {
           if (method === 'GET') return json(await discoveryConversationAction(host,parts[2],url.searchParams.get('projectId')));
           if (method === 'POST') { const input=await body(request,256*1024); return json(await discoveryConversationAction(host,parts[2],input.projectId,input)); }
+        }
+        // Operator-only scan capability authorization panel. The `authorize`
+        // action is never a model tool; it is reached only by the operator's
+        // click in the in-conversation panel.
+        if (parts[1] === 'conversations' && parts[3] === 'scan-authorization' && parts.length === 4) {
+          if (method === 'GET') return json(await scanAuthorizationConversationAction(host,parts[2],url.searchParams.get('projectId')));
+          if (method === 'POST') { const input=await body(request,32*1024); return json(await scanAuthorizationConversationAction(host,parts[2],input.projectId,input)); }
         }
         if (parts[1] === 'conversations' && parts[3] === 'messages' && parts.length === 4) {
           if (method === 'GET') return json(host.store.messagesPage(parts[2], url.searchParams.get('projectId') ?? undefined, {limit:Number(url.searchParams.get('limit')??50),before:url.searchParams.get('before')??undefined}));

@@ -104,6 +104,12 @@ export class AgentHost {
     this.runtimeEvidence = this.runtime?.evidence ?? (this.runtime?.command === 'grok' ? 'official-cli-unverified' : this.runtime ? 'synthetic-or-custom' : 'none');
     if (this.apps.scanningTasks) {
       // A stored delivery is a new message, not the end of a run.
+      // The model's advisory authorization proposal: raise the operator panel.
+      // This event carries no authority; the operator's click is what authorizes.
+      this.apps.scanningTasks.onAuthorizationRequested = meta => {
+        this.emit({ type: 'scan.authorization.requested', conversationId: meta.conversationId, projectId: meta.projectId,
+          taskId: meta.taskId, proposedClasses: meta.proposedClasses, reason: meta.reason });
+      };
       this.apps.scanningTasks.onDelivered = meta => {
         this.emit({ type: 'conversation.message', conversationId: meta.conversationId, message: { id: meta.messageId, role: 'assistant', content: meta.content, createdAt: meta.createdAt, status: 'completed', stopReason: 'scan_delivery' } });
         // B2: a new Nest event may auto-trigger one bounded corrective turn —

@@ -9,6 +9,7 @@ import { createApplication } from './application.mjs';
 
 export const PHASE1_TOOLS = Object.freeze(['draft_create', 'draft_cancel', 'task_status', 'journal_read']);
 const HOST_PROXY_PERMISSIONS = Object.freeze({
+  request_scan_authorization: 'investigation.draft.write',
   scan_from_assets: 'investigation.draft.write',
   scan_list: 'investigation.read',
   scan_status: 'investigation.read',
