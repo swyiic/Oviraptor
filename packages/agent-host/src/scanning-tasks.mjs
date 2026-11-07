@@ -157,6 +157,14 @@ export class ScanningTasks extends CertificateTasks {
   // authorization — the attestation and the capability record are the
   // operator's, produced only by the panel's `authorize` channel.
   if (name === 'request_scan_authorization') return this.#requestAuthorization(store, projectId, args, context);
+  // Just before execution, auto-apply any operator standing authorization that
+  // fully covers this scan's targets, so deep tools are advertised to the run
+  // without a live panel click. Best-effort: a miss or error simply leaves the
+  // authorization as it is and the run falls back to the panel path.
+  if (name === 'scan_start' && typeof args?.taskId === 'string') {
+    try { await this.applyStandingAuthorization(store, projectId, { scanId: args.taskId, attemptNumber: args.attemptNumber }, randomUUID(), context); }
+    catch { /* standing authorization is advisory sugar; never block the start */ }
+  }
   if (name === 'scan_reassociate_binding') args = this.#reassociation(store, projectId, args, context);
   const result = await super.call(store, projectId, name, args, operationId, context);
   if (context.hostConversationId && ['scan_bind','scan_reassociate_binding'].includes(name) && typeof args?.taskId === 'string')
@@ -229,6 +237,20 @@ export class ScanningTasks extends CertificateTasks {
   const payload = { scanId, ...(attempt !== undefined ? { attemptNumber: attempt } : {}),
    legalAttestation: Boolean(legalAttestation), classes: list, attestedBy: String(attestedBy || 'operator').slice(0, 64) };
   return super.call(store, projectId, 'scan_authorize_internal', payload, operationId, { internalAction: 'authorize_capability', hostConversationId });
+ }
+ /**
+  * Host-triggered auto-apply of an operator standing authorization for a scan,
+  * via the trusted bridge. Never a model tool and never writes authority of its
+  * own: the desktop reuses the operator's prior registration only for a scan
+  * whose every target the registration covers, and applies nothing otherwise.
+  */
+ async applyStandingAuthorization(store, projectId, { scanId, attemptNumber }, operationId, { hostConversationId } = {}) {
+  if (typeof scanId !== 'string' || !scanId || scanId.length > 128) throw hostError('host_scan_authorization_task_invalid', 400, { outcomeUnknown: false, phase: 'not_started', retryable: false });
+  const attempt = attemptNumber === undefined || attemptNumber === null ? undefined
+   : Number.isSafeInteger(Number(attemptNumber)) && Number(attemptNumber) > 0 ? Number(attemptNumber) : null;
+  if (attempt === null) throw hostError('host_scan_authorization_attempt_invalid', 400, { outcomeUnknown: false, phase: 'not_started', retryable: false });
+  const payload = { scanId, ...(attempt !== undefined ? { attemptNumber: attempt } : {}) };
+  return super.call(store, projectId, 'scan_apply_standing_internal', payload, operationId, { internalAction: 'apply_standing_authorization', hostConversationId });
  }
  /** Binds a Host conversation the Host itself chose for a task (no model involved). */
  async bindConversation(store, projectId, taskId, conversationId) {

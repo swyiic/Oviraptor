@@ -226,6 +226,61 @@ test('scanAuthorizationConversationAction status returns the witness and legal c
   } finally { await bridge.close(); cleanup(); }
 });
 
+// --- Standing authorization: host bridge + scan_start auto-apply ---
+
+test('applyStandingAuthorization bridges apply_standing_authorization', async () => {
+  const { store, cleanup } = tempStore();
+  const bridge = await fakeBridge();
+  try {
+    const project = store.createProject('p', { externalId: '7' });
+    const conversation = store.createConversation(project.id);
+    const tasks = new ScanningTasks({ origin: bridge.origin, token: TOKEN });
+    await tasks.applyStandingAuthorization(store, project.id, { scanId: 'scan-1' }, 'op-1', { hostConversationId: conversation.id });
+    assert.equal(bridge.calls.length, 1);
+    assert.equal(bridge.calls[0].action, 'apply_standing_authorization');
+    assert.equal(bridge.calls[0].args.scanId, 'scan-1');
+  } finally { await bridge.close(); cleanup(); }
+});
+
+test('scan_start first triggers the standing-authorization auto-apply, then starts', async () => {
+  const { store, cleanup } = tempStore();
+  const bridge = await fakeBridge();
+  try {
+    const project = store.createProject('p', { externalId: '7' });
+    const conversation = store.createConversation(project.id);
+    const tasks = new ScanningTasks({ origin: bridge.origin, token: TOKEN });
+    await tasks.call(store, project.id, 'scan_start', { taskId: 'scan-1' }, 'op-1', { hostConversationId: conversation.id });
+    // Auto-apply runs first (operator's pre-registered authorization), then the
+    // engine start — neither grants authority the agent could not already reach.
+    assert.deepEqual(bridge.calls.map(call => call.action), ['apply_standing_authorization', 'start']);
+  } finally { await bridge.close(); cleanup(); }
+});
+
+test('a standing-authorization failure never blocks scan_start', async () => {
+  const { store, cleanup } = tempStore();
+  // A bridge that refuses the apply but accepts the start proves best-effort.
+  const calls = [];
+  const server = createServer((request, response) => {
+    let raw = '';
+    request.on('data', c => { raw += c; });
+    request.on('end', () => {
+      const body = JSON.parse(raw);
+      calls.push(body.action);
+      if (body.action === 'apply_standing_authorization') { response.end(JSON.stringify({ ok: false, error: 'scan_task_unavailable' })); return; }
+      response.end(JSON.stringify({ ok: true, result: { projectId: body.projectId } }));
+    });
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const project = store.createProject('p', { externalId: '7' });
+    const conversation = store.createConversation(project.id);
+    const tasks = new ScanningTasks({ origin, token: TOKEN });
+    await tasks.call(store, project.id, 'scan_start', { taskId: 'scan-1' }, 'op-1', { hostConversationId: conversation.id });
+    assert.deepEqual(calls, ['apply_standing_authorization', 'start']);
+  } finally { await new Promise(resolve => server.close(resolve)); cleanup(); }
+});
+
 // --- Structural invariant: no operator-only write action is a model tool ---
 
 test('the scanning manifest exposes request_scan_authorization but no authorize/standing model tool', () => {

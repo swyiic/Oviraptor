@@ -60,6 +60,17 @@ struct AuthorizeCapability {
     #[serde(default)]
     attested_by: Option<String>,
 }
+/// Operator-only, host-triggered auto-apply of a pre-registered standing
+/// authorization. Never a model tool; it signs nothing and widens nothing — it
+/// only reuses the operator's earlier registration for a scan whose targets it
+/// fully covers.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ApplyStanding {
+    scan_id: String,
+    #[serde(default)]
+    attempt_number: Option<i64>,
+}
 
 fn active(c: &rusqlite::Connection, project: i64) -> Result<(), String> {
     if project < 1
@@ -737,6 +748,17 @@ fn arguments(action: &str, args: &Value) -> Result<(), String> {
                 return Err("scan_arguments_invalid".into());
             }
         }
+        "apply_standing_authorization" => {
+            let input: ApplyStanding =
+                serde_json::from_value(args.clone()).map_err(|_| "scan_arguments_invalid")?;
+            if input.scan_id.is_empty()
+                || input.scan_id.len() > 128
+                || input.scan_id.chars().any(char::is_control)
+                || input.attempt_number.is_some_and(|v| v <= 0)
+            {
+                return Err("scan_arguments_invalid".into());
+            }
+        }
         "fingerprint_search" | "fingerprint_read" => { fingerprint_reference::validate_arguments(action, args)?; }
         "deliveries" => {
             if args.get("limit").is_some_and(|limit| !limit.as_i64().is_some_and(|value| (1..=64).contains(&value))) {
@@ -1144,6 +1166,43 @@ fn dispatch_in(
             "authorized": true,
             "classes": classes,
             "attestedBy": attested_by,
+        }));
+    }
+    if action == "apply_standing_authorization" {
+        // Host-triggered, operator path only. Reuse the operator's prior standing
+        // registration for a scan it fully covers; apply nothing otherwise.
+        let input: ApplyStanding =
+            serde_json::from_value(args).map_err(|_| "scan_arguments_invalid")?;
+        owned_scope(&c, project, &input.scan_id)?;
+        let attempt = match input.attempt_number {
+            Some(value) if value > 0 => value,
+            Some(_) => return Err("scan_arguments_invalid".into()),
+            None => c
+                .query_row(
+                    "SELECT attempt_count FROM sentinel_scans WHERE id=?1",
+                    [&input.scan_id],
+                    |r| r.get::<_, i64>(0),
+                )
+                .map_err(|_| "scan_task_unavailable")?
+                .max(1),
+        };
+        let applied = super::apply_standing_authorizations_for_scan(&c, &input.scan_id, attempt)
+            .map_err(|error| {
+                if error.contains("合法授权") {
+                    "scan_authorization_attestation_required".to_string()
+                } else if error.contains("未知的高危能力类") {
+                    "scan_authorization_class_invalid".to_string()
+                } else {
+                    error
+                }
+            })?;
+        return Ok(json!({
+            "projectId": project,
+            "scanId": input.scan_id,
+            "attemptNumber": attempt,
+            "authorized": !applied.is_empty(),
+            "appliedFromStanding": !applied.is_empty(),
+            "classes": applied,
         }));
     }
     if action == "list" {

@@ -115,20 +115,30 @@ code_exec, target_write, post_write, egress, internal_scope, persistence, exfil,
   - 返回回执 `{ requested:true, authorizationPending:true, authorized:false }`。
 - 工具描述明确：这只呼出面板 + 记录建议，不授权、不执行、不自批 attestation。
 
-### 5.3 长期授权 standing authorization（step 3）
+### 5.3 长期授权 standing authorization（step 3，已实现后端）
 
-- Rust 新表 `scan_standing_authorizations`：
+- Rust 新表 `scan_standing_authorizations`（`commands/scan_standing_authorization.rs`）：
   `target_pattern`（精确域名或 `*.pattern`）、`authorized_classes`（JSON）、
-  `legal_attestation`、`budget`（可选，剩余可用次数）、`expires_at`（可选）、
-  `attested_by`、`created_at`。
-- operator-only Tauri 命令
+  `legal_attestation`、`budget`（可选，正整数；`budget_used` 累计消耗）、
+  `expires_at`（可选 ISO）、`attested_by`、`created_at`。
+- operator-only Tauri 命令（`lib.rs` 注册）：
   `set_scan_standing_authorization({ targetPattern, classes, legalAttestation:true,
-  budget?, expiresAt? })`（`lib.rs` 注册）+ 匹配函数
-  `standing_authorization_match(host) -> Option<classes>`。
-- Agent 建 draft 后 Host 钩子查命中（未过期/未超预算）→ 自动为该 scan_id 写
-  能力授权（`attestedBy='operator_standing'`，复用
-  `set_scan_capability_authorization`），Agent 可直接 `scan_start`。
-- **该命令绝不进 Agent 工具面**；Agent 永不登记、永不扩 pattern。
+  budget?, expiresAt? })`（非空 classes 必须带 attestation；classes ⊆ 合法集合；
+  pattern 校验）、`list_scan_standing_authorizations`、
+  `delete_scan_standing_authorization(id)`。
+- 匹配：`standing_pattern_matches(pattern, host)`——精确域名只配自身，
+  `*.suffix` 配 apex 与全部子域（operator 授权的是整个族）。
+- 自动套用：`apply_standing_authorizations_for_scan(conn, scan_id, attempt)`
+  读取该 scan 的 `sentinel_targets`，**要求每个目标 host 都被覆盖**，且只写入
+  **各 host 覆盖类的交集**（保证套用的每个 class 对每个目标都被授权），命中则经
+  既有 `set_scan_capability_authorization_on` 写不可变记录
+  （`attestedBy='operator_standing'`)并对命中行消耗 budget；已存在授权则不动、
+  未全覆盖则不写（回落面板）。
+- Host 钩子：`scan_start` 前经桥 `internalAction='apply_standing_authorization'`
+  （`ScanningTasks.applyStandingAuthorization`，best-effort）自动套用,命中则深度
+  工具随 run 下发，无需当场点面板；未命中与现状一致。
+- **命令与桥动作都绝不进 Agent 工具面**；Agent 永不登记、永不扩 pattern、永不自
+  attest；套用用的是 operator 先前的 attestation。
 
 ### 5.4 前端面板（step 4）
 
@@ -170,6 +180,12 @@ code_exec, target_write, post_write, egress, internal_scope, persistence, exfil,
 
 ## 落地进度
 
-见 PR 描述与各文件注释。核心完成标准：
-step 1（host 授权处理器）+ step 2（request_scan_authorization）+ 对应测试落地并全绿。
-step 3/4/5 按优先级推进，未完成的在 PR 中诚实标注「仅设计 / 未做」。
+见 PR 描述与各文件注释。
+
+- step 1（host 授权处理器）、step 2（request_scan_authorization）、step 5（提示）：
+  已实现 + 测过。
+- step 3（长期授权）：**后端已实现 + 测过**（表 / 命令 / 匹配 / 自动套用 / 桥动作 /
+  host 钩子 + Rust 8 个 + Node 3 个真测试）。
+- step 4（前端面板 + operator 配置页，src/ Vue）：**未做**，由单独前端会话接入；
+  后端授权通道、`scan.authorization.requested` 事件、standing 的 list/set/delete
+  命令均已就绪。
