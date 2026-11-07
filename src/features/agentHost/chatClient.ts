@@ -65,6 +65,13 @@ export function createAgentHostChatClient(endpoint: AgentHostEndpoint, fetchImpl
     discoveryStatus: (conversationId: string, projectId: number) => request<DiscoveryView>(`/api/conversations/${encodeURIComponent(conversationId)}/discovery?projectId=${projectId}`),
     discoveryControl: (conversationId: string, projectId: number, input: DiscoveryWitness & { action: 'start' | 'pause'; organization?: string; includeIsolated?: boolean; collectFirst?: boolean; collectionTargets?: string[]; allowHunter?: boolean }) => request(`/api/conversations/${encodeURIComponent(conversationId)}/discovery`, { method: 'POST', body: JSON.stringify({ projectId, ...input }) }),
     confirmDiscoveryScope: (conversationId: string, projectId: number, input: DiscoveryWitness & { runId: string; proposalToken: string; expectedRoots: string[]; hosts: string[]; userConfirmed: true }) => request<{ scopeSaved: boolean; enrichmentStarted: boolean; enrichmentError?: string }>(`/api/conversations/${encodeURIComponent(conversationId)}/discovery`, { method: 'POST', body: JSON.stringify({ projectId, action: 'confirm', ...input }) }),
+    // Operator-only scan capability authorization panel (conversation-scoped). The
+    // model's `request_scan_authorization` tool only raises a `scan.authorization.requested`
+    // event (advisory, no authority); `status` reads the current witness/legal class set,
+    // `authorize` is the operator's own click and is the only path that can land a
+    // capability-class grant. Mirrors discoveryStatus/confirmDiscoveryScope above.
+    scanAuthorizationStatus: (conversationId: string, projectId: number) => request<{ confirmationWitness: DiscoveryWitness; legalClasses: string[] }>(`/api/conversations/${encodeURIComponent(conversationId)}/scan-authorization?projectId=${projectId}`),
+    authorizeScanCapability: (conversationId: string, projectId: number, input: DiscoveryWitness & { taskId: string; classes: string[]; legalAttestation: boolean; attemptNumber?: number }) => request<{ confirmationWitness: DiscoveryWitness } & Record<string, unknown>>(`/api/conversations/${encodeURIComponent(conversationId)}/scan-authorization`, { method: 'POST', body: JSON.stringify({ projectId, action: 'authorize', ...input }) }),
     network: () => request<AgentNetworkSettings>("/api/settings/network"),
     setNetwork: (input: AgentNetworkUpdate) => request<AgentHostSettings>("/api/settings/network", { method: "POST", body: JSON.stringify(input) }),
     /** Switch the session model; provider/baseUrl follow the model (DeepSeek → openai-compatible). */

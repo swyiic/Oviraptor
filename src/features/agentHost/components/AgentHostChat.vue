@@ -14,6 +14,7 @@ import { messageTimestamp } from "../../conversations/messageTime";
 import AgentPermissionMode from "./AgentPermissionMode.vue";
 import AgentTaskCollaboration from "./AgentTaskCollaboration.vue";
 import DiscoveryAssistPanel from "./DiscoveryAssistPanel.vue";
+import ScanAuthorizationPanel, { type PendingScanAuthorizationRequest } from "./ScanAuthorizationPanel.vue";
 import AgentWorkspacePanel from "./AgentWorkspacePanel.vue";
 import type { DiscoveryChatRequest } from "../../assets/discoveryAnalysis";
 import ConversationFinder from '../../conversations/ConversationFinder.vue';
@@ -91,6 +92,15 @@ const activityEvidence = computed(() => activityMessage.value?.runId
   ? task.value?.evidence.filter(item => item.runId === activityMessage.value?.runId).slice(-12) || [] : []);
 const activityCount = computed(() => steps.value.length || activityEvidence.value.length);
 const chainHops = ref<Array<{ id: string; factLabel: string; factValue: string; source: string; opensNext: boolean }>>([]);
+// Advisory, model-raised scan capability authorization proposals, keyed by
+// conversation + taskId. Purely in-memory: the event is a one-shot signal
+// (the model can always ask again), and only the operator's own click in the
+// panel can land an authorization — see ScanAuthorizationPanel.vue.
+const scanAuthRequests = ref<PendingScanAuthorizationRequest[]>([]);
+const visibleScanAuthRequests = computed(() => scanAuthRequests.value.filter(item => item.conversationId === selectedId.value));
+function removeScanAuthRequest(conversationId: string, taskId: string) {
+  scanAuthRequests.value = scanAuthRequests.value.filter(item => !(item.conversationId === conversationId && item.taskId === taskId));
+}
 async function loadChain() {
   const id = selectedId.value;
   const projectId = hostProjectId.value;
@@ -674,6 +684,17 @@ function handleEvent(event: AgentHostEvent) {
     return;
   }
   if (event.type === "connection.status") { if(event.connected!==true)needsReconnectRefresh=true;connected.value = event.connected === true; return; }
+  // Advisory only: the model's `request_scan_authorization` tool raised the
+  // operator panel. Never authorizes anything by itself — see scanning-tasks.mjs.
+  if (event.type === "scan.authorization.requested" && typeof event.conversationId === "string" && typeof event.taskId === "string" && Array.isArray(event.proposedClasses)) {
+    const conversationId = event.conversationId, taskId = event.taskId;
+    const next: PendingScanAuthorizationRequest = { conversationId, taskId, proposedClasses: (event.proposedClasses as unknown[]).filter((c): c is string => typeof c === "string"), reason: typeof event.reason === "string" ? event.reason : "" };
+    scanAuthRequests.value = [...scanAuthRequests.value.filter(item => !(item.conversationId === conversationId && item.taskId === taskId)), next];
+    return;
+  }
+  if (event.type === "scan.authorization.updated" && typeof event.conversationId === "string" && typeof event.taskId === "string") {
+    removeScanAuthRequest(event.conversationId, event.taskId); return;
+  }
   if (event.type === "host.snapshot") {
     connected.value = true;
     const authorizations = Array.isArray(event.authorizations) ? event.authorizations as AgentHostEvent[] : [];
@@ -801,6 +822,7 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
       <span>{{ tr(`模型接收方已变化，“${savedModeLabel}”暂未生效，请重新确认。`, `The model recipient changed. "${savedModeLabel}" is paused until you reconfirm.`) }}</span>
       <button type="button" class="button primary compact" :disabled="reconfirming" @click="reconfirmAccess">{{ reconfirming ? tr('确认中…', 'Confirming…') : tr(`重新确认${savedModeLabel}`, `Reconfirm ${savedModeLabel}`) }}</button>
     </div>
+    <template v-if="hostProjectId!==undefined"><ScanAuthorizationPanel v-for="item in visibleScanAuthRequests" :key="`${item.conversationId}:${item.taskId}`" :client="client" :conversation-id="item.conversationId" :project-id="hostProjectId" :request="item" @resolved="removeScanAuthRequest(item.conversationId, item.taskId)" /></template>
     <div ref="transcript" class="agent-host-chat-transcript" @scroll="observeTranscript">
       <div class="ahc-column">
       <details v-if="selectedId&&hostProjectId" class="ahc-discovery-details" :open="discoveryPanelOpen" @toggle="discoveryPanelOpen=($event.target as HTMLDetailsElement).open"><summary>{{tr('项目资产发现','Project asset discovery')}}</summary><DiscoveryAssistPanel v-if="discoveryPanelOpen" :client="client" :conversation-id="selectedId" :project-id="hostProjectId" :refresh-key="task?.revision" /></details>

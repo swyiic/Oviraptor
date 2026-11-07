@@ -3,6 +3,7 @@ import { refreshFeedback as vRefreshFeedback } from '../../../shared/directives/
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import AgentPermissionMode from "../../agentHost/components/AgentPermissionMode.vue";
 import AgentToolPermissionRulesPanel from "../../sentinel/components/AgentToolPermissionRulesPanel.vue";
+import ScanStandingAuthorizationPanel from "../../sentinel/components/ScanStandingAuthorizationPanel.vue";
 import type { AgentAccessPolicy } from "../../agentHost/types";
 import { ShieldCheck } from "@lucide/vue";
 import { useI18n } from "../../../i18n";
@@ -171,6 +172,7 @@ onUnmounted(() => { disposed = true; generation++; loadGeneration++; clearScope(
       <p v-if="!desktopProject" class="permissions-status">{{ tr('请选择一个未归档的工作区，再核对和保存授权。', 'Select an active workspace before reviewing and saving grants.') }}</p>
       <AgentPermissionMode v-if="client&&hostProjectId" class="permissions-mode" :client="client" :project-id="hostProjectId" :runtime-identity="settingsIdentity" :disabled="busy||binding||loading" @changed="accessPolicy=$event" />
       <AgentToolPermissionRulesPanel @notify="(type, text) => emit('notify', type, text)" />
+      <ScanStandingAuthorizationPanel @notify="(type, text) => emit('notify', type, text)" />
       <p v-if="accessPolicy?.mode==='full'" class="permissions-full-notice">{{tr('完全放开已生效：无需逐项保存。原有精细授权保持保存，切回询问模式后继续使用。新安装应用需重新确认。','Full access is active; no individual saves are needed. Existing fine-grained grants are retained for Ask mode. New apps require confirmation.')}}</p>
       <template v-if="accessPolicy?.mode!=='full'">
         <label class="permissions-disclosure">
