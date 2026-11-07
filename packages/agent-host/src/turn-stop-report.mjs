@@ -13,6 +13,19 @@ const labels = {
   scan_list: '扫描任务列表', scan_status: '扫描任务状态', scan_preflight: '扫描启动前检查',
   scan_results: '扫描结果读取', scan_from_assets: '库存交接草稿',
   scan_start: '扫描启动请求', scan_pause: '扫描暂停请求', scan_resume: '扫描恢复请求',
+  // Workspace tools — by far the most commonly used ones in any analysis/pentest
+  // turn (writing and running a script, searching the workspace). Without these,
+  // every single receipt line on a workspace-heavy turn fell back to the
+  // generic "其他业务操作/读取" placeholder, which is what made a real stop
+  // report (e.g. a script stuck re-crashing on the same bug) look content-free.
+  workspace_run: '脚本执行', workspace_write: '写入文件', workspace_edit: '编辑文件',
+  workspace_read: '读取文件', workspace_read_path: '读取路径', workspace_list: '工作区文件列表',
+  workspace_grep: '工作区搜索', workspace_glob: '工作区文件匹配',
+  workspace_fetch: '抓取页面', workspace_http: 'HTTP 请求', workspace_browser: '浏览器操作',
+  workspace_shell: 'Shell 命令', workspace_probe_command: '命令探测', workspace_probe_sql: 'SQL 探测',
+  workspace_chain_add: '访问链记录', workspace_chain_read: '访问链读取',
+  workspace_source_list: '源码文件列表', workspace_source_search: '源码搜索',
+  record_finding: '记录发现',
 };
 const uuid = value => typeof value === 'string' && /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i.test(value) ? value : '';
 const statuses = new Set(['draft','queued','pending','running','pausing','paused','completed','failed','interrupted','cancelled','stopped','recon_only','awaiting_input']);
