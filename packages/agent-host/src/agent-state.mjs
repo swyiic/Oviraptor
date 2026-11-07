@@ -317,7 +317,7 @@ const ANALYSIS_TOOLS = new Set([
   'exposure_overview', 'project_overview', 'journal_read',
 ]);
 
-export const FORCED_CONTINUE_BUDGET = 2;
+export const FORCED_CONTINUE_BUDGET = 3;
 
 function reportLikePath(args) {
   const path = String(args?.path ?? args?.file ?? args?.filePath ?? '').toLowerCase();
@@ -365,6 +365,23 @@ export function looksLikeQuestionToUser(assistantText = '') {
 }
 
 /**
+ * A SOFT confirmation-punt: the model defers an IN-SCOPE next step back to the user
+ * ("要不要我继续 / 需你确认后再做 / 可以继续吗 / shall I continue"), rather than asking for
+ * a specific missing fact or a choice between named options. These are exactly the stops the
+ * user does NOT want — within confirmed scope the agent should just keep going. A genuine
+ * request (请提供 X / which option / a real new authorization) does NOT match this and still stops.
+ */
+export function looksLikeSoftConfirmation(assistantText = '') {
+  const text = String(assistantText ?? '').trim();
+  if (!text) return false;
+  // If the confirmation is about a specific OUTWARD / high-risk action (scan, send a request,
+  // production, delete, attack, deploy, exploit, upload, push…), it is a GENUINE authorization
+  // question and must stop — never auto-continued as an in-scope analysis punt.
+  if (/(扫描|\bscan\b|发送|\bsend\b|发起|发请求|发包|攻击|\battack\b|删除|\bdelete\b|生产环境|\bprod(?:uction)?\b|外发|上传|\bupload\b|部署|\bdeploy\b|越权|利用漏洞|\bexploit\b|推送|\bpush\b|提交(?:请求|扫描|任务))/i.test(text)) return false;
+  return /(需(?:要)?(?:你|您)?(?:的)?确认(?:后|无误后)?(?:再|才)?(?:做|继续|进行|执行|操作|动手|推进)?|要不要我(?:继续|往下|接着|做下去|推进)|要我(?:继续|接着|往下|做下去|推进)|是否(?:要|需要)?(?:我)?(?:继续|往下|接着|推进)|下一步(?:是否)?(?:需|要)(?:你|您)?(?:确认|同意|批准)|确认(?:后|无误后)?(?:再|才)(?:继续|执行|进行|做|推进)|可以(?:继续|推进)?(?:的话|了吗|吗|\?|？)|等(?:你|您)(?:确认|批准|同意|指示|回复)(?:后)?|待(?:你|您)确认|\b(?:shall i (?:continue|proceed|go ahead)|should i (?:proceed|continue|go ahead)|do you want me to (?:continue|proceed)|want me to keep going|let me know if (?:you'?d like|i should)|awaiting your (?:confirmation|go-?ahead)|need your (?:confirmation|approval) to (?:proceed|continue)|confirm before i (?:proceed|continue))\b)/i.test(text);
+}
+
+/**
  * finishTurn policy: at a clean end-of-turn (model emitted no tool calls), decide
  * whether to force exactly one more model request. Returns
  *   { continue: true, reason, hint }  — inject `hint` as context and loop once more
@@ -402,8 +419,16 @@ export function finishTurnDecision({
   // A finished deliverable means done, regardless of what else ran this turn.
   if (producedDeliverable(toolResultsThisPrompt)) return { continue: false, reason: 'deliverable_produced' };
   if (!didAnalysisWork(toolResultsThisPrompt)) return { continue: false, reason: 'no_analysis_work' };
-  if (looksLikeQuestionToUser(assistantText)) return { continue: false, reason: 'asked_user_question' };
+  // A real authorization/scope boundary stops first. Then: a SOFT confirmation-punt on
+  // in-scope work is overridden (keep going — the user should not have to confirm every
+  // step); only a genuine question (specific missing info / a choice) legitimately stops.
   if (scopeBoundary) return { continue: false, reason: 'scope_boundary' };
+  if (looksLikeSoftConfirmation(assistantText)) return {
+    continue: true,
+    reason: 'soft_confirmation_override',
+    hint: 'Host autonomy: 你刚用"要不要我继续 / 需你确认后再做 / 可以继续吗"把 scope 内的下一步推回给了用户——不要这样。在已确认授权与范围内，你不需要用户逐步确认，直接把当前这件事做完（继续分析/执行、产出 record_finding、或写成报告文件）。只有在确实需要用户新授权一个范围外或外发的高危动作、或必须让用户在几个具体选项里选择、或提供一个你拿不到的具体信息时，才停下并用一句话写清那个具体缺口。此自动续跑有次数上限。',
+  };
+  if (looksLikeQuestionToUser(assistantText)) return { continue: false, reason: 'asked_user_question' };
   return {
     continue: true,
     reason: 'incomplete_no_deliverable',

@@ -176,8 +176,8 @@ test('loop (a+c): autonomous audit with no deliverable forces one more turn up t
   const { sessionId } = await runtime.newSession({ mcpServers });
   try {
     const result = await runtime.prompt({ sessionId, prompt: AUDIT_GOAL, userText: AUDIT_GOAL });
-    // 1 tool step + 2 forced continues + 1 final = 4 model requests.
-    assert.equal(bodies.length, 4);
+    // 1 tool step + FORCED_CONTINUE_BUDGET forced continues + 1 final model request.
+    assert.equal(bodies.length, 2 + FORCED_CONTINUE_BUDGET);
     assert.equal(result.stopReason, 'end_turn');
     assert.equal(result.metrics.forcedContinues, FORCED_CONTINUE_BUDGET);
     assert.equal(result.metrics.forcedContinueReason, 'incomplete_no_deliverable');
