@@ -66,6 +66,21 @@ export const DEPTH_GUIDANCE = '深度（安全分析/渗透/解密/取证类任�
 // over-asking and premature stops.
 export const AUTONOMY_GUIDANCE = '自主完成（在已确认授权与 scope 内，默认全程自驱，不中途请示）：①任务归你、做到交付：用户给的目标，从拆解、动手到产出具体结果整条链都归你，不把"还差密钥/还差解密器/响应还是密文/还没跑通/发现明显缺口/需要进一步确认"当成这一回合的结束理由。识别出缺口＝指令让你自己去补，不是把缺口交还给用户。②缺口自己闭：响应看着是密文就去定位密钥来源（JS 打包、密钥交换接口如 selectPublicKey/queryKey 的响应、国密/CryptoJS/JSEncrypt 常见套路），用 workspace_run 写解密器/carver/解析器在沙箱里跑（Node/Python 沙箱执行不需要额外审批），读错误→改脚本→复测，迭代到真正产出可读明文/真数据/可复现 PoC；不要停在"这些看起来是加密的"。先翻 workspace_glob/工具库里你以前写过的骨架，能复用就复用。③能自己做的别推给用户：凡是你在沙箱里就能完成的分析、写码、跑脚本、解析大文件，直接做，不要为了"要不要我继续/能不能跑脚本/要不要访问你的终端/可以吗"停下来问——这些在 scope 内不需要用户点头。④scope 内收尾只有两种合法理由：(a) 确实需要用户新授权一个 scope 外或外发的高危动作/扩大范围——这时明确一句话说清你需要什么、为什么、将要对哪个目标做什么，让用户一句话就能批，而不是泛泛报告；(b) 沙箱手段穷尽后的真死胡同——说清你已经试了哪些路、卡在哪、还差什么外部条件。除这两种外，不要以"阶段性小结/等你指示/这是我接下来会做的"收尾——那就继续做下去。⑤"全部做完、别问我"＝把 scope 内的自主权全交给你：把所有能独立完成的部分一次做完做透，只在上面(a)(b)两种情况回头找用户。⑥墙不变：以上只消除 scope 内的过度请示与早停，绝不放松授权墙——高危外发动作仍走审批，已确认范围之外仍不碰，不编造不夸大、失败如实说。';
 
+// Transparency, not a gate: the operator currently only sees "思考中 · N 项操作 · Xs"
+// through a long autonomous run (one real case ran 11.5 minutes / 60+ tool calls and
+// DID find and fully confirm a real blind SQLi, but the operator had no way to tell
+// that from a wall of generic "thinking" placeholders and assumed the agent was stuck).
+// This never pauses execution for a reply — it asks the model to keep narrating, in the
+// SAME flowing text it already streams, while it keeps calling tools.
+export const PROGRESS_NARRATION_GUIDANCE = 'Host 透明度（不是门禁，不要为此停下或等待，说完立刻继续调用工具）：你在做主动测试/分析类任务时，用户界面只会显示"思考中·N 项操作"，完全看不到你的推理过程——哪怕你做对了，用户也会以为你卡住了。每当你进入一个新阶段（而不是每一次工具调用）时，先用一行"阶段：具体动作"说清楚你现在在做什么、对什么对象做，例如"解析目标前端：定位登录与查询接口" "提取请求：枚举 /api/search 的参数" "发送请求：对 id 参数做布尔盲注测试" "发现疑似漏洞：id 参数响应随真假条件变化，疑似 SQL 注入" "确认漏洞：时间盲注复现，确认存在盲注且已取得数据库版本" "评估影响/下一步：核对库名范围，决定是否继续横向"。一句话说完立刻接着做，不要等待、不要只写这一句就结束这一轮。';
+
+// Transparency, not a gate: a decrypt/reverse/protocol-analysis deliverable that only
+// states the conclusion ("AES-CBC decrypts successfully") gives the operator no way to
+// verify the reasoning or spot a later self-contradiction. This only asks the model to
+// write down a narrative it already implicitly worked through — it never blocks or
+// replaces finishTurnDecision/the deliverable self-check.
+export const DISCOVERY_CHAIN_GUIDANCE = 'Host 透明度（解密/逆向/协议分析类任务才适用，不是门禁，只是报告要多写一段）：如果这个任务是解密、逆向、协议/流量分析一类，最终报告文件除了结论，必须再写一段"分析过程/发现链路"，按时间顺序交代：①最初在哪里看到了什么异常或特征而怀疑有加密/漏洞（例如响应字段是乱码、字段名是 queryKey/encryptedData）；②沿着这条线索做了哪些跳转（看了哪个接口/文件）；③具体分析了哪个函数/方法，这一步揭示了什么关键信息（密钥来源、算法、IV 从哪推出）；④据此怎么推出下一步；⑤最终解密/确认的是哪个具体请求或字段。让读者能照这条链路复核你的推理，不是只能看到答案。普通渗透任务不需要这一段。';
+
 export const DATA_TOOL_HINT = 'Host quality guard: 你刚才在未调用只读数据工具的情况下断言了项目/资产/扫描等具体事实。请立即调用已授权的 inventory_query / inventory_stats / inventory_search / project_overview / exposure_overview / task_status / journal_read 等只读工具核实，或明确说明当前没有可用数据。不要编造数字。此提示最多出现一次。';
 
 export const CITE_BEFORE_CLAIM = 'Host quality note: 请基于上一轮工具结果作答；先引用工具名与关键数字/名单，再给结论。若结果不足则说未知。';
@@ -512,6 +527,8 @@ export function buildTurnPrompt({
     qualityReminder + dataHint,
     mode === 'speed' ? '' : DEPTH_GUIDANCE,
     mode === 'speed' ? '' : AUTONOMY_GUIDANCE,
+    mode === 'speed' ? '' : PROGRESS_NARRATION_GUIDANCE,
+    mode === 'speed' ? '' : DISCOVERY_CHAIN_GUIDANCE,
     permissionDirective(permissionMode),
     chainBlock,
     PLANNING_GUIDANCE,
