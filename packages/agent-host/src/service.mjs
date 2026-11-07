@@ -375,6 +375,41 @@ export class AgentHost {
     if (this.runtimeId === 'xai-api') await this.setRuntime('xai-api', { force: true, preserveAuthorization: beforeRecipient===this.#permissionRecipient() });
     return { ...this.settings(), apiProvider: view };
   }
+  /**
+   * Lightweight reachability check of the CONFIGURED model provider: GET {baseUrl}/models
+   * with the stored credential. Answers "can this model actually connect?" without a paid
+   * completion. Never returns the credential. Bounded by a 12s timeout.
+   */
+  async testProvider() {
+    const config = this.providerStore.read();
+    const baseUrl = config?.baseUrl ? String(config.baseUrl).replace(/\/+$/, '') : '';
+    const model = config?.model || '';
+    if (!baseUrl) return { ok: false, reason: 'not_configured' };
+    const bearer = this.providerStore.bearer();
+    if (!bearer) return { ok: false, reason: 'no_credential', baseUrl, model };
+    const started = Date.now();
+    try {
+      const res = await Promise.race([
+        this.providerFetch(`${baseUrl}/models`, { method: 'GET', headers: { Authorization: `Bearer ${bearer}`, Accept: 'application/json' } }),
+        new Promise((_, reject) => setTimeout(() => reject(Object.assign(new Error('timeout'), { code: 'timeout' })), 12000)),
+      ]);
+      const latencyMs = Date.now() - started;
+      if (!res.ok) {
+        let detail = '';
+        try { detail = (await res.text()).slice(0, 200); } catch { /* ignore body */ }
+        return { ok: false, reason: 'http_error', status: res.status, baseUrl, model, latencyMs, error: detail };
+      }
+      let modelListed = null;
+      try {
+        const data = await res.json();
+        const ids = Array.isArray(data?.data) ? data.data.map(entry => entry?.id).filter(Boolean) : [];
+        if (model) modelListed = ids.includes(model);
+      } catch { /* non-JSON 200 still counts as reachable */ }
+      return { ok: true, status: res.status, baseUrl, model, latencyMs, modelListed };
+    } catch (error) {
+      return { ok: false, reason: error?.code === 'timeout' ? 'timeout' : 'unreachable', baseUrl, model, latencyMs: Date.now() - started, error: String(error?.message || error).slice(0, 200) };
+    }
+  }
   async selectProviderOAuth(input = {}) {
     if (this.runs.size || this.runtimeChanging || this.oauthPending?.status === 'pending') throw hostError('host_runtime_busy', 409);
     this.providerStore.selectOAuth(input);
