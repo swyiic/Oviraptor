@@ -132,6 +132,8 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
         if (path === '/api/settings/provider/oauth/logout' && method === 'POST') return json(await host.logoutProviderOAuth());
         if (path === '/api/mcp/jev' && method === 'GET') return json(host.jev.status());
         if (path === '/api/mcp/jev' && method === 'POST') return json(await host.jev.configure(await body(request)));
+        if (path === '/api/mcp/laya' && method === 'GET') return json(host.laya.status());
+        if (path === '/api/mcp/laya' && method === 'POST') return json(await host.laya.configure(await body(request)));
         if (path === '/api/settings' && method === 'POST') {
           const input = await body(request);
           let result = null;

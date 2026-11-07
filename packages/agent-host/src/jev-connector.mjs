@@ -19,7 +19,7 @@ const MAX_LINE = 1 << 20; // 1 MB per JSON-RPC line
 const DEFAULT_API_KEY_ENV = 'TYPESAFE_API_KEY';
 // Tool-name prefixes already owned by host-native tools; a user connector id may
 // not collide with them (its tools would shadow real ones).
-const RESERVED_IDS = new Set(['jev', 'workspace', 'memory', 'task', 'verifier', 'record', 'skill', 'agent', 'subagent', 'finding', 'inventory', 'scan', 'discovery', 'exposure', 'certificate', 'host', 'oauth', 'mcp', 'project', 'saved']);
+const RESERVED_IDS = new Set(['jev', 'laya', 'workspace', 'memory', 'task', 'verifier', 'record', 'skill', 'agent', 'subagent', 'finding', 'inventory', 'scan', 'discovery', 'exposure', 'certificate', 'host', 'oauth', 'mcp', 'project', 'saved']);
 
 /** Keep only VALID_NAME=string pairs, bounded, so arbitrary junk can't reach spawn env. */
 function sanitizeEnvMap(value) {
@@ -54,6 +54,30 @@ export function readJevConfig(store) {
     if (!normalized.command) normalized.command = 'jev-studio';
     return normalized;
   } catch { return { enabled: false, command: 'jev-studio', args: [], apiKey: '', apiKeyEnv: DEFAULT_API_KEY_ENV, env: {} }; }
+}
+
+// laya-mlx ships its own stdio MCP server (`laya-mlx-mcp-server`, the laya[mcp]
+// extra) exposing local typed-decision tools (laya_decide / laya_route /
+// laya_shortlist / laya_tournament …) — a local Apple-silicon sibling of jev.
+// Defaults: the bare command (PATH-resolved like jev's jev-studio) and
+// LAYA_PRELOAD=0 so the handshake (initialize + tools/list) returns in ~1s
+// without downloading or building an MLX checkpoint; models build lazily on the
+// first actual laya_* call. An operator env override wins. Laya has no API key,
+// so apiKeyEnv is parked on a laya-named var (unused unless a key is set).
+const LAYA_DEFAULT_COMMAND = 'laya-mlx-mcp-server';
+const LAYA_API_KEY_ENV = 'LAYA_API_KEY';
+export function readLayaConfig(store) {
+  const withDefaults = (normalized) => {
+    if (!normalized.command) normalized.command = LAYA_DEFAULT_COMMAND;
+    if (!normalized.apiKeyEnv || normalized.apiKeyEnv === DEFAULT_API_KEY_ENV) normalized.apiKeyEnv = LAYA_API_KEY_ENV;
+    if (!normalized.env || Object.keys(normalized.env).length === 0) normalized.env = { LAYA_PRELOAD: '0' };
+    return normalized;
+  };
+  try {
+    const row = store.db.prepare("SELECT value FROM host_settings WHERE key='laya_mcp'").get();
+    const cfg = row ? JSON.parse(row.value) : {};
+    return withDefaults(sanitizeConnectorConfig(cfg, {}));
+  } catch { return { enabled: false, command: LAYA_DEFAULT_COMMAND, args: [], apiKey: '', apiKeyEnv: LAYA_API_KEY_ENV, env: { LAYA_PRELOAD: '0' } }; }
 }
 
 // GUI-launched hosts get a narrow PATH (/usr/bin:/bin). pip installs land in
@@ -219,6 +243,30 @@ export class JevConnector extends McpStdioConnector {
 }
 
 /**
+ * The built-in laya connector. Thin subclass sourcing config from host_settings
+ * 'laya_mcp', defaulting to the bare `laya-mlx-mcp-server` command and lazy model
+ * preload. Same advisory-only wall as jev: laya_* decision tools never feed any
+ * auth / scope / settlement / capability gate.
+ */
+export class LayaConnector extends McpStdioConnector {
+  constructor(store) {
+    super({ id: 'laya', label: 'laya-mlx' });
+    this.store = store;
+  }
+  config() { return readLayaConfig(this.store); }
+  status() { return this.statusView(this.config()); }
+  async start() { return super.start(this.config()); }
+  async configure(patch = {}) {
+    const next = sanitizeConnectorConfig(patch, this.config());
+    if (!next.command) next.command = LAYA_DEFAULT_COMMAND;
+    this.store.db.prepare("INSERT OR REPLACE INTO host_settings(key,value) VALUES('laya_mcp',?)").run(JSON.stringify(next));
+    await this.stop();
+    if (next.enabled) await this.start();
+    return this.status();
+  }
+}
+
+/**
  * Registry of all MCP connectors: the built-in jev (non-removable) plus any
  * user-added stdio servers (persisted in host_settings 'mcp_connectors'). Merges
  * every ready connector's tools and routes calls by id prefix. Advisory-only wall
@@ -228,6 +276,7 @@ export class McpRegistry {
   constructor(store) {
     this.store = store;
     this.jev = new JevConnector(store);
+    this.laya = new LayaConnector(store);
     this.user = new Map(); // id -> McpStdioConnector
     for (const d of this.#userDescriptors()) this.#ensure(d.id, d.label);
   }
@@ -255,6 +304,7 @@ export class McpRegistry {
 
   async startAll() {
     await this.jev.start().catch(() => {});
+    await this.laya.start().catch(() => {});
     for (const d of this.#userDescriptors()) {
       if (d.enabled) await this.#ensure(d.id, d.label).start(d).catch(() => {});
     }
@@ -262,17 +312,22 @@ export class McpRegistry {
 
   async stopAll() {
     await this.jev.stop().catch(() => {});
+    await this.laya.stop().catch(() => {});
     for (const connector of this.user.values()) await connector.stop().catch(() => {});
   }
 
   list() {
-    const out = [{ builtin: true, removable: false, ...this.jev.status() }];
+    const out = [
+      { builtin: true, removable: false, ...this.jev.status() },
+      { builtin: true, removable: false, ...this.laya.status() },
+    ];
     for (const d of this.#userDescriptors()) out.push({ builtin: false, removable: true, ...this.#ensure(d.id, d.label).statusView(d) });
     return { connectors: out };
   }
 
   async configure(id, patch = {}) {
     if (id === 'jev') { await this.jev.configure(patch); return this.list(); }
+    if (id === 'laya') { await this.laya.configure(patch); return this.list(); }
     const list = this.#userDescriptors();
     const index = list.findIndex(d => d.id === id);
     if (index < 0) throw new Error('mcp_connector_not_found');
@@ -305,7 +360,7 @@ export class McpRegistry {
   }
 
   async remove(id) {
-    if (id === 'jev') throw new Error('mcp_connector_builtin_not_removable');
+    if (id === 'jev' || id === 'laya') throw new Error('mcp_connector_builtin_not_removable');
     const list = this.#userDescriptors();
     if (!list.some(d => d.id === id)) throw new Error('mcp_connector_not_found');
     this.#writeUser(list.filter(d => d.id !== id));
@@ -315,15 +370,16 @@ export class McpRegistry {
   }
 
   toolSpecs() {
-    return [...this.jev.toolSpecs(), ...[...this.user.values()].flatMap(c => c.toolSpecs())];
+    return [...this.jev.toolSpecs(), ...this.laya.toolSpecs(), ...[...this.user.values()].flatMap(c => c.toolSpecs())];
   }
 
   owns(name) {
-    return this.jev.owns(name) || [...this.user.values()].some(c => c.owns(name));
+    return this.jev.owns(name) || this.laya.owns(name) || [...this.user.values()].some(c => c.owns(name));
   }
 
   async callTool(name, args) {
     if (this.jev.owns(name)) return this.jev.callTool(name, args);
+    if (this.laya.owns(name)) return this.laya.callTool(name, args);
     for (const connector of this.user.values()) if (connector.owns(name)) return connector.callTool(name, args);
     throw new Error('unknown mcp tool');
   }

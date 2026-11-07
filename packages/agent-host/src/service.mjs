@@ -19,7 +19,7 @@ import { buildDiscoverySummary, formatDiscoveryPromptBlock } from './discovery.m
 import { formatMemoryPromptBlock, readConversationMemory, recordTurn, summarizeToolEvent, pinFact, MEMORY_TOOL_SPECS, readProjectMemory, writeProjectMemoryEntry, forgetProjectMemory, formatProjectMemoryPromptBlock, readGlobalMemory, formatGlobalMemoryPromptBlock } from './memory.mjs';
 import { readApprovedResearchCards, formatResearchCardsPromptBlock } from './research-cards.mjs';
 import { allAgentTools, matchAgentTools, formatAgentToolsPromptBlock, recallAgentToolCode, AGENT_TOOL_RECALL_SPEC } from './agent-tools.mjs';
-import { JevConnector } from './jev-connector.mjs';
+import { JevConnector, LayaConnector } from './jev-connector.mjs';
 import { FINDING_TOOL_SPECS, recordFindingFromTool } from './findings.mjs';
 import { ProviderStore, OpenAiCompatibleRuntime, truncateMcpResult } from './provider.mjs';
 import { buildTurnPrompt, exposureTaskIntent, discoveryAssistIntent, discoveryEnrichmentIntent, looksLikeDataQuestion, isProjectReadQuestion, isReadOnlyDataRequest, certificateTaskIntent, scanningTaskIntent, scanningHandoffIntent, humanizeToolTitle, normalizeAnswerMode, answerModeOptions, prefersResponsesApi, scrubSecrets, scrubbedModelText } from './quality-prompt.mjs';
@@ -73,8 +73,11 @@ export class AgentHost {
     this.dataDir = dataDir; this.store = store ?? new HostStore(join(dataDir, 'host.sqlite'));
     this.desktopAssetSynchronizer = new DesktopAssetSynchronizer();
     this.apps = apps ?? new AppManager(this.store, join(dataDir, 'applications'));
-    // External MCP decision connector (jev-studio). Disabled by default; graceful.
+    // External MCP decision connectors (jev-studio + local laya-mlx). Both are
+    // advisory typed-decision engines, disabled by default; any failure degrades
+    // gracefully to "no extra tools". laya_* / jev_* never feed any gate.
     this.jev = new JevConnector(this.store); this.jev.start().catch(() => {});
+    this.laya = new LayaConnector(this.store); this.laya.start().catch(() => {});
     this.runtimeFactory = runtimeFactory; this.providerStore = new ProviderStore(dataDir);
     this.networkStore = new HostNetworkSettings(dataDir, { ...(networkEnvironment ? { env: networkEnvironment } : {}) });
     this.networkTransportInjected = Boolean(providerFetch);
@@ -1565,7 +1568,7 @@ export class AgentHost {
     const conversation = this.store.conversation(conversationId);
     const capability = this.apps.capabilities(conversation.projectId, { runtimeIdentity: this.runtimeIdentity() }).find(tool => tool.name.replace('::', '__') === params.name);
     const readOnly = ['workspace_read', 'workspace_list', 'workspace_grep', 'workspace_glob', 'workspace_fetch', 'workspace_read_path', 'workspace_http', 'workspace_browser', 'workspace_ws', 'workspace_shell', 'workspace_probe_sql', 'workspace_probe_command', 'workspace_source_list', 'workspace_source_search', 'workspace_chain_read', 'workspace_chain_add'].includes(params.name)
-      || (typeof params.name === 'string' && (params.name.startsWith('jev_') || params.name === 'record_finding'))
+      || (typeof params.name === 'string' && (params.name.startsWith('jev_') || params.name.startsWith('laya_') || params.name === 'record_finding'))
       || Boolean(run.skillScope && this.skillAccess?.toolSpecs(conversationId, run.skillScope).some(tool => tool.name === params.name))
       || typeof capability?.permission === 'string' && (capability.permission === 'read' || capability.permission.endsWith('.read'));
     const operationId = randomUUID();
@@ -1658,7 +1661,7 @@ export class AgentHost {
     const conversation = this.store.conversation(conversationId);
     if (method === 'initialize') return { protocolVersion: '2025-06-18', capabilities: { tools: { listChanged: true } }, serverInfo: { name: 'oviraptor-apps', version: '1.0.0' } };
     const skillTools = run.skillScope && this.skillAccess ? this.skillAccess.toolSpecs(conversationId, run.skillScope) : [];
-    if (method === 'tools/list') return { tools: [...this.apps.capabilities(conversation.projectId, { runtimeIdentity: this.runtimeIdentity() }).map(tool => ({ name: tool.name.replace('::', '__'), description: tool.description, inputSchema: tool.inputSchema })), ...WORKSPACE_TOOL_SPECS, ...MEMORY_TOOL_SPECS, ...TASK_TOOL_SPECS, ...(this.runtimeId === 'xai-api' ? SUBAGENT_TOOL_SPECS : []), ...VERIFIER_TOOL_SPECS, ...AGENT_TOOL_RECALL_SPEC, ...FINDING_TOOL_SPECS, ...this.jev.toolSpecs(), ...skillTools] };
+    if (method === 'tools/list') return { tools: [...this.apps.capabilities(conversation.projectId, { runtimeIdentity: this.runtimeIdentity() }).map(tool => ({ name: tool.name.replace('::', '__'), description: tool.description, inputSchema: tool.inputSchema })), ...WORKSPACE_TOOL_SPECS, ...MEMORY_TOOL_SPECS, ...TASK_TOOL_SPECS, ...(this.runtimeId === 'xai-api' ? SUBAGENT_TOOL_SPECS : []), ...VERIFIER_TOOL_SPECS, ...AGENT_TOOL_RECALL_SPEC, ...FINDING_TOOL_SPECS, ...this.jev.toolSpecs(), ...this.laya.toolSpecs(), ...skillTools] };
     if (method === 'tools/call') {
       if (params.name === 'recall_agent_tool') {
         const code = recallAgentToolCode(process.env.OVIRAPTOR_APP_DB, (params.arguments ?? {}).id);
@@ -1668,8 +1671,9 @@ export class AgentHost {
         const r = recordFindingFromTool(this.store, conversation.id, conversation.projectId, params.arguments ?? {});
         return { content: [{ type: 'text', text: JSON.stringify(r.ok ? { ok: true, id: r.id, status: r.status } : { error: 'record_finding_rejected', reason: r.reason }) }], _meta: { hostEvidence: 'advisory' } };
       }
-      if (this.jev.owns(params.name)) {
-        const result = await this.jev.callTool(params.name, params.arguments ?? {});
+      if (this.jev.owns(params.name) || this.laya.owns(params.name)) {
+        const connector = this.jev.owns(params.name) ? this.jev : this.laya;
+        const result = await connector.callTool(params.name, params.arguments ?? {});
         const shaped = result && typeof result === 'object' && Array.isArray(result.content) ? result : { content: [{ type: 'text', text: JSON.stringify(result ?? null) }] };
         return { ...shaped, _meta: { hostEvidence: 'advisory' } };
       }
@@ -1818,7 +1822,7 @@ export class AgentHost {
     this.#cancelOAuthPoll();
     for (const run of this.runs.values()) await this.cancel(run.conversationId);
     await this.runtime?.close(); await Promise.allSettled([...this.runs.values()].map(run => run.completion));
-    await this.jev?.stop(); await this.apps.close(); await Promise.allSettled([...this.activeMcpCalls]); await this.desktopAssetSynchronizer.close(); this.store.close();
+    await this.jev?.stop(); await this.laya?.stop(); await this.apps.close(); await Promise.allSettled([...this.activeMcpCalls]); await this.desktopAssetSynchronizer.close(); this.store.close();
     this.library?.close();
   }
 }
