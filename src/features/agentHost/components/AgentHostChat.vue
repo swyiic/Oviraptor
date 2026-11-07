@@ -10,6 +10,7 @@ import type { AgentHostSettings, AgentTask } from "../types";
 import { describeAgentHostError } from "../errors";
 import { agentRuntimeHeader, type AgentHostChatClient, type AgentHostConversation, type AgentHostMessage, type AgentModelUsage, type ModelConnectionTest } from "../chatClient";
 import ConversationMessage from "../../conversations/ConversationMessage.vue";
+import { messageTimestamp } from "../../conversations/messageTime";
 import AgentPermissionMode from "./AgentPermissionMode.vue";
 import AgentTaskCollaboration from "./AgentTaskCollaboration.vue";
 import DiscoveryAssistPanel from "./DiscoveryAssistPanel.vue";
@@ -140,7 +141,65 @@ const transcript = ref<HTMLElement>();
 const followingTail = ref(true), unreadBelow = ref(false), loadingMessages = ref(false), loadingEarlier = ref(false), hasEarlier = ref(false), discoveryPanelOpen = ref(false), workspacePanelOpen = ref(false), chainPanelOpen = ref(false);
 let earlierCursor: string | undefined, historyLoaded = false;
 let messageLoad: {id:string;projectId:number;promise:Promise<void>} | undefined;
-function observeTranscript(){const el=transcript.value;if(el){followingTail.value=el.scrollHeight-el.scrollTop-el.clientHeight<80;if(followingTail.value)unreadBelow.value=false;}}
+// --- Transcript virtualization --------------------------------------------
+// Only a windowed slice of <article> elements stays mounted; off-window
+// messages are represented by two spacer divs sized from measured (or, until
+// measured, estimated) heights. el.scrollHeight/scrollTop stay real DOM
+// metrics throughout, so loadEarlierMessages' scroll-anchor math, scroll()'s
+// stick-to-bottom, and observeTranscript's followingTail detection all keep
+// working unmodified — they never know the list is windowed.
+const ITEM_GAP = 14; // matches .ahc-column / .ahc-msg-list { gap: 14px }
+const DEFAULT_ITEM_HEIGHT = 160;
+const VIRT_BUFFER_PX = 800;
+const measuredHeights = new Map<string, number>();
+const articleEls = new Map<string, HTMLElement>();
+let avgMeasuredHeight = DEFAULT_ITEM_HEIGHT;
+let resizeObserver: ResizeObserver | undefined;
+const windowStart = ref(0), windowEnd = ref(0), spacerBefore = ref(0), spacerAfter = ref(0);
+const windowedMessages = computed(() => messages.value.slice(windowStart.value, windowEnd.value));
+function recomputeAverageHeight() {
+  if (!measuredHeights.size) return;
+  let sum = 0; for (const h of measuredHeights.values()) sum += h;
+  avgMeasuredHeight = sum / measuredHeights.size;
+}
+function strideFor(id: string) { return (measuredHeights.get(id) ?? avgMeasuredHeight) + ITEM_GAP; }
+function lowerBound(offsets: number[], value: number): number {
+  let lo = 0, hi = offsets.length - 1;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (offsets[mid] < value) lo = mid + 1; else hi = mid; }
+  return lo;
+}
+function updateWindow() {
+  const list = messages.value, total = list.length;
+  if (!total) { windowStart.value = 0; windowEnd.value = 0; spacerBefore.value = 0; spacerAfter.value = 0; return; }
+  const offsets = new Array<number>(total + 1);
+  offsets[0] = 0;
+  for (let i = 0; i < total; i++) offsets[i + 1] = offsets[i] + strideFor(list[i].id);
+  const el = transcript.value;
+  if (!el) { windowStart.value = 0; windowEnd.value = total; spacerBefore.value = 0; spacerAfter.value = 0; return; }
+  const viewTop = Math.max(0, el.scrollTop - VIRT_BUFFER_PX);
+  const viewBottom = el.scrollTop + el.clientHeight + VIRT_BUFFER_PX;
+  const start = Math.max(0, lowerBound(offsets, viewTop) - 1);
+  const end = Math.min(total, Math.max(start, lowerBound(offsets, viewBottom)));
+  windowStart.value = start; windowEnd.value = end;
+  spacerBefore.value = offsets[start];
+  spacerAfter.value = offsets[total] - offsets[end];
+}
+// A fresh closure per render would make Vue unbind/rebind the ref every patch;
+// cache one stable callback per message id instead.
+const articleRefCallbacks = new Map<string, (el: unknown) => void>();
+function bindArticle(id: string) {
+  let fn = articleRefCallbacks.get(id);
+  if (!fn) {
+    fn = (el) => {
+      if (el instanceof HTMLElement) { el.dataset.msgId = id; articleEls.set(id, el); resizeObserver?.observe(el); }
+      else { const prev = articleEls.get(id); if (prev) { resizeObserver?.unobserve(prev); articleEls.delete(id); } }
+    };
+    articleRefCallbacks.set(id, fn);
+  }
+  return fn;
+}
+watch(messages, () => updateWindow());
+function observeTranscript(){const el=transcript.value;if(el){followingTail.value=el.scrollHeight-el.scrollTop-el.clientHeight<80;if(followingTail.value)unreadBelow.value=false;}updateWindow();}
 function jumpToLatest(){followingTail.value=true;unreadBelow.value=false;void scroll(true);}
 async function loadEarlierMessages(){
  const id=selectedId.value,pid=hostProjectId.value,cursor=earlierCursor,el=transcript.value;if(!id||pid===undefined||!cursor||loadingEarlier.value||!props.client.messagePage)return;
@@ -214,6 +273,7 @@ const innerPhaseText = computed(() => {
   const pair = known[innerPhase.value];
   return pair ? tr(...pair) : (inner.value?.phaseLabel || "");
 });
+function messageTime(message: AgentHostMessage) { return messageTimestamp(message.createdAt, tr("zh-CN", "en-GB")); }
 const copiedId = ref<string>();
 async function copyMessage(message: AgentHostMessage) {
   try { await navigator.clipboard.writeText(message.content); copiedId.value = message.id; setTimeout(() => { if (copiedId.value === message.id) copiedId.value = undefined; }, 1500); }
@@ -246,8 +306,24 @@ function onAgentHostSettingsChanged() { void loadModelConnections(); }
 onMounted(() => {
   void loadModelConnections();
   if (typeof window !== "undefined") window.addEventListener("oviraptor:agent-host-settings", onAgentHostSettingsChanged);
+  if (typeof ResizeObserver !== "undefined") {
+    resizeObserver = new ResizeObserver(entries => {
+      let changed = false;
+      for (const entry of entries) {
+        const id = (entry.target as HTMLElement).dataset.msgId;
+        if (!id) continue;
+        const height = entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height;
+        if (height <= 0) continue;
+        const prev = measuredHeights.get(id);
+        if (prev === undefined || Math.abs(prev - height) > 1) { measuredHeights.set(id, height); changed = true; }
+      }
+      if (changed) { recomputeAverageHeight(); updateWindow(); }
+    });
+    for (const el of articleEls.values()) resizeObserver.observe(el);
+  }
+  updateWindow();
 });
-onBeforeUnmount(() => { if (typeof window !== "undefined") window.removeEventListener("oviraptor:agent-host-settings", onAgentHostSettingsChanged); });
+onBeforeUnmount(() => { if (typeof window !== "undefined") window.removeEventListener("oviraptor:agent-host-settings", onAgentHostSettingsChanged); resizeObserver?.disconnect(); });
 const modelOptions = computed(() => {
   const list: { value: string; label: string }[] = [];
   for (const connection of modelConnections.value) {
@@ -673,7 +749,7 @@ const stop = props.client.events(handleEvent);
 onBeforeUnmount(() => { ++permissionGeneration; disposed = true; ++projectGeneration; ++messageGeneration; stop(); });
 watch(() => [props.projectName, props.projectId, props.personal], () => void loadProject(), { immediate: true, flush: "sync" });
 watch(running, value => { if (!value) heartbeat.value = undefined; });
-watch(selectedId, (id,previous) => { if(previous)conversationDrafts.set(previous,draft.value);++messageGeneration;messageLoad=undefined;messages.value=[];loadingMessages.value=false;loadingEarlier.value=false;historyLoaded=false;earlierCursor=undefined;hasEarlier.value=false;followingTail.value=true;unreadBelow.value=false;error.value='';discoveryPanelOpen.value=!!props.draftRequest?.analysis;workspacePanelOpen.value=false;chainPanelOpen.value=false;draft.value=id?conversationDrafts.get(id)||"":""; permissionsOpen.value = false; ++permissionGeneration; resetActivity(); task.value = null; cancellingChildren.value = []; grantPrompt.value = null; runtimePermission.value = null; running.value = false; void loadMessages(); void loadChain(); void restoreStatus(); }, { flush: "sync" });
+watch(selectedId, (id,previous) => { if(previous)conversationDrafts.set(previous,draft.value);++messageGeneration;messageLoad=undefined;messages.value=[];measuredHeights.clear();articleRefCallbacks.clear();avgMeasuredHeight=DEFAULT_ITEM_HEIGHT;loadingMessages.value=false;loadingEarlier.value=false;historyLoaded=false;earlierCursor=undefined;hasEarlier.value=false;followingTail.value=true;unreadBelow.value=false;error.value='';discoveryPanelOpen.value=!!props.draftRequest?.analysis;workspacePanelOpen.value=false;chainPanelOpen.value=false;draft.value=id?conversationDrafts.get(id)||"":""; permissionsOpen.value = false; ++permissionGeneration; resetActivity(); task.value = null; cancellingChildren.value = []; grantPrompt.value = null; runtimePermission.value = null; running.value = false; void loadMessages(); void loadChain(); void restoreStatus(); }, { flush: "sync" });
 watch([()=>props.draftRequest,loadingProject,running,continuingTask,hostProjectId],()=>void applyDiscoveryDraft(),{immediate:true});
 watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{immediate:true});
 </script>
@@ -720,14 +796,19 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
       <p v-if="loadingMessages&&!messages.length" role="status">{{tr('正在读取此会话…','Loading this conversation…')}}</p>
       <p v-if="!messages.length" class="ahc-empty">{{ tr(`当前模型：${header || '尚未选择'}。权限不足时会说明用途；已保存的授权会在原范围内复用。`, `Model: ${header || 'not selected'}. Missing permissions are explained; saved grants are reused within their scope.`) }}</p>
       <p v-if="!messages.length" class="ahc-empty ahc-empty-note">{{ tr('执行过程显示在回复下方，点击箭头可查看工具记录与证据。', 'Expand the activity below a reply to view tool records and evidence.') }}</p>
-      <article v-for="message in messages" :key="message.id" :class="['agent-host-chat-message', message.role]">
-        <ConversationMessage v-if="message.content" :message="message" :show-actions="false" :files="conversationFiles.references.value" @open-file="conversationFiles.showPreview($event)" />
+      <div v-if="messages.length" class="ahc-msg-list">
+      <div v-if="spacerBefore > 0" class="ahc-virt-spacer" :style="{ height: spacerBefore + 'px' }" aria-hidden="true"></div>
+      <article v-for="message in windowedMessages" :key="message.id" :ref="bindArticle(message.id)" :class="['agent-host-chat-message', message.role]">
+        <ConversationMessage v-if="message.content" :message="message" :show-actions="false" :hide-timestamp="true" :files="conversationFiles.references.value" @open-file="conversationFiles.showPreview($event)" />
         <p v-else-if="message.status === 'running' && activityMessage?.id !== message.id" class="ahc-reply-pending">{{ tr('正在准备回复…', 'Preparing reply…') }}</p>
         <small v-if="message.role === 'user' && message.stopReason?.startsWith('steer_')" class="ahc-steer-state">{{ message.stopReason === 'steer_delivered' ? tr('补充要求已交给 Agent', 'Correction delivered to Agent') : message.stopReason === 'steer_interrupted' ? tr('补充要求已保存，将在你继续时交付', 'Correction saved for your next continuation') : tr('补充要求已保存，等待 Agent 接收', 'Correction saved, awaiting delivery') }}</small>
         <small v-if="message.role === 'assistant' && message.usage?.requests" class="ahc-model-usage">{{tr('模型请求', 'Model requests')}} {{message.usage.requests}} · {{tr('输入', 'Input')}} {{message.usage.inputTokens?.toLocaleString() ?? tr('未知','unknown')}} / {{tr('输出','Output')}} {{message.usage.outputTokens?.toLocaleString() ?? tr('未知','unknown')}} Token<span v-if="message.usage.unknownRequests"> · {{message.usage.unknownRequests}} {{tr('次用量未返回，未计入上述数量','requests did not report usage and are excluded from these totals')}}</span></small>
-        <div v-if="message.content && message.status !== 'running'" class="ahc-msg-actions">
-          <button type="button" data-testid="agent-host-copy" :title="tr('复制', 'Copy')" :aria-label="tr('复制', 'Copy')" @click="copyMessage(message)"><Check v-if="copiedId === message.id" :size="13" /><Copy v-else :size="13" /></button>
-          <button v-if="message.role === 'user'" type="button" data-testid="agent-host-edit" :title="tr('编辑后重发', 'Edit & resend')" :aria-label="tr('编辑后重发', 'Edit & resend')" @click="editMessage(message)"><Pencil :size="13" /></button>
+        <div v-if="message.content" class="ahc-msg-footer">
+          <time v-if="messageTime(message)" class="ahc-msg-time" :datetime="messageTime(message)!.iso" :title="messageTime(message)!.full">{{ messageTime(message)!.label }}</time>
+          <div v-if="message.status !== 'running'" class="ahc-msg-actions">
+            <button type="button" data-testid="agent-host-copy" :title="tr('复制', 'Copy')" :aria-label="tr('复制', 'Copy')" @click="copyMessage(message)"><Check v-if="copiedId === message.id" :size="13" /><Copy v-else :size="13" /></button>
+            <button v-if="message.role === 'user'" type="button" data-testid="agent-host-edit" :title="tr('编辑后重发', 'Edit & resend')" :aria-label="tr('编辑后重发', 'Edit & resend')" @click="editMessage(message)"><Pencil :size="13" /></button>
+          </div>
         </div>
         <p v-if="message.role === 'assistant' && (message.status === 'refused' || message.stopReason === 'refusal')" class="ahc-refusal">{{ tr('模型拒绝继续。这一轮没有改写问题，也没有再调用工具。', 'The model refused. This turn did not rephrase the request or call more tools.') }}</p>
         <div v-if="message.role === 'assistant' && message.stopReason === 'intent_preview'" class="ahc-intent" data-testid="agent-host-intent">
@@ -767,6 +848,8 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
           </div>
         </details>
       </article>
+      <div v-if="spacerAfter > 0" class="ahc-virt-spacer" :style="{ height: spacerAfter + 'px' }" aria-hidden="true"></div>
+      </div>
       <ConversationFiles :state="conversationFiles" />
       </div>
     </div>
@@ -843,6 +926,8 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
 .agent-host-chat-transcript { flex: 1; min-height: 0; overflow: auto; padding: 18px 28px 8px; }
 .ahc-jump-latest{align-self:center;margin:4px 0 8px;flex-shrink:0}.ahc-discovery-details{border-bottom:1px solid var(--line,#e1e3e7);padding:4px 0 10px;color:var(--app-muted,#687078);font-size:12px}.ahc-discovery-details>summary{cursor:pointer}.ahc-discovery-details[open]>summary{margin-bottom:10px}.text-button{align-self:center;border:1px solid var(--line,#e1e3e7);border-radius:7px;background:transparent;color:inherit;padding:6px 12px;font-size:12px;cursor:pointer}
 .ahc-column { width: min(760px, 100%); margin: 0 auto; min-height: 100%; display: flex; flex-direction: column; gap: 14px; }
+.ahc-msg-list { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.ahc-virt-spacer { flex-shrink: 0; width: 100%; }
 .agent-host-chat-message { position: relative; width: 100%; min-width: 0; padding: 0; white-space: normal; font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; }
 .agent-host-chat-message :deep(.conversation-message) { margin-bottom: 0; }
 .agent-host-chat-message.user { align-self: stretch; background: transparent; }
@@ -907,9 +992,11 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
 @keyframes ahc-spin { to { transform: rotate(360deg); } }
 .ahc-steer { background: var(--app-accent, #3b82f6); }
 .ahc-steer-state,.ahc-model-usage { display: block; color: var(--app-text-muted, #737373); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
-.ahc-msg-actions { display: flex; gap: 2px; margin-top: 4px; opacity: 0; transition: opacity .15s; }
+.ahc-msg-footer { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.agent-host-chat-message.user .ahc-msg-footer { justify-content: flex-end; }
+.ahc-msg-time { font-size: 11px; color: var(--app-muted, var(--muted, #6b7280)); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ahc-msg-actions { display: flex; gap: 2px; opacity: 0; transition: opacity .15s; }
 .agent-host-chat-message:hover .ahc-msg-actions, .ahc-msg-actions:focus-within { opacity: 1; }
-.agent-host-chat-message.user .ahc-msg-actions { justify-content: flex-end; }
 .ahc-msg-actions button { width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--app-muted, var(--muted, #6b7280)); cursor: pointer; }
 .ahc-msg-actions button:hover { background: color-mix(in srgb, var(--app-ink, #172033) 8%, transparent); }
 .ahc-send:disabled { opacity: .3; cursor: default; }
