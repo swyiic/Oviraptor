@@ -22,7 +22,6 @@ import {
   attemptTime,
   createSentinelLabels,
   formatNumber,
-  json,
   scanSummary,
   scanTokenTotal,
   text,
@@ -81,6 +80,8 @@ const props = defineProps<{
   rescan: (...args: any[]) => any;
   resumeScan: (...args: any[]) => any;
   sourceLocations: (item: any) => any[];
+  /** Memoized record_json parse (keyed by finding id) — use instead of recordOf(item) to avoid reparsing per field per render. */
+  recordOf: (item: any) => any;
   sourceTypeLabel: (value: string) => string;
   validationFor: (item: any) => SentinelValidation | undefined;
 }>();
@@ -442,25 +443,25 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
           >
           <strong>{{
             item.title ||
-            json(item.recordJson).title ||
+            recordOf(item).title ||
             item.recordKey
           }}</strong>
           <code
             >{{
-              json(item.recordJson).engine ||
-              json(item.recordJson).source ||
+              recordOf(item).engine ||
+              recordOf(item).source ||
               "Agent"
             }}
             ·
             {{
-              json(item.recordJson).rule_id ||
-              json(item.recordJson).ruleId ||
+              recordOf(item).rule_id ||
+              recordOf(item).ruleId ||
               item.recordKey
             }}</code
           >
           <span
-            >{{ json(item.recordJson).cwe || "—" }} /
-            {{ json(item.recordJson).cve || "—" }}</span
+            >{{ recordOf(item).cwe || "—" }} /
+            {{ recordOf(item).cve || "—" }}</span
           >
           <code>{{ sourceLocations(item)[0]?.file || "—" }}</code>
           <span>{{
@@ -512,24 +513,24 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
             <div>
               <strong>{{
                 item.title ||
-                json(item.recordJson).title ||
+                recordOf(item).title ||
                 item.recordKey
               }}</strong
               ><small
                 >{{
-                  json(item.recordJson).rule_id ||
-                  json(item.recordJson).ruleId ||
+                  recordOf(item).rule_id ||
+                  recordOf(item).ruleId ||
                   tr("未标注规则", "No rule")
                 }}
-                · {{ json(item.recordJson).cwe || tr("无 CWE", "No CWE") }} ·
-                {{ json(item.recordJson).cve || tr("无 CVE", "No CVE") }} · {{ tr("置信度", "Confidence") }}
-                {{ json(item.recordJson).confidence || "—" }}</small
+                · {{ recordOf(item).cwe || tr("无 CWE", "No CWE") }} ·
+                {{ recordOf(item).cve || tr("无 CVE", "No CVE") }} · {{ tr("置信度", "Confidence") }}
+                {{ recordOf(item).confidence || "—" }}</small
               >
             </div>
             <span
-              v-if="json(item.recordJson).status"
+              v-if="recordOf(item).status"
               class="finding-state"
-              >{{ json(item.recordJson).status }}</span
+              >{{ recordOf(item).status }}</span
             >
           </header>
           <div class="source-finding-grid">
@@ -537,8 +538,8 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
               <span>{{ tr("描述", "Description") }}</span>
               <p>
                 {{
-                  json(item.recordJson).description ||
-                  json(item.recordJson).message ||
+                  recordOf(item).description ||
+                  recordOf(item).message ||
                   "—"
                 }}
               </p>
@@ -547,9 +548,9 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
               <span>{{ tr("技术分析 / 影响", "Technical analysis / impact") }}</span>
               <p>
                 {{
-                  json(item.recordJson).technical_analysis ||
-                  json(item.recordJson).impact ||
-                  json(item.recordJson).detail ||
+                  recordOf(item).technical_analysis ||
+                  recordOf(item).impact ||
+                  recordOf(item).detail ||
                   "—"
                 }}
               </p>
@@ -581,17 +582,17 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
             </div>
             <div
               v-if="
-                json(item.recordJson).data_flow ||
-                json(item.recordJson).taint_flow ||
-                json(item.recordJson).call_chain
+                recordOf(item).data_flow ||
+                recordOf(item).taint_flow ||
+                recordOf(item).call_chain
               "
             >
               <span>{{ tr("数据流 / 调用链", "Data flow / call chain") }}</span>
               <pre>{{
                 text(
-                  json(item.recordJson).data_flow ||
-                    json(item.recordJson).taint_flow ||
-                    json(item.recordJson).call_chain,
+                  recordOf(item).data_flow ||
+                    recordOf(item).taint_flow ||
+                    recordOf(item).call_chain,
                 )
               }}</pre>
             </div>
@@ -599,37 +600,37 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
               <span>{{ tr("修复建议", "Remediation") }}</span>
               <p>
                 {{
-                  json(item.recordJson).recommendation ||
-                  json(item.recordJson).remediation_steps ||
+                  recordOf(item).recommendation ||
+                  recordOf(item).remediation_steps ||
                   "—"
                 }}
               </p>
             </div>
             <div
               v-if="
-                json(item.recordJson).fix_before ||
-                json(item.recordJson).fix_after
+                recordOf(item).fix_before ||
+                recordOf(item).fix_after
               "
             >
               <span>{{ tr("修复前 / 修复后", "Before / after fix") }}</span>
               <pre
                 >{{
-                  json(item.recordJson).fix_before || "—"
+                  recordOf(item).fix_before || "—"
                 }}\n\n→\n\n{{
-                  json(item.recordJson).fix_after || "—"
+                  recordOf(item).fix_after || "—"
                 }}</pre>
             </div>
             <div
               v-if="
-                json(item.recordJson).dependency_metadata ||
-                json(item.recordJson).package
+                recordOf(item).dependency_metadata ||
+                recordOf(item).package
               "
             >
               <span>{{ tr("依赖信息", "Dependency info") }}</span>
               <pre>{{
                 JSON.stringify(
-                  json(item.recordJson).dependency_metadata ||
-                    json(item.recordJson).package,
+                  recordOf(item).dependency_metadata ||
+                    recordOf(item).package,
                   null,
                   2,
                 )
@@ -637,21 +638,21 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
             </div>
             <div
               v-if="
-                json(item.recordJson).evidence ||
-                json(item.recordJson).pocRequest
+                recordOf(item).evidence ||
+                recordOf(item).pocRequest
               "
             >
               <span>{{ tr("证据 / 验证", "Evidence / validation") }}</span>
               <pre>{{
                 text(
-                  json(item.recordJson).evidence ||
-                    json(item.recordJson).pocRequest,
+                  recordOf(item).evidence ||
+                    recordOf(item).pocRequest,
                 )
               }}</pre>
             </div>
-            <div v-if="json(item.recordJson).assumptions">
+            <div v-if="recordOf(item).assumptions">
               <span>{{ tr("前提与限制", "Assumptions and limitations") }}</span>
-              <p>{{ text(json(item.recordJson).assumptions) }}</p>
+              <p>{{ text(recordOf(item).assumptions) }}</p>
             </div>
           </div>
           <footer>
@@ -694,34 +695,34 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
           :key="`dep-${item.id}`"
         >
           <strong>{{
-            json(item.recordJson).package_name ||
-            json(item.recordJson).package ||
-            json(item.recordJson).dependency_metadata?.name ||
+            recordOf(item).package_name ||
+            recordOf(item).package ||
+            recordOf(item).dependency_metadata?.name ||
             item.title
           }}</strong
           ><span
             >{{
-              json(item.recordJson).dependency_metadata
+              recordOf(item).dependency_metadata
                 ?.ecosystem ||
-              json(item.recordJson).package_ecosystem ||
+              recordOf(item).package_ecosystem ||
               "—"
             }}
             ·
             {{
-              json(item.recordJson).dependency_metadata
+              recordOf(item).dependency_metadata
                 ?.installed_version ||
-              json(item.recordJson).installed_version ||
+              recordOf(item).installed_version ||
               "—"
             }}</span
           ><b
-            >{{ json(item.recordJson).cve || tr("无 CVE", "No CVE") }} · CVSS
-            {{ json(item.recordJson).cvss ?? "—" }}</b
+            >{{ recordOf(item).cve || tr("无 CVE", "No CVE") }} · CVSS
+            {{ recordOf(item).cvss ?? "—" }}</b
           ><em
             >{{ tr("修复版本", "Fixed version") }}
             {{
-              json(item.recordJson).dependency_metadata
+              recordOf(item).dependency_metadata
                 ?.fixed_version ||
-              json(item.recordJson).fixed_version ||
+              recordOf(item).fixed_version ||
               "—"
             }}</em
           >

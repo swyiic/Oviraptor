@@ -21,12 +21,16 @@ const unavailable = ref(false);
 const loading = ref(false);
 const saving = ref(false);
 const error = ref('');
+const advancedOpen = ref(false);
 
-const form = ref({ enabled: false, command: 'jev-studio', argsText: '' });
+// apiKey is write-only: the server never returns the value, so the field
+// always starts empty and is cleared again after a save. Leaving it blank
+// keeps whatever key is already configured.
+const form = ref({ enabled: false, apiKey: '', command: 'jev-studio', argsText: '' });
 
 function applyStatus(next: McpJevStatus) {
   status.value = next;
-  form.value = { enabled: next.enabled, command: next.command || 'jev-studio', argsText: next.args.join(' ') };
+  form.value = { enabled: next.enabled, apiKey: '', command: next.command || 'jev-studio', argsText: next.args.join(' ') };
 }
 
 async function load() {
@@ -49,7 +53,8 @@ async function save() {
   saving.value = true; error.value = '';
   try {
     const args = form.value.argsText.split(/\s+/).map(part => part.trim()).filter(Boolean);
-    applyStatus(await client.value.setMcpJev({ enabled: form.value.enabled, command: form.value.command.trim() || 'jev-studio', args }));
+    const key = form.value.apiKey.trim();
+    applyStatus(await client.value.setMcpJev({ enabled: form.value.enabled, command: form.value.command.trim() || 'jev-studio', args, ...(key ? { apiKey: key } : {}) }));
   } catch (e) { error.value = String((e as Error).message || e); }
   finally { saving.value = false; }
 }
@@ -85,10 +90,19 @@ onMounted(init);
         <p class="mcp-desc">{{ tr('jev 是一个决策引擎(pip 装的 jev-studio),通过 MCP stdio 把它的决策工具(如 Choice/Score)交给 agent,前缀 jev_。', 'jev is a decision engine (pip-installed jev-studio) that exposes its decision tools (e.g. Choice/Score) to the agent over MCP stdio, prefixed jev_.') }}</p>
         <form class="mcp-form" @submit.prevent="save">
           <label class="mcp-toggle"><input v-model="form.enabled" type="checkbox" />{{ tr('启用 jev 决策连接器', 'Enable the jev decision connector') }}</label>
-          <div class="mcp-row">
-            <label class="mcp-field">{{ tr('命令', 'Command') }}<input v-model="form.command" placeholder="jev-studio" /></label>
-            <label class="mcp-field">{{ tr('参数（空格分隔，可选）', 'Args (space separated, optional)') }}<input v-model="form.argsText" :placeholder="tr('例如：--config ./jev.toml', 'e.g. --config ./jev.toml')" /></label>
-          </div>
+          <label class="mcp-field">
+            {{ tr('API Key（TypeSafe）', 'API Key (TypeSafe)') }}
+            <span class="mcp-key-state" :data-set="!!status?.hasApiKey">{{ status?.hasApiKey ? tr('已设置', 'Set') : tr('未设置', 'Not set') }}</span>
+            <input v-model="form.apiKey" type="password" autocomplete="off" :placeholder="status?.hasApiKey ? tr('留空则不变', 'Leave blank to keep the current key') : tr('粘贴 TypeSafe 控制台的 key', 'Paste the key from the TypeSafe console')" />
+          </label>
+          <p class="mcp-help">{{ tr('填 TypeSafe 控制台的 key，会以 TYPESAFE_API_KEY 注入 jev-studio 进程', 'Enter the key from the TypeSafe console; it is injected into the jev-studio process as TYPESAFE_API_KEY') }}</p>
+          <details class="mcp-advanced" :open="advancedOpen" @toggle="advancedOpen=($event.target as HTMLDetailsElement).open">
+            <summary>{{ tr('高级', 'Advanced') }}</summary>
+            <div class="mcp-row">
+              <label class="mcp-field">{{ tr('命令', 'Command') }}<input v-model="form.command" placeholder="jev-studio" /></label>
+              <label class="mcp-field">{{ tr('参数（空格分隔，可选）', 'Args (space separated, optional)') }}<input v-model="form.argsText" :placeholder="tr('例如：--config ./jev.toml', 'e.g. --config ./jev.toml')" /></label>
+            </div>
+          </details>
           <button class="button primary compact" type="submit" :disabled="saving">{{ saving ? tr('保存中…', 'Saving…') : tr('保存', 'Save') }}</button>
         </form>
         <p v-if="status?.state === 'error' && status.error" class="mcp-error" role="alert">{{ status.error }}</p>
@@ -121,6 +135,12 @@ onMounted(init);
 .mcp-row{display:flex;gap:10px;flex-wrap:wrap}
 .mcp-field{display:flex;flex-direction:column;gap:5px;font-size:11px;color:var(--app-muted,#687078);flex:1;min-width:160px}
 .mcp-field input,.mcp-toggle input[type="text"]{font-size:12px;padding:6px 9px;border:1px solid var(--line,#e1e3e7);border-radius:7px;background:var(--app-surface,#fff);color:inherit;width:100%;box-sizing:border-box;font-family:inherit}
+.mcp-key-state{margin-left:6px;font-size:var(--text-micro);font-weight:600;color:var(--app-muted,#687078)}
+.mcp-key-state[data-set="true"]{color:var(--green,#3f8f5a)}
+.mcp-help{margin:0;font-size:11px;color:var(--app-muted,#687078);line-height:1.6}
+.mcp-advanced{font-size:12px}
+.mcp-advanced>summary{cursor:pointer;color:var(--app-muted,#687078);width:fit-content}
+.mcp-advanced>.mcp-row{margin-top:8px}
 .mcp-error{color:var(--red,#b63f3f);font-size:12px;overflow-wrap:anywhere;margin:4px 0 0}
 .mcp-tools{margin-top:12px;font-size:12px}
 .mcp-tools strong{font-size:var(--text-micro);color:var(--app-muted,#687078);font-weight:600}

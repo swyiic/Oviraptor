@@ -136,7 +136,7 @@ let messageGeneration = 0;
 let disposed = false;
 const error = ref("");
 const transcript = ref<HTMLElement>();
-const followingTail = ref(true), unreadBelow = ref(false), loadingMessages = ref(false), loadingEarlier = ref(false), hasEarlier = ref(false), discoveryPanelOpen = ref(false), workspacePanelOpen = ref(false);
+const followingTail = ref(true), unreadBelow = ref(false), loadingMessages = ref(false), loadingEarlier = ref(false), hasEarlier = ref(false), discoveryPanelOpen = ref(false), workspacePanelOpen = ref(false), chainPanelOpen = ref(false);
 let earlierCursor: string | undefined, historyLoaded = false;
 let messageLoad: {id:string;projectId:number;promise:Promise<void>} | undefined;
 function observeTranscript(){const el=transcript.value;if(el){followingTail.value=el.scrollHeight-el.scrollTop-el.clientHeight<80;if(followingTail.value)unreadBelow.value=false;}}
@@ -631,7 +631,7 @@ const stop = props.client.events(handleEvent);
 onBeforeUnmount(() => { ++permissionGeneration; disposed = true; ++projectGeneration; ++messageGeneration; stop(); });
 watch(() => [props.projectName, props.projectId, props.personal], () => void loadProject(), { immediate: true, flush: "sync" });
 watch(running, value => { if (!value) heartbeat.value = undefined; });
-watch(selectedId, (id,previous) => { if(previous)conversationDrafts.set(previous,draft.value);++messageGeneration;messageLoad=undefined;messages.value=[];loadingMessages.value=false;loadingEarlier.value=false;historyLoaded=false;earlierCursor=undefined;hasEarlier.value=false;followingTail.value=true;unreadBelow.value=false;error.value='';discoveryPanelOpen.value=!!props.draftRequest?.analysis;workspacePanelOpen.value=false;draft.value=id?conversationDrafts.get(id)||"":""; permissionsOpen.value = false; ++permissionGeneration; resetActivity(); task.value = null; cancellingChildren.value = []; grantPrompt.value = null; runtimePermission.value = null; running.value = false; void loadMessages(); void loadChain(); void restoreStatus(); }, { flush: "sync" });
+watch(selectedId, (id,previous) => { if(previous)conversationDrafts.set(previous,draft.value);++messageGeneration;messageLoad=undefined;messages.value=[];loadingMessages.value=false;loadingEarlier.value=false;historyLoaded=false;earlierCursor=undefined;hasEarlier.value=false;followingTail.value=true;unreadBelow.value=false;error.value='';discoveryPanelOpen.value=!!props.draftRequest?.analysis;workspacePanelOpen.value=false;chainPanelOpen.value=false;draft.value=id?conversationDrafts.get(id)||"":""; permissionsOpen.value = false; ++permissionGeneration; resetActivity(); task.value = null; cancellingChildren.value = []; grantPrompt.value = null; runtimePermission.value = null; running.value = false; void loadMessages(); void loadChain(); void restoreStatus(); }, { flush: "sync" });
 watch([()=>props.draftRequest,loadingProject,running,continuingTask,hostProjectId],()=>void applyDiscoveryDraft(),{immediate:true});
 watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{immediate:true});
 </script>
@@ -643,7 +643,7 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
       <button type="button" class="ahc-side-new" :disabled="loadingProject" @click="newConversation"><Plus :size="16" />{{ tr('新对话', 'New chat') }}</button>
       <label class="ahc-history-search"><Search :size="14" /><input v-model="historyQuery" type="search" :placeholder="tr('搜索对话', 'Search chats')" :aria-label="tr('搜索对话', 'Search chats')" /><button type="button" :aria-label="tr('查找全部会话','Find all conversations')" title="⌘K / Ctrl+K" @click="finderOpen=true">⌘K</button></label>
       <div class="ahc-history-heading"><span>{{ tr('对话', 'Chats') }}</span><button type="button" @click="finderOpen=true">{{tr(`全部 ${conversations.length}`,`All ${conversations.length}`)}}</button></div>
-      <ConversationHistoryList :items="recentConversations" :selected-id="selectedId" :project-id="hostProjectId" :loading="loadingProject" :deleting-disabled="running||continuingTask" :empty-label="historyQuery?tr('没有匹配的对话','No matching chats'):tr('新对话会显示在这里','Your chats appear here')" :update-conversation="updateHistoryConversation" :reveal-conversation="revealHistoryConversation" :remove-conversation="removeConversation" :personal="personal" :attach-conversation="attachHistoryConversation" :attach-targets="attachTargets" @select="selectedId=$event"/>
+      <ConversationHistoryList :items="recentConversations" :selected-id="selectedId" :project-id="hostProjectId" :loading="loadingProject" :running-conversation-id="(running||continuingTask)?selectedId:undefined" :empty-label="historyQuery?tr('没有匹配的对话','No matching chats'):tr('新对话会显示在这里','Your chats appear here')" :update-conversation="updateHistoryConversation" :reveal-conversation="revealHistoryConversation" :remove-conversation="removeConversation" :personal="personal" :attach-conversation="attachHistoryConversation" :attach-targets="attachTargets" @select="selectedId=$event"/>
     </nav>
   </Teleport>
   <ConversationFinder v-model:open="finderOpen" v-model:query="historyQuery" :items="finderConversations" :selected-id="selectedId" :project-name="projectName" :loading="loadingProject" @select="findConversation"/>
@@ -664,6 +664,16 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
       <div class="ahc-column">
       <details v-if="selectedId&&hostProjectId" class="ahc-discovery-details" :open="discoveryPanelOpen" @toggle="discoveryPanelOpen=($event.target as HTMLDetailsElement).open"><summary>{{tr('项目资产发现','Project asset discovery')}}</summary><DiscoveryAssistPanel v-if="discoveryPanelOpen" :client="client" :conversation-id="selectedId" :project-id="hostProjectId" :refresh-key="task?.revision" /></details>
       <details v-if="selectedId" class="ahc-discovery-details" :open="workspacePanelOpen" @toggle="workspacePanelOpen=($event.target as HTMLDetailsElement).open"><summary>{{tr('产物与脚本 · 报告','Artifacts, scripts & report')}}</summary><AgentWorkspacePanel v-if="workspacePanelOpen" :client="client" :conversation-id="selectedId" /></details>
+      <details v-if="chainHops.length" class="ahc-discovery-details ahc-chain" :open="chainPanelOpen" @toggle="chainPanelOpen=($event.target as HTMLDetailsElement).open">
+        <summary><Search :size="12" /> {{ tr('本轮访问来源', 'Sources accessed this turn') }} <span class="ahc-chain-count">{{ chainHops.length }}</span></summary>
+        <ul :aria-label="tr('访问来源记录（读取记录，非选项）', 'Access log (read record, not options)')">
+          <li v-for="hop in chainHops" :key="hop.id">
+            <b>{{ hop.factLabel }}</b>
+            <span v-if="hop.factValue" :title="hop.factValue">{{ hop.factValue }}</span>
+            <small>{{ hop.source }} · {{ hop.opensNext ? tr('可继续读取', 'resumable') : tr('已到末尾', 'end') }}</small>
+          </li>
+        </ul>
+      </details>
       <button v-if="hasEarlier" type="button" class="text-button" :disabled="loadingEarlier" @click="loadEarlierMessages">{{loadingEarlier?tr('读取中…','Loading…'):tr('加载更早消息','Load earlier messages')}}</button>
       <p v-if="loadingMessages&&!messages.length" role="status">{{tr('正在读取此会话…','Loading this conversation…')}}</p>
       <p v-if="!messages.length" class="ahc-empty">{{ tr(`当前模型：${header || '尚未选择'}。权限不足时会说明用途；已保存的授权会在原范围内复用。`, `Model: ${header || 'not selected'}. Missing permissions are explained; saved grants are reused within their scope.`) }}</p>
@@ -739,16 +749,6 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
     </div>
     <div v-if="runtimePermission" class="ahc-grant" role="dialog" :aria-label="tr('运行时授权','Runtime permission')"><strong>{{tr('请审核运行时操作','Review runtime operation')}}</strong><p>{{runtimePermission.description}}</p><footer><button v-for="option in runtimePermission.options" :key="option.id" type="button" class="button secondary compact" @click="decidePermission(option.id)">{{option.label}}</button></footer></div>
     <p v-if="!connected" class="ahc-connection" role="status">{{tr('连接中断，正在重连。已运行的任务状态会重新核实。','Connection lost. Reconnecting and checking the running task.')}}</p>
-    <details v-if="chainHops.length" class="ahc-chain" open>
-      <summary><Search :size="12" /> {{ tr('本轮访问来源', 'Sources accessed this turn') }} <span class="ahc-chain-count">{{ chainHops.length }}</span></summary>
-      <ul :aria-label="tr('访问来源记录（读取记录，非选项）', 'Access log (read record, not options)')">
-        <li v-for="hop in chainHops" :key="hop.id">
-          <b>{{ hop.factLabel }}</b>
-          <span v-if="hop.factValue" :title="hop.factValue">{{ hop.factValue }}</span>
-          <small>{{ hop.source }} · {{ hop.opensNext ? tr('可继续读取', 'resumable') : tr('已到末尾', 'end') }}</small>
-        </li>
-      </ul>
-    </details>
     <div class="ahc-compose-dock">
     <form class="ahc-composer" @submit.prevent="send">
       <textarea ref="composerInput" v-model="draft" rows="1" :disabled="loadingProject" :placeholder="running ? tr('输入插话：会在下一步带入当前回复', 'Steer: injected before the next step') : tr('问点什么…（Enter 发送，Shift+Enter 换行）', 'Ask anything… (Enter to send)')" @keydown="onComposerKeydown" />
@@ -862,11 +862,9 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
 .ahc-remember input { flex:0 0 auto; width:16px; height:16px; margin:2px 0 0; }
 @media(max-width:900px){.agent-host-chat-transcript{padding:16px}.ahc-model .ahc-select{max-width:240px}}
 
-.ahc-chain{width:min(800px,calc(100% - 40px));margin:0 auto 4px;font-size:12px;line-height:1.5}
-.ahc-chain>summary{display:flex;align-items:center;gap:6px;cursor:pointer;color:var(--muted,#666);font-size:11px;padding:4px 0;list-style:none}
-.ahc-chain>summary::-webkit-details-marker{display:none}
+.ahc-chain>summary{display:flex;align-items:center;gap:6px}
 .ahc-chain-count{color:var(--muted,#999);font-weight:400}
-.ahc-chain ul{list-style:none;margin:0;padding:0}
+.ahc-chain ul{list-style:none;margin:0;padding:0;max-height:38vh;overflow:auto}
 .ahc-chain li{display:grid;gap:2px;padding:6px 0;border-top:1px solid var(--line,#e6e6e6)}
 .ahc-chain b{font-weight:600}
 .ahc-chain span,.ahc-chain small{overflow-wrap:anywhere;color:var(--muted,#666)}
