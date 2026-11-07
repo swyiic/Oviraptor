@@ -52,6 +52,9 @@ import {
   verifyBeforeEnd,
   qualifyUnverifiedEnd,
   publicInnerState,
+  finishTurnDecision,
+  FORCED_CONTINUE_BUDGET,
+  toolSetAnnouncement,
 } from './agent-state.mjs';
 import { admitContext, resolveModelCapability } from './workflow-guard.mjs';
 import { compressSessionMessages } from './memory.mjs';
@@ -80,6 +83,14 @@ const isDeepSeekModel = model => /deepseek/i.test(String(model || ''));
 const isXaiBase = base => { try { return new URL(base).origin === 'https://api.x.ai'; } catch { return false; } };
 const isDeepSeekBase = base => { try { return new URL(base).origin === DEEPSEEK_BASE_URL; } catch { return false; } };
 const isXaiOAuthEndpoint = (provider, baseUrl) => provider === 'xai' && String(baseUrl || '').replace(/\/+$/, '') === PROVIDERS.xai.baseUrl;
+// How many times a single model HTTP turn retries on a TRANSIENT connection/timeout/429/5xx
+// error before giving up (only when nothing streamed yet). Smooths "连接不稳定" under the
+// high request volume the autonomy changes produce, without masking a real outage.
+export const MODEL_TRANSIENT_RETRIES = 2;
+// When every tool call a step proposes is an exact twice-failed repeat, give the model this
+// many chances to PIVOT to a different approach (with a strong nudge) before declaring the
+// turn stalled. Stops the agent quitting the instant it first repeats itself; still bounded.
+export const ALL_BLOCKED_PIVOT_BUDGET = 2;
 /** Keep provider, baseUrl and model consistent: a DeepSeek model never rides the xAI endpoint. */
 export function normalizeProviderModel(input = {}) {
   const out = { ...input };
@@ -1405,30 +1416,60 @@ export class OpenAiCompatibleRuntime {
     if (session.conversationId) this.host?.beginModelUsage?.(session.conversationId, { requestId, runId: session.runId, api, model: session.config.model });
     return requestId;
   }
-  /** One model HTTP turn; on 401, ask host to refresh OAuth once and retry if no text yet. */
+  /**
+   * One model HTTP turn. On 401 (xAI OAuth) refresh once and retry. On a TRANSIENT
+   * connection/timeout/429/5xx error — the cause of "连接不稳定" when the agent now makes
+   * many sequential requests — retry with bounded backoff, but ONLY when nothing streamed
+   * yet (no double-billing a partial answer) and the user did not cancel. A blip no longer
+   * drops the whole task.
+   */
   async #modelTurn(session, tools, { toolChoice, onText } = {}) {
     const attempt = async () => (session.options.useResponsesApi
       ? await this.#responsesTurn(session, tools, { toolChoice, onText })
       : await this.#chatTurn(session, tools, { toolChoice, onText }));
-    try {
-      return await attempt();
-    } catch (error) {
-      const unauthorized = error?.code === 'host_provider_unauthorized';
-      if (!unauthorized || session._authRetried || !this.host?.ensureOAuthAccess) throw error;
-      if (session.config.authentication !== 'oauth' || !isXaiOAuthEndpoint(session.config.provider, session.config.baseUrl)) throw error;
-      // Only retry when nothing streamed yet (avoid double-billing partial answers).
-      if (session._producedText) throw error;
-      session._authRetried = true;
+    const isTransient = (error) => {
+      if (!error) return false;
+      const name = error.name || '';
+      // A timeout from AbortSignal.timeout counts; a user cancel (session.abort) does not.
+      if ((name === 'AbortError' || name === 'TimeoutError') && !session.abort?.signal?.aborted) return true;
+      const code = String(error.code || error.cause?.code || '');
+      if (['ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED', 'EPIPE', 'ENETUNREACH', 'ENETDOWN', 'EAI_AGAIN', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT'].includes(code)) return true;
+      const msg = `${error.message || ''} ${error.cause?.message || ''}`;
+      if (/fetch failed|socket hang up|network error|timed? ?out|terminated|other side closed|connection (?:reset|closed|refused|aborted)|read ECONNRESET/i.test(msg)) return true;
+      const status = Number(error.httpStatus ?? error.status ?? error.statusCode ?? 0);
+      return [429, 500, 502, 503, 504].includes(status);
+    };
+    let transientRetries = 0;
+    for (;;) {
       try {
-        const refreshed = await this.host.ensureOAuthAccess({ force: true });
-        const selected = this.host.providerStore?.read?.() ?? refreshed;
-        if (selected?.authentication !== 'oauth' || !isXaiOAuthEndpoint(selected.provider, selected.baseUrl) || !selected.accessToken) throw error;
-        session.config.apiKey = selected.accessToken;
-        if (this.config.authentication === 'oauth' && isXaiOAuthEndpoint(this.config.provider, this.config.baseUrl)) this.config.apiKey = selected.accessToken;
-      } catch {
+        return await attempt();
+      } catch (error) {
+        // 401 (xAI OAuth): refresh once and retry, only if nothing streamed yet.
+        const unauthorized = error?.code === 'host_provider_unauthorized';
+        if (unauthorized && !session._authRetried && this.host?.ensureOAuthAccess
+          && session.config.authentication === 'oauth' && isXaiOAuthEndpoint(session.config.provider, session.config.baseUrl)
+          && !session._producedText) {
+          session._authRetried = true;
+          try {
+            const refreshed = await this.host.ensureOAuthAccess({ force: true });
+            const selected = this.host.providerStore?.read?.() ?? refreshed;
+            if (selected?.authentication !== 'oauth' || !isXaiOAuthEndpoint(selected.provider, selected.baseUrl) || !selected.accessToken) throw error;
+            session.config.apiKey = selected.accessToken;
+            if (this.config.authentication === 'oauth' && isXaiOAuthEndpoint(this.config.provider, this.config.baseUrl)) this.config.apiKey = selected.accessToken;
+          } catch { throw error; }
+          continue;
+        }
+        // Transient connection/timeout/429/5xx: bounded backoff retry (no partial stream, not cancelled).
+        if (!session._producedText && transientRetries < MODEL_TRANSIENT_RETRIES && !session.abort?.signal?.aborted && isTransient(error)) {
+          transientRetries += 1;
+          const backoff = Math.min(4000, 500 * Math.pow(3, transientRetries - 1)) + Math.floor(Math.random() * 250);
+          try { this.onEvent?.({ type: 'model.transient_retry', attempt: transientRetries, max: MODEL_TRANSIENT_RETRIES, reason: String(error?.message || error?.code || 'transient').slice(0, 120) }); } catch { /* best effort */ }
+          await new Promise(resolve => setTimeout(resolve, backoff));
+          if (session.abort?.signal?.aborted) throw hostError('host_reply_cancelled');
+          continue;
+        }
         throw error;
       }
-      return await attempt();
     }
   }
 
@@ -1449,6 +1490,7 @@ export class OpenAiCompatibleRuntime {
     session.abort = new AbortController();
     session._authRetried = false;
     session._producedText = false;
+    session._allBlockedPivots = 0;
     session.httpAttempts = 0;
     const fullPrompt = typeof prompt === 'string' ? prompt : JSON.stringify(prompt);
     // Goal must be the user's raw question — never the whole turn prompt blob.
@@ -1613,6 +1655,12 @@ export class OpenAiCompatibleRuntime {
     let cleanupHint = false;
     let apiUsed = options.useResponsesApi ? 'responses' : 'chat';
     let stepLimit = options.maxSteps;
+    // Pi-inspired loop mechanics (grant no authority; see agent-state.mjs):
+    // finishTurn force-continue budget, and the tool-set the model was last told.
+    let forcedContinues = 0;
+    let forcedContinueReason = null;
+    let toolSetAnnouncements = 0;
+    let announcedToolNames = null;
     try {
       for (let step = 0; step < stepLimit; step++) {
         if (session.abort.signal.aborted) throw hostError('host_reply_cancelled');
@@ -1629,6 +1677,19 @@ export class OpenAiCompatibleRuntime {
           session.messages=session.messages.filter(message=>!message._hostAuthorizationContext);
           session.messages.push({role:'user',_hostAuthorizationContext:true,content:`Host: 最新 tools/list 已实际提供这些业务工具：${JSON.stringify(restoredAppTools.map(tool=>tool._hostName))}。原先相应权限缺口已由 Host 核验更新，不要再把旧拒绝当作当前限制；只用当前 schema，实际执行仍由 Host 和业务 owner 复核，不重发已发送或结果未知的控制。${unavailableThisTurn.size?`仍不可用且本轮不重复询问：${JSON.stringify([...unavailableThisTurn])}。`:''}`});
         }
+        // Task 2: announce a mid-conversation tool-set change so the model stops
+        // falsely concluding it has no execution tools after a grant unlocks them.
+        // Diff the raw granted list (real authority), not the turn-narrowed list.
+        const currentToolNames = grantedTools.map(tool => tool._hostName);
+        if (announcedToolNames !== null) {
+          const announcement = toolSetAnnouncement(announcedToolNames, currentToolNames, { exclude: restoredAppTools.map(tool => tool._hostName) });
+          if (announcement) {
+            session.messages.push({ role: 'user', _hostAuthorizationContext: true, content: announcement.message });
+            toolSetAnnouncements += 1;
+            emitInner('model', '工具集有变化，已告知模型');
+          }
+        }
+        announcedToolNames = currentToolNames;
         let tools = grantedTools.filter(tool => !matchesToolRestriction(tool._hostName, unavailableThisTurn));
         const readOnlyTurn=isReadOnlyDataRequest(goalText);
         if(readOnlyTurn){
@@ -1991,6 +2052,36 @@ export class OpenAiCompatibleRuntime {
               harness: session.harness,
             };
           }
+          // Task 1: finishTurn completion policy. On a clean end-of-turn, force
+          // one more model request (bounded by FORCED_CONTINUE_BUDGET) when an
+          // in-scope autonomous analysis task did real work but produced no
+          // deliverable and did not end by asking the user or hitting a scope
+          // boundary. Cancellation and every existing stop still take precedence:
+          // this runs only after the no-tool-calls guards above have declined.
+          if (!session.abort.signal.aborted) {
+            const decision = finishTurnDecision({
+              answerMode: options.answerMode,
+              goalText,
+              usedToolThisPrompt,
+              toolResultsThisPrompt,
+              assistantText: turn.text || '',
+              readOnlyTurn,
+              scopeBoundary: unavailableThisTurn.size > 0 || authorizationAttempted.size > 0,
+              forcedContinuesUsed: forcedContinues,
+              budget: FORCED_CONTINUE_BUDGET,
+              cancelled: session.abort.signal.aborted,
+            });
+            if (decision.continue) {
+              forcedContinues += 1;
+              forcedContinueReason = decision.reason;
+              stepLimit = Math.max(stepLimit, step + 2);
+              emitInner('hold', '任务还没产出成果，再推进一步');
+              emit({ type: 'tool_call', toolCallId: `finish-${step}`, title: '继续完成任务', status: 'in_progress' });
+              emit({ type: 'tool_update', toolCallId: `finish-${step}`, title: '继续完成任务', status: 'completed', summary: decision.reason });
+              session.messages.push({ role: 'user', content: decision.hint });
+              continue;
+            }
+          }
           emitInner('done');
           return {
             stopReason: turn.finishReason === 'length' ? 'max_tokens' : turn.finishReason === 'content_filter' ? 'refusal' : 'end_turn',
@@ -2002,6 +2093,7 @@ export class OpenAiCompatibleRuntime {
             metrics: {
               toolSelection, firstTextMs, firstToolMs, totalMs: performance.now() - started,
               forcedToolHint, forcedEmptyBlock, forcedVerifier,
+              forcedContinues, forcedContinueReason, toolSetAnnouncements,
               api: apiUsed, reasoningEffort: options.reasoningEffort,
               messageCount: session.messages.length,
             },
@@ -2135,7 +2227,16 @@ export class OpenAiCompatibleRuntime {
         const suppressed = blocked.map(call => ({ id: call.id, name: call.name, ok: false, code: 'host_tool_repeat_blocked', content: JSON.stringify({ error: 'host_tool_repeat_blocked', hint: 'This exact operation failed twice. It was not executed again. Use a different applicable read or explain the gap.' }) }));
         appendResults([...results, ...suppressed]);
         if (blocked.length && !ready.length) {
-          const note = '相同工具和参数已连续失败两次，已停止重复调用。本轮未取得所需结果；请检查工具返回的错误，或改用其他查询条件。';
+          // Don't quit the instant the model first repeats itself. Give it a bounded number
+          // of chances to PIVOT to a genuinely different approach; only stall if it still has
+          // nothing new. The suppressed results above already told it these ops failed twice.
+          session._allBlockedPivots = (session._allBlockedPivots ?? 0) + 1;
+          if (session._allBlockedPivots <= ALL_BLOCKED_PIVOT_BUDGET) {
+            emitInner('hold', '同一条路走不通，换个做法');
+            session.messages.push({ role: 'user', content: 'Host: 你这一步请求的工具+参数全是已经连续失败两次的重复操作，已被拦下、没有执行——别再重复它们。任务还没完成，不要就此停下：换一个真正不同的做法（换工具、换参数/路径、仔细读上面返回的错误再据此改、或改写脚本解决根因）。只有当你确实再没有任何可行的新办法时，才用一句话写清具体卡在哪、还差什么外部条件。' });
+            continue;
+          }
+          const note = '相同工具和参数已连续失败两次，且已给过换方法的机会仍无新进展，已停止重复调用。本轮未取得所需结果；请检查工具返回的错误，或改用其他查询条件。';
           session.messages.push({ role: 'assistant', content: note });
           emitInner('done', '已停止无进展的重复调用');
           return { stopReason: 'tool_loop_stalled', replaceText: true, assistantText: note, harness: session.harness, metrics: { toolSelection, firstTextMs, firstToolMs, totalMs: performance.now() - started, api: apiUsed, suppressedCalls: blocked.length } };
@@ -2163,6 +2264,7 @@ export class OpenAiCompatibleRuntime {
           modelHttpAttempts: session.httpAttempts,
           firstTextMs, firstToolMs, totalMs: performance.now() - started,
           forcedToolHint, forcedEmptyBlock, forcedVerifier,
+          forcedContinues, forcedContinueReason, toolSetAnnouncements,
           api: apiUsed, reasoningEffort: options.reasoningEffort,
           messageCount: session.messages.length,
         },

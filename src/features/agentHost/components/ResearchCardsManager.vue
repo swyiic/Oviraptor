@@ -9,6 +9,7 @@ import { BookOpen, RefreshCw, Trash2, ShieldCheck, ShieldBan, ShieldAlert, Plus 
 import { invoke } from '@tauri-apps/api/core';
 import { onMounted, ref } from 'vue';
 import { refreshFeedback as vRefreshFeedback } from '../../../shared/directives/refreshFeedback';
+import { confirmInPlace } from '../../../shared/confirmInPlace';
 import { useI18n } from '../../../i18n';
 
 interface StrippedArtifact { kind: string; preview: string }
@@ -100,18 +101,24 @@ async function decide(id: string, approve: boolean) {
 
 async function remove(id: string) {
   if (busy.value) return;
-  if (typeof window !== 'undefined'
-    && !window.confirm(tr('删除这张技法卡?此操作不可恢复。', 'Delete this card? This cannot be undone.'))) return;
-  busy.value = true;
-  error.value = '';
-  try {
-    await invoke('delete_research_card', { id });
-    cards.value = cards.value.filter(card => card.id !== id);
-  } catch (e) {
-    error.value = String((e as Error).message || e);
-  } finally {
-    busy.value = false;
-  }
+  await confirmInPlace({
+    title: tr('删除这张技法卡？', 'Delete this card?'),
+    detail: tr('此操作不可恢复。', 'This cannot be undone.'),
+    confirmText: tr('删除', 'Delete'), busyText: tr('删除中…', 'Deleting…'), cancelText: tr('取消', 'Cancel'),
+    run: async () => {
+      if (busy.value) return;
+      busy.value = true;
+      error.value = '';
+      try {
+        await invoke('delete_research_card', { id });
+        cards.value = cards.value.filter(card => card.id !== id);
+      } catch (e) {
+        error.value = String((e as Error).message || e);
+      } finally {
+        busy.value = false;
+      }
+    },
+  });
 }
 
 function statusLabel(status: string) {

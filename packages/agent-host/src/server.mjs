@@ -120,6 +120,7 @@ export async function serveHost(host, { port = 0, uiDir, token = randomBytes(32)
         if (path === '/api/settings/network' && method === 'POST') return json(host.setNetwork(await body(request)));
         if (path === '/api/settings/provider' && method === 'POST') return json(await host.setProvider(await body(request)));
         if (path === '/api/settings/provider' && method === 'DELETE') return json(await host.clearProvider());
+        if (path === '/api/settings/provider/test' && method === 'POST') return json(await host.testProvider());
         if (path === '/api/settings/provider/oauth/start' && method === 'POST') {
           const input = await body(request).catch(() => ({}));
           return json(await host.startProviderOAuth(input ?? {}));

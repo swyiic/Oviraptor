@@ -7,7 +7,7 @@ import ConversationCodeBlock from "./ConversationCodeBlock.vue";
 import MessageCopyButton from "./MessageCopyButton.vue";
 import { messageTimestamp } from './messageTime';
 
-const props = withDefaults(defineProps<{ message: { role: "user" | "assistant"; content: string; createdAt?: string }; showActions?: boolean; files?: MessageFileReference[] }>(), { showActions: true, files: () => [] });
+const props = withDefaults(defineProps<{ message: { role: "user" | "assistant"; content: string; createdAt?: string }; showActions?: boolean; files?: MessageFileReference[]; /** Caller renders its own timestamp elsewhere (e.g. alongside its own action row). */ hideTimestamp?: boolean }>(), { showActions: true, files: () => [] });
 const emit = defineEmits<{ openFile: [path: string] }>();
 const { tr } = useI18n();
 const timestamp = computed(() => messageTimestamp(props.message.createdAt, tr('zh-CN', 'en-GB')));
@@ -54,8 +54,8 @@ const MarkdownContent = defineComponent({ setup: () => () => h("div", { class: "
 
 <template>
   <article class="conversation-message" :class="role" :aria-label="role === 'user' ? tr('你的消息', 'Your message') : tr('助手消息', 'Assistant message')">
-    <div v-if="role === 'assistant'" class="message-author"><span class="message-agent-mark" aria-hidden="true">o</span><span>Oviraptor</span><time v-if="timestamp" class="message-timestamp" :datetime="timestamp.iso" :title="timestamp.full">{{ timestamp.label }}</time></div>
-    <div v-else-if="timestamp" class="message-user-meta"><time class="message-timestamp" :datetime="timestamp.iso" :title="timestamp.full">{{ timestamp.label }}</time></div>
+    <div v-if="role === 'assistant'" class="message-author"><span class="message-agent-mark" aria-hidden="true">o</span><span>Oviraptor</span><time v-if="timestamp && !hideTimestamp" class="message-timestamp" :datetime="timestamp.iso" :title="timestamp.full">{{ timestamp.label }}</time></div>
+    <div v-else-if="timestamp && !hideTimestamp" class="message-user-meta"><time class="message-timestamp" :datetime="timestamp.iso" :title="timestamp.full">{{ timestamp.label }}</time></div>
     <p v-if="role === 'user'" class="message-user-text">{{ content }}</p>
     <MarkdownContent v-else-if="content" />
     <p v-else class="message-empty">{{ tr('空消息', 'Empty message') }}</p>

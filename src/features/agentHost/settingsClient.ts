@@ -9,11 +9,13 @@ import {
   type AgentNetworkUpdate,
 } from "./types";
 import { resolveProviderForModel, type SessionProviderId } from "./providerPresets";
+import type { ModelConnectionTest } from "./chatClient";
 
 export type SettingsFetch = typeof fetch;
 
 export type HostSettingsClient = {
   getSettings(): Promise<AgentHostSettings>;
+  testModelConnection(): Promise<ModelConnectionTest>;
   getNetwork(): Promise<AgentNetworkSettings>;
   setNetwork(input: AgentNetworkUpdate): Promise<AgentHostSettings>;
   setRuntime(runtime: AgentRuntimeId, options?: { answerMode?: AgentAnswerMode }): Promise<AgentHostSettings>;
@@ -88,6 +90,7 @@ export function createHostSettingsClient(options: {
     async getSettings() {
       return assertSettings(await request("/api/settings"));
     },
+    async testModelConnection() { return await request("/api/settings/provider/test", { method: "POST", body: "{}" }) as ModelConnectionTest; },
     async getNetwork() { return await request("/api/settings/network") as AgentNetworkSettings; },
     async setNetwork(input) {
       return assertSettings(await request("/api/settings/network", { method: "POST", body: JSON.stringify(input) }));

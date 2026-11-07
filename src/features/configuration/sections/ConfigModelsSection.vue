@@ -6,6 +6,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
 import { openAgentHostSettingsClient, type HostSettingsClient } from "../../agentHost/api";
 import type { AgentHostSettings, AgentNetworkMode, AgentOAuthStartResult } from "../../agentHost/types";
+import type { ModelConnectionTest } from "../../agentHost/chatClient";
 import { configurationApi } from "../api";
 import { createAgentModelProfile, type AgentModelProfile } from "../configProfileDefaults";
 import { cloneConfigProfileSettings, configPolicyPreviewSettings, modelConnectionSignature, type ConfigPolicyReference } from "../configProfileSections";
@@ -27,6 +28,31 @@ const testedMessage = ref(""), recoveryId = ref(""), oauth = ref<AgentOAuthStart
 const networkMode = ref<AgentNetworkMode>("system"), networkProxy = ref(""), networkNoProxy = ref("");
 const advancedBusy = ref(false), legacyId = ref<number>();
 const keychainEnabled = ref(false), keychainBusy = ref(false);
+const defaultConnTest = ref<ModelConnectionTest | null>(null), defaultConnTestBusy = ref(false);
+function connTestReasonLabel(reason?: string) {
+  return reason === "not_configured" ? tr("未配置模型", "No model configured")
+    : reason === "no_credential" ? tr("缺少凭据", "Missing credential")
+    : reason === "timeout" ? tr("连接超时", "Connection timed out")
+    : reason === "unreachable" ? tr("无法访问", "Unreachable")
+    : reason === "http_error" ? tr("接口返回错误", "API returned an error")
+    : tr("连接失败", "Connection failed");
+}
+const defaultConnTestMessage = computed(() => {
+  const result = defaultConnTest.value;
+  if (!result) return "";
+  if (result.ok) {
+    const listedNote = result.modelListed === false ? tr("；模型未出现在列表中，仍可能可用", "; model not listed, may still work") : "";
+    return tr(`已连通 ${result.model || ""}@${result.baseUrl || ""} · ${result.latencyMs ?? "—"}ms${listedNote}`, `Connected to ${result.model || ""}@${result.baseUrl || ""} · ${result.latencyMs ?? "—"}ms${listedNote}`);
+  }
+  return tr(`${connTestReasonLabel(result.reason)}：${result.error || ""}`, `${connTestReasonLabel(result.reason)}: ${result.error || ""}`);
+});
+async function testDefaultConnection() {
+  if (defaultConnTestBusy.value || !client) return;
+  defaultConnTestBusy.value = true; defaultConnTest.value = null;
+  try { defaultConnTest.value = await client.testModelConnection(); }
+  catch (reason) { defaultConnTest.value = { ok: false, error: String(reason) }; }
+  finally { defaultConnTestBusy.value = false; }
+}
 onMounted(async () => {
   try { keychainEnabled.value = await invoke<boolean>("get_credential_keychain_enabled"); } catch { /* default off */ }
 });
@@ -345,6 +371,8 @@ onMounted(() => { void loadDirectory(); });
       <span>{{tr('默认模型','Default model')}}<strong>{{defaultConnection.name}}</strong></span>
       <span class="model-state" :class="{ready:defaultSynchronized}">{{defaultSynchronized?tr('已同步','Synchronized'):tr('待同步','Sync pending')}}</span>
       <button v-if="!defaultSynchronized" class="text-button" :disabled="locked || loading" @click="selectConnection(defaultConnection.key); makeDefault=true">{{tr('核对并同步','Review and sync')}}</button>
+      <button class="text-button" :disabled="!client || defaultConnTestBusy" @click="testDefaultConnection">{{defaultConnTestBusy?tr('测试中…','Testing…'):tr('测试连接','Test connection')}}</button>
+      <span v-if="defaultConnTest" class="model-conn-test-result" :class="{ok:defaultConnTest.ok,err:!defaultConnTest.ok}">{{defaultConnTest.ok?'✓':'✗'}} {{defaultConnTestMessage}}</span>
     </div>
     <div class="models-layout">
       <aside class="model-directory" :aria-label="tr('模型目录','Model catalog')">
@@ -403,6 +431,7 @@ onMounted(() => { void loadDirectory(); });
 .models-overview{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:16px}.models-overview>div{min-width:0}.models-intro{margin:0 0 4px;font-size:var(--text-body);font-weight:600}.models-overview>.button{flex-shrink:0}
 .models-settings .button.compact{height:36px;min-height:36px;padding:0 12px;font-size:var(--text-meta);box-shadow:none;white-space:nowrap}.models-settings button:disabled{cursor:not-allowed}.models-settings button:focus-visible,.models-settings summary:focus-visible{outline:2px solid var(--blue);outline-offset:3px}
 .model-default-summary{display:flex;align-items:center;gap:10px;padding:10px 12px;margin-bottom:16px;background:var(--ui-surface-raised);border:1px solid var(--ui-line);border-radius:var(--radius-md);font-size:var(--text-meta);flex-wrap:wrap}.model-default-summary>span:first-child{display:flex;align-items:center;gap:10px;min-width:0;color:var(--ui-muted)}.model-default-summary strong{font-weight:600;color:var(--ui-ink);overflow-wrap:anywhere}.model-state{font-size:var(--text-micro);color:var(--ui-muted);border-radius:var(--radius-xs);padding:3px 7px;background:var(--ui-surface);white-space:nowrap}.model-state.ready{color:var(--green);background:color-mix(in srgb,var(--green) 9%,var(--ui-surface))}
+.model-conn-test-result{min-width:0;overflow-wrap:anywhere;font-size:var(--text-micro);flex-basis:100%}.model-conn-test-result.ok{color:var(--green)}.model-conn-test-result.err{color:var(--red)}
 .models-layout{display:grid;grid-template-columns:220px minmax(0,1fr);gap:16px;align-items:start}.model-directory{min-width:0;display:flex;flex-direction:column;gap:10px}.directory-heading{display:flex;align-items:center;justify-content:space-between;font-size:var(--text-meta);font-weight:600;padding:0 2px}.directory-heading small{font-weight:400;color:var(--ui-muted)}.model-directory-list{display:flex;flex-direction:column;gap:8px}.connection-row{width:100%;min-width:0;display:flex;flex-direction:column;gap:5px;text-align:left;background:var(--ui-surface);border:1px solid var(--ui-line);padding:12px;border-radius:var(--radius-md);color:inherit;cursor:pointer}.connection-row:hover{background:var(--ui-surface-raised)}.connection-row.active{border-color:var(--blue);background:color-mix(in srgb,var(--blue) 6%,var(--ui-surface))}.connection-title{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;width:100%;min-width:0}.connection-row strong{font-size:var(--text-body);font-weight:600;overflow-wrap:anywhere}.connection-row small{font-size:var(--text-meta);line-height:1.5;color:var(--ui-muted);overflow-wrap:anywhere}.connection-model-id{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}.connection-auth{font-size:var(--text-micro);color:var(--ui-muted)}.connection-row em{font-size:var(--text-micro);font-style:normal;background:var(--ui-surface);padding:2px 6px;border-radius:var(--radius-xs);white-space:nowrap;flex-shrink:0}
 .models-settings .model-editor{padding:16px;border:1px solid var(--ui-line);background:var(--ui-surface);border-radius:var(--radius-lg);min-width:0;box-shadow:none}.model-editor-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:16px}.model-editor-heading h3{font-size:var(--text-heading);margin:0 0 4px;line-height:1.4}.model-auth-badge{font-size:var(--text-micro);padding:4px 7px;background:var(--ui-surface-raised);border:1px solid var(--ui-line);border-radius:var(--radius-xs)}.model-editor fieldset{border:0;padding:0;margin:0;min-width:0}.model-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 16px}.model-full{grid-column:1/-1}.models-settings .field{display:flex;flex-direction:column;gap:6px;min-width:0;margin:0}.models-settings .field>span{font-size:var(--text-meta);font-weight:500;color:var(--ui-muted);line-height:1.4}.models-settings .field input,.models-settings .field select{box-sizing:border-box;height:38px;min-height:38px;width:100%;max-width:100%;min-width:0;padding:0 10px;border:1px solid var(--ui-line);border-radius:var(--radius-md);background:var(--ui-surface);color:var(--ui-ink);font-size:var(--text-body);box-shadow:none}.models-settings .field input:focus,.models-settings .field select:focus{border-color:var(--blue);outline:2px solid color-mix(in srgb,var(--blue) 18%,transparent);outline-offset:1px}.secret-input{display:flex;gap:6px;min-width:0}.secret-input input{flex:1;min-width:0}.models-settings .model-key-toggle{width:38px;height:38px;min-height:38px;flex:0 0 38px;padding:0}.model-default-toggle{display:flex;align-items:flex-start;gap:9px;margin-top:16px;padding:12px;background:var(--ui-surface-raised);border:1px solid var(--ui-line);border-radius:var(--radius-md);font-size:var(--text-meta)}.model-default-toggle input{width:15px;height:15px;flex:0 0 15px;margin:2px 0 0;accent-color:var(--blue)}.model-default-toggle>span{min-width:0;line-height:1.5;font-weight:500}.model-default-toggle small{display:block;color:var(--ui-muted);font-size:var(--text-micro);font-weight:400;margin-top:3px;line-height:1.5}.model-editor-footer{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;border-top:1px solid var(--ui-line);padding-top:14px;margin-top:16px}.model-editor-footer>.helper{flex:1 1 220px}.model-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.oauth-account{padding:12px;margin-top:14px;border:1px solid var(--ui-line);border-radius:var(--radius-md);background:var(--ui-surface-raised)}.oauth-account-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px;font-size:var(--text-body)}.oauth-account .model-actions{margin-top:10px}.oauth-account .helper+.helper{margin-top:8px}.model-inline-note{margin-top:10px!important}
 .model-test-result,.connection-results,.connection-recovery,.model-notice{padding:10px 12px;margin:12px 0 0;background:var(--ui-surface-raised);border:1px solid var(--ui-line);border-radius:var(--radius-md);font-size:var(--text-meta);line-height:1.6;overflow-wrap:anywhere}.model-test-result{color:var(--green)}.connection-results p{margin:2px 0}.connection-recovery .model-actions{margin-top:10px}.models-settings .form-error{margin:12px 0 0;font-size:var(--text-meta);line-height:1.6;overflow-wrap:anywhere}.model-advanced{margin-top:12px;border:1px solid var(--ui-line);border-radius:var(--radius-md);background:var(--ui-surface);overflow:hidden}.model-advanced summary{cursor:pointer;font-size:var(--text-meta);font-weight:500;padding:12px 14px;line-height:1.5}.model-advanced-content{display:flex;flex-direction:column;gap:14px;padding:0 14px 14px}.model-advanced-content .model-default-toggle{margin:0}.model-history-row{display:flex;align-items:flex-end;gap:10px}.model-history-row>.field{flex:1;min-width:0}

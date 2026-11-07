@@ -7,7 +7,9 @@ import type { AgentHostConversation } from '../chatClient';
 import { conversationActivityAt, conversationHistoryTime } from '../conversationHistory';
 
 const props = defineProps<{
-  items: AgentHostConversation[]; selectedId?: string; projectId?: number; loading?: boolean; deletingDisabled?: boolean; emptyLabel: string;
+  items: AgentHostConversation[]; selectedId?: string; projectId?: number; loading?: boolean;
+  /** The conversation whose task is currently running (or being continued), if any — only this row's delete/attach are disabled. */
+  runningConversationId?: string; emptyLabel: string;
   updateConversation: (id: string, patch: { title?: string; pinned?: boolean }) => Promise<void>;
   revealConversation: (id: string) => Promise<string>;
   removeConversation: (id: string) => Promise<boolean>;
@@ -57,7 +59,7 @@ function menuKey(event: KeyboardEvent) {
   buttons[next]?.focus();
 }
 async function openDialog(kind: 'rename' | 'delete' | 'attach') {
-  const item = menuItem.value; if (!item || saving.value || kind !== 'rename' && props.deletingDisabled) return;
+  const item = menuItem.value; if (!item || saving.value || kind !== 'rename' && item.id === props.runningConversationId) return;
   previousFocus = menuTrigger; dialog.value = { id: item.id, kind, title: label(item) }; titleDraft.value = item.title || ''; notice.value = ''; closeMenu();
   const generation = scopeGeneration;
   if (kind === 'attach') {
@@ -94,8 +96,8 @@ function describeError(error: unknown, action: string) {
 async function saveDialog() {
   const target = dialog.value, generation = scopeGeneration; if (!target || saving.value || !props.items.some(item => item.id === target.id)) return;
   const title = titleDraft.value.trim(); if (target.kind === 'rename' && (!title || new TextEncoder().encode(title).length > 256)) { notice.value = tr('请输入标题，最多 256 字节。', 'Enter a title of at most 256 bytes.'); return; }
-  if (target.kind === 'delete' && props.deletingDisabled) return;
-  if (target.kind === 'attach' && (props.deletingDisabled || !attachTargetId.value)) return;
+  if (target.kind === 'delete' && target.id === props.runningConversationId) return;
+  if (target.kind === 'attach' && (target.id === props.runningConversationId || !attachTargetId.value)) return;
   saving.value = true; notice.value = '';
   try {
     if (target.kind === 'rename') await props.updateConversation(target.id, { title });
@@ -111,7 +113,7 @@ async function saveDialog() {
 // Delete confirms in place, right under the chat's row (no modal).
 async function confirmDelete() {
   const item = menuItem.value, generation = scopeGeneration;
-  if (!item || saving.value || props.deletingDisabled) return;
+  if (!item || saving.value || item.id === props.runningConversationId) return;
   const row = listElement.value?.querySelector(`[data-chat-id="${CSS.escape(item.id)}"]`) || null;
   closeMenu();
   const title = label(item);
@@ -121,7 +123,7 @@ async function confirmDelete() {
     detail: tr('项目资产和工作区文件会保留。', 'Project assets and workspace files will be retained.'),
     confirmText: tr('删除', 'Delete'), busyText: tr('删除中…', 'Deleting…'), cancelText: tr('取消', 'Cancel'),
     run: async () => {
-      if (props.deletingDisabled || !props.items.some(entry => entry.id === item.id)) return;
+      if (item.id === props.runningConversationId || !props.items.some(entry => entry.id === item.id)) return;
       saving.value = true; notice.value = '';
       try {
         if (!await props.removeConversation(item.id)) throw Error(tr('删除未完成', 'Deletion did not complete'));
@@ -171,8 +173,8 @@ onBeforeUnmount(() => { disposed = true; ++scopeGeneration; if (typeof window !=
       <button type="button" role="menuitem" :disabled="saving" @click="openDialog('rename')"><Pencil :size="15"/>{{tr('重命名','Rename')}}</button>
       <button type="button" role="menuitem" :disabled="saving" @click="togglePin"><PinOff v-if="menuItem.pinned" :size="15"/><Pin v-else :size="15"/>{{menuItem.pinned?tr('取消置顶','Unpin'):tr('置顶','Pin')}}</button>
       <button type="button" role="menuitem" :disabled="saving" :title="tr('显示此项目共享的 Agent 工作区','Reveal the Agent workspace shared by this project')" @click="reveal"><FolderOpen :size="15"/>{{saving?tr('正在处理…','Working…'):tr('在 Finder 中显示工作区','Reveal workspace in Finder')}}</button>
-      <button v-if="personal" type="button" role="menuitem" :disabled="saving||deletingDisabled" :title="tr('向前重挂：之后使用目标工作空间的记忆与预算；历史证据留在原处','Forward-only: it will use the target workspace’s memory and budget from here on; past evidence stays put')" @click="openDialog('attach')"><FolderInput :size="15"/>{{tr('挂到工作空间…','Attach to workspace…')}}</button>
-      <button type="button" role="menuitem" class="danger" :disabled="saving||deletingDisabled" @click="confirmDelete"><Trash2 :size="15"/>{{tr('删除对话…','Delete chat…')}}</button>
+      <button v-if="personal" type="button" role="menuitem" :disabled="saving||menuItem.id===runningConversationId" :title="tr('向前重挂：之后使用目标工作空间的记忆与预算；历史证据留在原处','Forward-only: it will use the target workspace’s memory and budget from here on; past evidence stays put')" @click="openDialog('attach')"><FolderInput :size="15"/>{{tr('挂到工作空间…','Attach to workspace…')}}</button>
+      <button type="button" role="menuitem" class="danger" :disabled="saving||menuItem.id===runningConversationId" @click="confirmDelete"><Trash2 :size="15"/>{{tr('删除对话…','Delete chat…')}}</button>
     </div>
     <div v-if="dialog" class="chat-history-dialog-backdrop" @click.self="closeDialog">
       <form ref="dialogElement" class="chat-history-dialog" role="dialog" aria-modal="true" :aria-label="dialog.kind==='rename'?tr('重命名会话','Rename chat'):dialog.kind==='attach'?tr('挂到工作空间','Attach to workspace'):tr('删除会话','Delete chat')" @keydown="dialogKey" @submit.prevent="saveDialog">
@@ -188,7 +190,7 @@ onBeforeUnmount(() => { disposed = true; ++scopeGeneration; if (typeof window !=
         </template>
         <p v-else>{{tr(`删除“${dialog.title}”的聊天记录？项目资产和工作区文件会保留。`,`Delete the chat history for “${dialog.title}”? Project assets and workspace files will be retained.`)}}</p>
         <p v-if="notice" class="chat-history-dialog-notice" role="status">{{notice}}</p>
-        <footer><button type="button" :disabled="saving" @click="closeDialog">{{tr('取消','Cancel')}}</button><button type="submit" :disabled="saving||(dialog.kind==='rename'&&!titleDraft.trim())||(dialog.kind==='delete'&&deletingDisabled)||(dialog.kind==='attach'&&(deletingDisabled||!attachTargetId))" :class="{danger:dialog.kind==='delete',primary:dialog.kind==='rename'||dialog.kind==='attach'}">{{saving?tr('保存中…','Saving…'):dialog.kind==='rename'?tr('保存标题','Save title'):dialog.kind==='attach'?tr('挂到工作空间','Attach'):tr('删除对话','Delete chat')}}</button></footer>
+        <footer><button type="button" :disabled="saving" @click="closeDialog">{{tr('取消','Cancel')}}</button><button type="submit" :disabled="saving||(dialog.kind==='rename'&&!titleDraft.trim())||(dialog.kind==='delete'&&dialog.id===runningConversationId)||(dialog.kind==='attach'&&(dialog.id===runningConversationId||!attachTargetId))" :class="{danger:dialog.kind==='delete',primary:dialog.kind==='rename'||dialog.kind==='attach'}">{{saving?tr('保存中…','Saving…'):dialog.kind==='rename'?tr('保存标题','Save title'):dialog.kind==='attach'?tr('挂到工作空间','Attach'):tr('删除对话','Delete chat')}}</button></footer>
       </form>
     </div>
   </Teleport>

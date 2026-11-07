@@ -1101,8 +1101,19 @@ function vulnerabilityUpdateHistory(item: SentinelFinding) {
   const history = data.update_history || data.updateHistory;
   return Array.isArray(history) ? history : [];
 }
+// Parsing record_json is uncached JSON.parse; sourceFindingRows can be large
+// and sourceLocations()/this map are each called many times per finding per
+// render (results index + evidence cards), so this parses each finding once.
+const sourceRecordById = computed(() => {
+  const map = new Map<number, any>();
+  for (const item of sourceFindingRows.value) if (!map.has(item.id)) map.set(item.id, json(item.recordJson));
+  return map;
+});
+function recordOf(item: SentinelFinding) {
+  return sourceRecordById.value.get(item.id) ?? json(item.recordJson);
+}
 function sourceLocations(item: SentinelFinding) {
-  const data = json(item.recordJson);
+  const data = recordOf(item);
   const nested = Array.isArray(data.code_locations)
     ? data.code_locations
     : data.code_location
@@ -1124,7 +1135,7 @@ const sourceLocationRows = computed(() =>
   sourceFindingRows.value.flatMap((item) =>
     sourceLocations(item).map((location: any) => ({
       item,
-      data: json(item.recordJson),
+      data: recordOf(item),
       location,
     })),
   ),
@@ -2805,6 +2816,7 @@ onUnmounted(() => {
       <template #process="{ scanId: dialogTaskId }">
         <div v-if="selected && selected.id === dialogTaskId" class="process-stack">
           <NativeRunStatus v-if="selected.scanType === 'web'" class="agent-workspace" :scan-id="selected.id" :attempt="selected.attemptCount" :status="selected.status" @attempt-closed="onAttemptClosed" @prepare-handoff="prepareClosureHandoff" />
+          <AgentFindingsPanel :project-id="sourceAuditProjectId" />
           <section class="process-panel">
             <header class="process-panel-head">
               <div>
@@ -3344,6 +3356,7 @@ onUnmounted(() => {
                 :rescan="rescan"
                 :resume-scan="resumeScan"
                 :source-locations="sourceLocations"
+                :record-of="recordOf"
                 :source-type-label="sourceTypeLabel"
                 :validation-for="validationFor"
                 @toggle-attempt-history="showAttemptHistory = !showAttemptHistory"

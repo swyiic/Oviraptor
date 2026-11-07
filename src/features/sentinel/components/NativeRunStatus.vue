@@ -243,7 +243,6 @@ onUnmounted(() => { disposed = true; generation++; actionGeneration++; });
 <template>
   <OperatorQuestionInbox :scan-id="props.scanId" />
   <HighRiskApprovalInbox :scan-id="props.scanId" />
-  <ManualCapabilitiesPanel :scan-id="props.scanId" />
   <section v-if="error || connectionUnavailable || state?.branches.length || state?.unresolvedContainers.length || state?.stopDiagnostic.category==='draft'" class="native-run-status native-surface">
     <header>
       <div class="native-overview-heading">
@@ -385,6 +384,7 @@ onUnmounted(() => { disposed = true; generation++; actionGeneration++; });
       </div>
     </template>
   </section>
+  <ManualCapabilitiesPanel :scan-id="props.scanId" />
 </template>
 
 <style scoped src="./nativeSurface.css"></style>

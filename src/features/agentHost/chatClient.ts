@@ -28,8 +28,11 @@ export type AgentWorkspaceFileContent = { path: string; bytes: number; truncated
 export type AgentHostEvent = { type: string; conversationId?: string; runId?: string; messageId?: string; delta?: string; status?: string; content?: string; title?: string; code?: string; [key: string]: unknown };
 /** External MCP decision connector (jev-studio): advisory typed-decision tools, surfaced to
  *  the agent as `jev_*`. Disabled by default; any failure degrades to "no extra tools". */
-export type McpJevStatus = { enabled: boolean; command: string; args: string[]; state: "disabled" | "starting" | "ready" | "error"; error: string; tools: Array<{ name: string; title: string; description: string }> };
-export type McpJevConfigInput = { enabled?: boolean; command?: string; args?: string[] };
+export type McpJevStatus = { enabled: boolean; command: string; args: string[]; apiKeyEnv: string; hasApiKey: boolean; envKeys: string[]; state: "disabled" | "starting" | "ready" | "error"; error: string; tools: Array<{ name: string; title: string; description: string }> };
+// Result of a live reachability check of the configured model provider (GET {baseUrl}/models).
+export type ModelConnectionTest = { ok: boolean; reason?: "not_configured" | "no_credential" | "http_error" | "timeout" | "unreachable"; status?: number; baseUrl?: string; model?: string; latencyMs?: number; modelListed?: boolean | null; error?: string };
+// apiKey: write-only — send to set (empty string clears); never returned. env: extra spawn env, advanced.
+export type McpJevConfigInput = { enabled?: boolean; command?: string; args?: string[]; apiKey?: string; apiKeyEnv?: string; env?: Record<string, string> };
 
 /** Header label for the session page: runtime + model from the live agent-host, never the legacy desktop profile. */
 export function agentRuntimeHeader(settings: AgentHostSettings | null | undefined): string {
@@ -109,6 +112,7 @@ export function createAgentHostChatClient(endpoint: AgentHostEndpoint, fetchImpl
     /** Global cross-workspace memory (scope='global'): visible from every project. */
     globalMemory: () => request<{ items: AgentProjectMemoryEntry[] }>("/api/memory/global").then(r => r.items),
     forgetGlobalMemory: (entryId: string) => request<{ ok: boolean; removed: boolean }>(`/api/memory/global/${encodeURIComponent(entryId)}`, { method: "DELETE" }),
+    testModelConnection: () => request<ModelConnectionTest>("/api/settings/provider/test", { method: "POST", body: "{}" }),
     mcpJevStatus: () => request<McpJevStatus>("/api/mcp/jev"),
     setMcpJev: (input: McpJevConfigInput) => request<McpJevStatus>("/api/mcp/jev", { method: "POST", body: JSON.stringify(input) }),
     /** Agent-recorded findings (record_finding tool). No project filter server-side —

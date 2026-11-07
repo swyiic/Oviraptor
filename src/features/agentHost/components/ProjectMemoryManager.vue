@@ -2,6 +2,7 @@
 import { Brain, RefreshCw, Trash2 } from '@lucide/vue';
 import { onMounted, ref } from 'vue';
 import { refreshFeedback as vRefreshFeedback } from '../../../shared/directives/refreshFeedback';
+import { confirmInPlace } from '../../../shared/confirmInPlace';
 import { useI18n } from '../../../i18n';
 import { messageTimestamp } from '../../conversations/messageTime';
 import { resolveAgentHostEndpoint } from '../api';
@@ -67,11 +68,18 @@ async function forget(entryId: string) {
 
 async function clearAll() {
   if (!client.value || selected.value == null || busy.value || !entries.value.length) return;
-  if (typeof window !== 'undefined' && !window.confirm(tr('清空该项目的全部跨会话记忆?此操作不可恢复。', 'Clear all cross-session memory for this project? This cannot be undone.'))) return;
-  busy.value = true; error.value = '';
-  try { await client.value.clearMemory(selected.value); entries.value = []; }
-  catch (e) { error.value = String((e as Error).message || e); }
-  finally { busy.value = false; }
+  await confirmInPlace({
+    title: tr('清空该项目的全部跨会话记忆？', 'Clear all cross-session memory for this project?'),
+    detail: tr('此操作不可恢复。', 'This cannot be undone.'),
+    confirmText: tr('清空', 'Clear'), busyText: tr('清空中…', 'Clearing…'), cancelText: tr('取消', 'Cancel'),
+    run: async () => {
+      if (!client.value || selected.value == null) return;
+      busy.value = true; error.value = '';
+      try { await client.value.clearMemory(selected.value); entries.value = []; }
+      catch (e) { error.value = String((e as Error).message || e); }
+      finally { busy.value = false; }
+    },
+  });
 }
 
 function when(value: string) { return messageTimestamp(value, tr('zh-CN', 'en-GB'))?.label || tr('时间未知', 'Time unknown'); }
