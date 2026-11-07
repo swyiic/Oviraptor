@@ -204,6 +204,20 @@ export const sentinelApi = {
     authorizedClasses,
     attestedBy: undefined,
   }),
+  // Operator opt-in: a long-standing (per target-pattern) high-risk capability
+  // authorization, so the operator does not have to re-authorize each new scan
+  // against the same already-authorized target. Command name and field shape
+  // are those of the parallel backend session's `set_scan_standing_authorization`
+  // Tauri command — wired here by name; this frontend makes no further
+  // assumption about its storage or matching semantics. Requires the same
+  // explicit legal-authorization attestation whenever classes is non-empty.
+  setScanStandingAuthorization: (input: {
+    targetPattern: string;
+    classes: string[];
+    legalAttestation: boolean;
+    budget?: number;
+    expiresAt?: string;
+  }) => invoke<void>("set_scan_standing_authorization", { ...input, budget: input.budget ?? undefined, expiresAt: input.expiresAt ?? undefined }),
   // Operator inbox for the third gate: list / approve / reject single high-risk
   // actions the agent is waiting on. Approval is single-use, bound to the action.
   listPendingHighRiskActions: (scanId: string) =>
