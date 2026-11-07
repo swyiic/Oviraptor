@@ -6,7 +6,7 @@ import { Plus, Square, ArrowUp, ChevronDown, Copy, Check, Pencil, CornerDownRigh
 import { configurationApi } from "../../configuration/api";
 import { directoryConnections, type ModelDirectoryConnection } from "../../configuration/modelConnections";
 import { useI18n } from "../../../i18n";
-import type { AgentHostSettings, AgentTask } from "../types";
+import type { AgentAccessPolicy, AgentHostSettings, AgentTask } from "../types";
 import { describeAgentHostError } from "../errors";
 import { agentRuntimeHeader, type AgentHostChatClient, type AgentHostConversation, type AgentHostMessage, type AgentModelUsage, type ModelConnectionTest } from "../chatClient";
 import ConversationMessage from "../../conversations/ConversationMessage.vue";
@@ -224,12 +224,29 @@ const { timeline: toolTimeline, totalElapsedMs: toolTimelineElapsedMs } = useToo
 });
 type GrantOffer = { appId: string; revision: number; permissions: Array<{ permission: string; tools: string[] }> };
 const grantPrompt = ref<{ conversationId: string; runId?: string; requestId?: string; projectId: number; identity: string; offers: GrantOffer[]; question: string } | null>(null);
+const accessPolicy = ref<AgentAccessPolicy>();
+const reconfirming = ref(false);
+const savedModeLabel = computed(() => accessPolicy.value?.savedMode === "full" ? tr("完全访问", "Full access") : accessPolicy.value?.savedMode === "auto" ? tr("自动审批", "Auto-approve") : tr("询问审批", "Ask each time"));
+function onPermissionModeChanged(policy: AgentAccessPolicy) { accessPolicy.value = policy; if (permissionsOpen.value) void loadPermissions(); }
+async function reconfirmAccess() {
+  const policy = accessPolicy.value, projectId = hostProjectId.value;
+  if (!policy || !projectId || reconfirming.value) return;
+  reconfirming.value = true;
+  try {
+    const value = await props.client.setAccessPolicy({ projectId, mode: policy.savedMode, expectedRevision: policy.revision, expectedRuntimeIdentity: policy.runtimeIdentity, operatorConfirmed: policy.savedMode !== "ask" });
+    void invoke("set_operator_permission_tier", { tier: policy.savedMode }).catch(() => {});
+    accessPolicy.value = value;
+    if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("oviraptor:access-policy-changed", { detail: { projectId } }));
+  } catch (e) { error.value = String((e as Error).message || e); }
+  finally { reconfirming.value = false; }
+}
 type RuntimePermission = { id: string; conversationId: string; description: string; options: Array<{ id: string; label: string }> };
 const runtimePermission = ref<RuntimePermission | null>(null);
 const granting = ref(false);
 const rememberWorkspace = ref(true);
 const pendingApproval = ref<{ id: string; scopeHash: string; choice: string } | null>(null);
 const grantIsWorkspace = computed(() => !!grantPrompt.value?.offers.some(offer => offer.appId === "workspace"));
+const grantIsMaterial = computed(() => !!grantPrompt.value?.offers.some(offer => offer.appId === "material"));
 function permissionLabel(id: string) {
   const known: Record<string, string> = {
     "inventory.read": tr("读取资产", "Read assets"),
@@ -245,6 +262,7 @@ function permissionLabel(id: string) {
     "workspace.write": tr("写入工作区文件", "Write workspace files"),
     "workspace.run": tr("在工作区运行脚本", "Run scripts in the workspace"),
     "material.open": tr("放行网址和本地文件。确认后本对话不再询问；大文件按原路径读取，不整份复制", "Allow URLs and local files. This conversation will not ask again; large files stay in place"),
+    "workspace.network": tr("联网、浏览器与本机命令等对外操作", "Network, browser, and local-command actions"),
   };
   return known[id] || id;
 }
@@ -414,7 +432,7 @@ async function loadProject() {
   ++messageGeneration;
   const { projectName, projectId, personal } = props;
   hostProjectId.value = undefined; selectedId.value = undefined; messages.value = []; task.value = null; conversations.value = [];
-  grantPrompt.value = null; runtimePermission.value = null; running.value = false; draft.value = "";
+  grantPrompt.value = null; runtimePermission.value = null; running.value = false; draft.value = ""; accessPolicy.value = undefined;
   permissionsOpen.value = false; ++permissionGeneration; savedFilePermissions.value = []; workspaceFullAccess.value=false; savedAppPermissions.value = []; historyQuery.value = ""; finderOpen.value=false;
   loadingProject.value = true;
   error.value = "";
@@ -441,11 +459,11 @@ async function acceptGrant() {
   const generation = projectGeneration;
   const valid = () => generation === projectGeneration && !disposed && prompt.conversationId === selectedId.value && prompt.projectId === hostProjectId.value && grantPrompt.value?.conversationId === prompt.conversationId && grantPrompt.value?.requestId === prompt.requestId && grantPrompt.value?.runId === prompt.runId;
   try {
-    const listed = prompt.offers.some(offer => offer.appId !== "workspace") ? await props.client.listApps() : { items: [] };
+    const listed = prompt.offers.some(offer => offer.appId !== "workspace" && offer.appId !== "material") ? await props.client.listApps() : { items: [] };
     if (!valid()) return;
     for (const offer of prompt.offers) {
       if (!valid()) return;
-      if (offer.appId === 'workspace') continue;
+      if (offer.appId === 'workspace' || offer.appId === 'material') continue;
       const app = listed.items.find(item => item.id === offer.appId);
       const existing = app?.grants?.find(item => item.projectId === prompt.projectId)?.permissions ?? [];
       const permissions = [...new Set([...existing, ...offer.permissions.map(item => item.permission)])];
@@ -778,6 +796,11 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
       <AgentTaskCollaboration :task="task" :cancelling="cancellingChildren" @cancel-child="cancelChild" />
       <button v-if="task.status !== 'completed' && !running && (!readOnlyAnswered || task.readOnlyAnswer?.historicalWorkPending)" class="button secondary compact" type="button" :disabled="continuingTask || loadingProject" data-testid="agent-task-continue" @click="continueTask">{{ continuingTask ? tr('接续中…', 'Continuing…') : readOnlyAnswered ? tr('继续历史任务', 'Continue historical task') : tr('继续原任务', 'Continue task') }}</button>
     </details>
+    <div v-if="accessPolicy?.needsReview" class="ahc-review-banner" role="alert" data-testid="agent-access-review-banner">
+      <AlertTriangle :size="16" aria-hidden="true" />
+      <span>{{ tr(`模型接收方已变化，“${savedModeLabel}”暂未生效，请重新确认。`, `The model recipient changed. "${savedModeLabel}" is paused until you reconfirm.`) }}</span>
+      <button type="button" class="button primary compact" :disabled="reconfirming" @click="reconfirmAccess">{{ reconfirming ? tr('确认中…', 'Confirming…') : tr(`重新确认${savedModeLabel}`, `Reconfirm ${savedModeLabel}`) }}</button>
+    </div>
     <div ref="transcript" class="agent-host-chat-transcript" @scroll="observeTranscript">
       <div class="ahc-column">
       <details v-if="selectedId&&hostProjectId" class="ahc-discovery-details" :open="discoveryPanelOpen" @toggle="discoveryPanelOpen=($event.target as HTMLDetailsElement).open"><summary>{{tr('项目资产发现','Project asset discovery')}}</summary><DiscoveryAssistPanel v-if="discoveryPanelOpen" :client="client" :conversation-id="selectedId" :project-id="hostProjectId" :refresh-key="task?.revision" /></details>
@@ -858,8 +881,8 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
       <strong>{{ tr(...errorView.title) }}</strong> <span>{{ tr(...errorView.hint) }}</span>
       <code>{{ errorView.code }}</code>
     </div>
-    <div v-if="grantPrompt" class="ahc-grant" role="dialog" aria-modal="true" :aria-label="tr('授权', 'Grant access')">
-      <strong>{{ grantPrompt.offers.some(offer => offer.appId === 'material') ? tr('放行这次访问', 'Allow this access') : (grantIsWorkspace ? tr('需要授权才能继续', 'Permission needed to continue') : tr('需要授权才能查', 'Permission needed')) }}</strong>
+    <div v-if="grantPrompt" class="ahc-grant" :class="{ 'ahc-grant-material': grantIsMaterial }" role="dialog" aria-modal="true" :aria-label="tr('授权', 'Grant access')">
+      <strong>{{ grantIsMaterial ? tr('放行工作区外访问', 'Allow access outside the workspace') : (grantIsWorkspace ? tr('需要授权才能继续', 'Permission needed to continue') : tr('需要授权才能查', 'Permission needed')) }}</strong>
       <p v-if="grantPrompt.question">{{ grantPrompt.question }}</p>
       <p v-else>{{ tr('这次操作要用到还没打开的权限。授权只作用于当前工作空间，也可以先不授。', 'This step needs a permission that is still off. Granting applies only to this workspace.') }}</p>
       <p v-if="grantPrompt.offers.some(offer => offer.appId === 'workspace')">{{ tr('此请求只授予列出的文件权限。脚本执行将在隔离运行环境接通后开放。', 'This request grants only the listed file permissions. Script execution requires an isolated runtime.') }}</p>
@@ -869,7 +892,7 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
       <label v-if="grantPrompt.offers.some(offer => offer.appId === 'workspace')" class="ahc-remember"><input v-model="rememberWorkspace" type="checkbox" />{{ tr('记住本对话的这些文件权限；切换模型后需重新确认', 'Remember these file permissions for this conversation; changing models requires confirmation') }}</label>
       <footer>
         <button type="button" class="button ghost compact" :disabled="granting" @click="declineGrant">{{ tr('暂不', 'Not now') }}</button>
-        <button type="button" class="button primary compact" :disabled="granting" @click="acceptGrant">{{ granting ? tr('授权中…', 'Granting…') : (grantIsWorkspace ? tr('授权并继续', 'Grant and continue') : tr('授权并继续', 'Grant and continue')) }}</button>
+        <button type="button" class="button primary compact" :disabled="granting" @click="acceptGrant">{{ granting ? tr('放行中…', 'Allowing…') : (grantIsMaterial ? tr('放行', 'Allow') : tr('授权并继续', 'Grant and continue')) }}</button>
       </footer>
     </div>
     <div v-if="runtimePermission" class="ahc-grant" role="dialog" :aria-label="tr('运行时授权','Runtime permission')"><strong>{{tr('请审核运行时操作','Review runtime operation')}}</strong><p>{{runtimePermission.description}}</p><footer><button v-for="option in runtimePermission.options" :key="option.id" type="button" class="button secondary compact" @click="decidePermission(option.id)">{{option.label}}</button></footer></div>
@@ -893,7 +916,7 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
           <Check v-else-if="connTest?.ok" :size="13" />
           <Wifi v-else :size="13" />
         </button>
-        <AgentPermissionMode :client="client" :project-id="hostProjectId" :runtime-identity="liveSettings.runtime?.identity" :disabled="loadingProject||continuingTask" compact @changed="permissionsOpen&&loadPermissions()" />
+        <AgentPermissionMode :client="client" :project-id="hostProjectId" :runtime-identity="liveSettings.runtime?.identity" :disabled="loadingProject||continuingTask" compact @changed="onPermissionModeChanged" />
         <button type="button" class="ahc-permissions-toggle" :aria-expanded="permissionsOpen" aria-controls="agent-chat-permissions" :disabled="!selectedId" @click="togglePermissions"><ShieldCheck :size="14" />{{ tr('权限详情', 'Permission details') }}</button>
         <span class="ahc-composer-hint">{{ running ? tr('可随时停止或补充要求', 'Stop or steer at any time') : tr('Enter 发送 · Shift+Enter 换行', 'Enter to send · Shift+Enter for a new line') }}</span>
       </div>
@@ -972,7 +995,12 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
 .ahc-model .ahc-select { max-width: 280px; font-weight: 550; }
 .ahc-empty { margin: auto; text-align: center; font-size: 14px; line-height: 1.7; color: var(--app-muted, var(--muted, #6b7280)); max-width: 420px; }
 .ahc-grant{width:min(480px,calc(100% - 40px));margin:0 auto 10px;padding:14px 16px;border:1px solid var(--line,#e5e6e1);border-radius:14px;background:var(--app-surface,#fff);box-shadow:0 10px 28px #00000014}
+.ahc-grant-material{border-color:color-mix(in srgb,var(--blue,#416b9c) 45%,transparent);box-shadow:0 10px 28px #00000014,0 0 0 1px color-mix(in srgb,var(--blue,#416b9c) 12%,transparent)}
 .ahc-grant strong{display:block;font-size:14px}
+.ahc-review-banner{display:flex;align-items:center;gap:10px;margin:0 16px 10px;padding:10px 14px;border-radius:10px;flex-shrink:0;border:1px solid color-mix(in srgb,var(--amber,#b8860b) 45%,transparent);background:color-mix(in srgb,var(--amber,#b8860b) 14%,transparent);color:color-mix(in srgb,var(--amber,#b8860b) 85%,var(--app-ink,#24272d));font-size:12px}
+.ahc-review-banner svg{flex-shrink:0;color:var(--amber,#b8860b)}
+.ahc-review-banner span{flex:1;line-height:1.5}
+.ahc-review-banner button{flex-shrink:0}
 .ahc-grant p,.ahc-grant li{margin:6px 0 0;color:var(--app-muted,#72746f);font-size:12px;line-height:1.6}
 .ahc-grant ul{margin:8px 0 0;padding-left:18px}
 .ahc-grant footer{display:flex;justify-content:flex-end;gap:8px;margin-top:12px}

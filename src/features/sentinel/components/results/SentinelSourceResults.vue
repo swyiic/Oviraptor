@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
+import { useVirtualRows } from "./virtualRows";
 import SourceReviewEvidence from "../SourceReviewEvidence.vue";
 import {
   Activity,
@@ -115,19 +116,22 @@ const skippedLargeFiles = computed(() => savedCount(savedLineStats.value.skipped
 
 // A large scan can have thousands of findings/dependencies; rendering every row at
 // once is what freezes the page (not just the JSON.parse recordOf() now fixes).
-// Cap each big list's DOM to a bounded window per attempt, with "显示更多" to grow it.
-const INDEX_PAGE = 200, DEP_PAGE = 150, APPSEC_PAGE = 150, CICD_PAGE = 200;
-const indexLimit = ref(INDEX_PAGE);
-const depLimit = ref(DEP_PAGE);
-const appsecLimit = ref(APPSEC_PAGE);
-const cicdLimit = ref(CICD_PAGE);
+// Each big list below gets its own bounded, independently-scrollable window — only the
+// rows near the visible area are actually mounted (same spacer-based technique as the
+// chat transcript in AgentHostChat.vue), so DOM size stays flat no matter the scan size.
+const findingIndexItems = computed(() => props.sourceFindingRows);
+const findingIndexVirt = useVirtualRows(findingIndexItems, (item: any) => item.id, { defaultHeight: 42 });
+const findingCardItems = computed(() => props.focusedSourceFindingRows);
+const findingCardVirt = useVirtualRows(findingCardItems, (item: any) => item.id, { defaultHeight: 280, gap: 10 });
+const dependencyItems = computed(() => props.sourceDependencies);
+const dependencyVirt = useVirtualRows(dependencyItems, (item: any) => item.id, { defaultHeight: 90, gap: 8 });
+const appsecItems = computed(() => props.appsecVulnerabilities);
+const appsecVirt = useVirtualRows(appsecItems, (item: any) => item.id, { defaultHeight: 220, gap: 10 });
+const cicdItems = computed(() => props.cicdBlockingFindings);
+const cicdVirt = useVirtualRows(cicdItems, (item: any) => item.id, { defaultHeight: 50 });
 watch(() => props.selected.id, () => {
-  indexLimit.value = INDEX_PAGE; depLimit.value = DEP_PAGE; appsecLimit.value = APPSEC_PAGE; cicdLimit.value = CICD_PAGE;
+  findingIndexVirt.reset(); findingCardVirt.reset(); dependencyVirt.reset(); appsecVirt.reset(); cicdVirt.reset();
 });
-const visibleFindingIndexRows = computed(() => props.sourceFindingRows.slice(0, indexLimit.value));
-const visibleSourceDependencies = computed(() => props.sourceDependencies.slice(0, depLimit.value));
-const visibleAppsecVulnerabilities = computed(() => props.appsecVulnerabilities.slice(0, appsecLimit.value));
-const visibleCicdBlockingFindings = computed(() => props.cicdBlockingFindings.slice(0, cicdLimit.value));
 </script>
 
 <template>
@@ -432,21 +436,23 @@ const visibleCicdBlockingFindings = computed(() => props.cicdBlockingFindings.sl
       <div class="block-title">
         <FileJson :size="16" />
         <div>
-          <strong>{{ tr("发现索引", "Finding index") }}</strong
+          <strong>{{ tr(`发现索引 · ${sourceFindingRows.length}`, `Finding index · ${sourceFindingRows.length}`) }}</strong
           ><small
             >{{ tr("先在索引选择一条发现，下方只展示当前发现的完整证据。", "Pick a finding in the index; only that finding's full evidence is shown below.") }}</small
           >
         </div>
       </div>
-      <div class="source-finding-index">
+      <div class="source-finding-index" :ref="findingIndexVirt.setContainer" @scroll="findingIndexVirt.onScroll">
         <div class="table-head">
           <span>{{ tr("等级", "Severity") }}</span><span>{{ tr("标题", "Title") }}</span
           ><span>{{ tr("引擎 / Rule ID", "Engine / Rule ID") }}</span><span>CWE / CVE</span
           ><span>{{ tr("文件", "File") }}</span><span>{{ tr("行号", "Line") }}</span>
         </div>
+        <div v-if="findingIndexVirt.spacerBefore.value > 0" class="virt-spacer" :style="{ height: findingIndexVirt.spacerBefore.value + 'px' }" aria-hidden="true"></div>
         <div
-          v-for="item in visibleFindingIndexRows"
+          v-for="item in findingIndexVirt.windowed.value"
           :key="`index-${item.id}`"
+          :ref="findingIndexVirt.bindRow(item.id)"
           :class="{ active: selectedFindingId === item.id }"
           role="button"
           tabindex="0"
@@ -486,12 +492,9 @@ const visibleCicdBlockingFindings = computed(() => props.cicdBlockingFindings.sl
             "—"
           }}</span>
         </div>
+        <div v-if="findingIndexVirt.spacerAfter.value > 0" class="virt-spacer" :style="{ height: findingIndexVirt.spacerAfter.value + 'px' }" aria-hidden="true"></div>
         <div v-if="!sourceFindingRows.length" class="empty-inline">
           {{ tr("没有可索引的安全发现。", "No security findings to index.") }}
-        </div>
-        <div v-if="visibleFindingIndexRows.length < sourceFindingRows.length" class="result-load-more">
-          <span>{{ tr(`已显示 ${visibleFindingIndexRows.length} / ${sourceFindingRows.length} 条`, `Showing ${visibleFindingIndexRows.length} / ${sourceFindingRows.length}`) }}</span>
-          <button type="button" class="button ghost compact" @click="indexLimit += INDEX_PAGE">{{ tr("显示更多", "Show more") }}</button>
         </div>
       </div>
     </section>
@@ -499,7 +502,7 @@ const visibleCicdBlockingFindings = computed(() => props.cicdBlockingFindings.sl
       <div class="block-title">
         <Bug :size="16" />
         <div>
-          <strong>{{ tr("代码发现与审计证据", "Code findings and audit evidence") }}</strong
+          <strong>{{ tr(`代码发现与审计证据 · ${focusedSourceFindingRows.length}`, `Code findings and audit evidence · ${focusedSourceFindingRows.length}`) }}</strong
           ><small
             >{{ tr("仅展示结构化安全问题与漏洞证据；扫描总结和质量门禁摘要不作为问题加载。", "Only structured security issues and vulnerability evidence are shown; scan summaries and quality gate digests are not loaded as issues.") }}</small
           >
@@ -519,10 +522,12 @@ const visibleCicdBlockingFindings = computed(() => props.cicdBlockingFindings.sl
           <small v-else>{{ tr("无高风险项", "No high-risk items") }}</small>
         </article>
       </div>
-      <div class="source-finding-list">
+      <div class="source-finding-list" :ref="findingCardVirt.setContainer" @scroll="findingCardVirt.onScroll">
+        <div v-if="findingCardVirt.spacerBefore.value > 0" class="virt-spacer" :style="{ height: findingCardVirt.spacerBefore.value + 'px' }" aria-hidden="true"></div>
         <article
-          v-for="item in focusedSourceFindingRows"
+          v-for="item in findingCardVirt.windowed.value"
           :key="item.id"
+          :ref="findingCardVirt.bindRow(item.id)"
           :class="`source-finding-card severity-border-${effectiveSeverity(item)}`"
         >
           <header>
@@ -694,6 +699,7 @@ const visibleCicdBlockingFindings = computed(() => props.cicdBlockingFindings.sl
             >
           </footer>
         </article>
+        <div v-if="findingCardVirt.spacerAfter.value > 0" class="virt-spacer" :style="{ height: findingCardVirt.spacerAfter.value + 'px' }" aria-hidden="true"></div>
         <div v-if="!sourceFindingRows.length" class="empty-inline">
           {{ tr("当前源码任务没有结构化发现。", "This source task has no structured findings.") }}
         </div>
@@ -703,16 +709,18 @@ const visibleCicdBlockingFindings = computed(() => props.cicdBlockingFindings.sl
       <div class="block-title">
         <Layers3 :size="16" />
         <div>
-          <strong>{{ tr("依赖与供应链风险", "Dependencies and supply chain risk") }}</strong
+          <strong>{{ tr(`依赖与供应链风险 · ${sourceDependencies.length}`, `Dependencies and supply chain risk · ${sourceDependencies.length}`) }}</strong
           ><small
             >{{ tr("展示包生态、已安装版本、修复版本和 CVE/CVSS。", "Shows package ecosystem, installed version, fixed version, and CVE/CVSS.") }}</small
           >
         </div>
       </div>
-      <div class="source-dependency-list">
+      <div class="source-dependency-list" :ref="dependencyVirt.setContainer" @scroll="dependencyVirt.onScroll">
+        <div v-if="dependencyVirt.spacerBefore.value > 0" class="virt-spacer" :style="{ height: dependencyVirt.spacerBefore.value + 'px' }" aria-hidden="true"></div>
         <article
-          v-for="item in visibleSourceDependencies"
+          v-for="item in dependencyVirt.windowed.value"
           :key="`dep-${item.id}`"
+          :ref="dependencyVirt.bindRow(item.id)"
         >
           <strong>{{
             recordOf(item).package_name ||
@@ -747,10 +755,7 @@ const visibleCicdBlockingFindings = computed(() => props.cicdBlockingFindings.sl
             }}</em
           >
         </article>
-        <div v-if="visibleSourceDependencies.length < sourceDependencies.length" class="result-load-more">
-          <span>{{ tr(`已显示 ${visibleSourceDependencies.length} / ${sourceDependencies.length} 条`, `Showing ${visibleSourceDependencies.length} / ${sourceDependencies.length}`) }}</span>
-          <button type="button" class="button ghost compact" @click="depLimit += DEP_PAGE">{{ tr("显示更多", "Show more") }}</button>
-        </div>
+        <div v-if="dependencyVirt.spacerAfter.value > 0" class="virt-spacer" :style="{ height: dependencyVirt.spacerAfter.value + 'px' }" aria-hidden="true"></div>
       </div>
     </section>
     <section
@@ -804,10 +809,12 @@ const visibleCicdBlockingFindings = computed(() => props.cicdBlockingFindings.sl
           >
         </article>
       </div>
-      <div class="appsec-correlation-list">
+      <div class="appsec-correlation-list" :ref="appsecVirt.setContainer" @scroll="appsecVirt.onScroll">
+        <div v-if="appsecVirt.spacerBefore.value > 0" class="virt-spacer" :style="{ height: appsecVirt.spacerBefore.value + 'px' }" aria-hidden="true"></div>
         <article
-          v-for="vulnerability in visibleAppsecVulnerabilities"
+          v-for="vulnerability in appsecVirt.windowed.value"
           :key="`appsec-${vulnerability.id}`"
+          :ref="appsecVirt.bindRow(vulnerability.id)"
           :class="`appsec-correlation-card severity-border-${vulnerability.severity}`"
         >
           <header>
@@ -878,15 +885,12 @@ const visibleCicdBlockingFindings = computed(() => props.cicdBlockingFindings.sl
             </span>
           </div>
         </article>
+        <div v-if="appsecVirt.spacerAfter.value > 0" class="virt-spacer" :style="{ height: appsecVirt.spacerAfter.value + 'px' }" aria-hidden="true"></div>
         <div
           v-if="!appsecVulnerabilities.length"
           class="empty-inline"
         >
           {{ tr("当前任务没有可统一的结构化漏洞记录。", "This task has no structured vulnerability records to unify.") }}
-        </div>
-        <div v-if="visibleAppsecVulnerabilities.length < appsecVulnerabilities.length" class="result-load-more">
-          <span>{{ tr(`已显示 ${visibleAppsecVulnerabilities.length} / ${appsecVulnerabilities.length} 条`, `Showing ${visibleAppsecVulnerabilities.length} / ${appsecVulnerabilities.length}`) }}</span>
-          <button type="button" class="button ghost compact" @click="appsecLimit += APPSEC_PAGE">{{ tr("显示更多", "Show more") }}</button>
         </div>
       </div>
     </section>
@@ -991,14 +995,16 @@ const visibleCicdBlockingFindings = computed(() => props.cicdBlockingFindings.sl
           </div>
         </dl>
       </div>
-      <div class="cicd-blocking-table">
+      <div class="cicd-blocking-table" :ref="cicdVirt.setContainer" @scroll="cicdVirt.onScroll">
         <div class="table-head">
           <span>{{ tr("等级", "Severity") }}</span><span>{{ tr("问题", "Issue") }}</span><span>{{ tr("位置 / 端点", "Location / endpoint") }}</span
           ><span>{{ tr("状态", "Status") }}</span><span>{{ tr("生命周期", "Lifecycle") }}</span><span>{{ tr("负责人", "Owner") }}</span>
         </div>
+        <div v-if="cicdVirt.spacerBefore.value > 0" class="virt-spacer" :style="{ height: cicdVirt.spacerBefore.value + 'px' }" aria-hidden="true"></div>
         <div
-          v-for="vulnerability in visibleCicdBlockingFindings"
+          v-for="vulnerability in cicdVirt.windowed.value"
           :key="`gate-${vulnerability.id}`"
+          :ref="cicdVirt.bindRow(vulnerability.id)"
         >
           <span
             :class="`severity-badge ${vulnerability.severity}`"
@@ -1018,15 +1024,12 @@ const visibleCicdBlockingFindings = computed(() => props.cicdBlockingFindings.sl
           >
           <span>{{ vulnerability.owner || tr("未分配", "Unassigned") }}</span>
         </div>
+        <div v-if="cicdVirt.spacerAfter.value > 0" class="virt-spacer" :style="{ height: cicdVirt.spacerAfter.value + 'px' }" aria-hidden="true"></div>
         <div
           v-if="!cicdBlockingFindings.length"
           class="empty-inline"
         >
           {{ tr("此历史汇总中没有导致门禁超限的 Critical / High 条目；不代表所选轮次 CI 已通过。", "This historical summary has no Critical / High entries that exceed the gate; this does not mean CI passed for the selected attempt.") }}
-        </div>
-        <div v-if="visibleCicdBlockingFindings.length < cicdBlockingFindings.length" class="result-load-more">
-          <span>{{ tr(`已显示 ${visibleCicdBlockingFindings.length} / ${cicdBlockingFindings.length} 条`, `Showing ${visibleCicdBlockingFindings.length} / ${cicdBlockingFindings.length}`) }}</span>
-          <button type="button" class="button ghost compact" @click="cicdLimit += CICD_PAGE">{{ tr("显示更多", "Show more") }}</button>
         </div>
       </div>
     </section>
@@ -1037,6 +1040,5 @@ const visibleCicdBlockingFindings = computed(() => props.cicdBlockingFindings.sl
 <style scoped>
 .source-historical-results { min-width: 0; }
 .source-historical-results > summary { cursor: pointer; padding: 12px 0; }
-.result-load-more { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 12px; color: var(--ui-muted); font-size: var(--text-micro); }
 .source-historical-results > p { overflow-wrap: anywhere; }
 </style>
