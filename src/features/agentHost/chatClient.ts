@@ -28,8 +28,9 @@ export type AgentWorkspaceFileContent = { path: string; bytes: number; truncated
 export type AgentHostEvent = { type: string; conversationId?: string; runId?: string; messageId?: string; delta?: string; status?: string; content?: string; title?: string; code?: string; [key: string]: unknown };
 /** External MCP decision connector (jev-studio): advisory typed-decision tools, surfaced to
  *  the agent as `jev_*`. Disabled by default; any failure degrades to "no extra tools". */
-export type McpJevStatus = { enabled: boolean; command: string; args: string[]; state: "disabled" | "starting" | "ready" | "error"; error: string; tools: Array<{ name: string; title: string; description: string }> };
-export type McpJevConfigInput = { enabled?: boolean; command?: string; args?: string[] };
+export type McpJevStatus = { enabled: boolean; command: string; args: string[]; apiKeyEnv: string; hasApiKey: boolean; envKeys: string[]; state: "disabled" | "starting" | "ready" | "error"; error: string; tools: Array<{ name: string; title: string; description: string }> };
+// apiKey: write-only — send to set (empty string clears); never returned. env: extra spawn env, advanced.
+export type McpJevConfigInput = { enabled?: boolean; command?: string; args?: string[]; apiKey?: string; apiKeyEnv?: string; env?: Record<string, string> };
 
 /** Header label for the session page: runtime + model from the live agent-host, never the legacy desktop profile. */
 export function agentRuntimeHeader(settings: AgentHostSettings | null | undefined): string {

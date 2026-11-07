@@ -15,6 +15,23 @@ import { readdirSync } from 'node:fs';
 const REQUEST_TIMEOUT_MS = 30000;
 const MAX_LINE = 1 << 20; // 1 MB per JSON-RPC line
 const TOOL_PREFIX = 'jev_';
+// jev-studio / the TypeSafe Jev family authenticate with TYPESAFE_API_KEY passed
+// through the child process env (not a config-file flag). This is the researched
+// default so the common case is zero-friction: the operator pastes one key.
+const DEFAULT_API_KEY_ENV = 'TYPESAFE_API_KEY';
+
+/** Keep only VALID_NAME=string pairs, bounded, so arbitrary junk can't reach spawn env. */
+function sanitizeEnvMap(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const out = {};
+  for (const [k, v] of Object.entries(value)) {
+    if (typeof k !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(k)) continue;
+    if (typeof v !== 'string') continue;
+    out[k] = v.slice(0, 4096);
+    if (Object.keys(out).length >= 24) break;
+  }
+  return out;
+}
 
 export function readJevConfig(store) {
   try {
@@ -24,8 +41,11 @@ export function readJevConfig(store) {
       enabled: cfg.enabled === true,
       command: typeof cfg.command === 'string' && cfg.command.trim() ? cfg.command.trim() : 'jev-studio',
       args: Array.isArray(cfg.args) ? cfg.args.filter(a => typeof a === 'string').slice(0, 16) : [],
+      apiKey: typeof cfg.apiKey === 'string' ? cfg.apiKey : '',
+      apiKeyEnv: typeof cfg.apiKeyEnv === 'string' && cfg.apiKeyEnv.trim() ? cfg.apiKeyEnv.trim() : DEFAULT_API_KEY_ENV,
+      env: sanitizeEnvMap(cfg.env),
     };
-  } catch { return { enabled: false, command: 'jev-studio', args: [] }; }
+  } catch { return { enabled: false, command: 'jev-studio', args: [], apiKey: '', apiKeyEnv: DEFAULT_API_KEY_ENV, env: {} }; }
 }
 
 // GUI-launched hosts get a narrow PATH (/usr/bin:/bin). pip installs land in
@@ -55,19 +75,26 @@ export class JevConnector {
 
   status() {
     const cfg = this.config();
+    // Never return the key value — only whether one is set and under what env name.
     return {
-      enabled: cfg.enabled, command: cfg.command, args: cfg.args, state: this.state, error: this.error,
+      enabled: cfg.enabled, command: cfg.command, args: cfg.args,
+      apiKeyEnv: cfg.apiKeyEnv, hasApiKey: !!cfg.apiKey, envKeys: Object.keys(cfg.env),
+      state: this.state, error: this.error,
       tools: this.tools.map(t => ({ name: TOOL_PREFIX + t.name, title: t.name, description: String(t.description ?? '').slice(0, 300) })),
     };
   }
 
   /** Persist config, then (re)start or stop to match. Returns status(). */
-  async configure({ enabled, command, args } = {}) {
+  async configure({ enabled, command, args, apiKey, apiKeyEnv, env } = {}) {
     const current = this.config();
+    // apiKey/env: undefined = keep; a provided string/object replaces ('' clears the key).
     const next = {
       enabled: typeof enabled === 'boolean' ? enabled : current.enabled,
       command: typeof command === 'string' && command.trim() ? command.trim() : current.command,
       args: Array.isArray(args) ? args.filter(a => typeof a === 'string').slice(0, 16) : current.args,
+      apiKey: typeof apiKey === 'string' ? apiKey : current.apiKey,
+      apiKeyEnv: typeof apiKeyEnv === 'string' && apiKeyEnv.trim() ? apiKeyEnv.trim() : current.apiKeyEnv,
+      env: env === undefined ? current.env : sanitizeEnvMap(env),
     };
     this.store.db.prepare("INSERT OR REPLACE INTO host_settings(key,value) VALUES('jev_mcp',?)").run(JSON.stringify(next));
     await this.stop();
@@ -82,7 +109,11 @@ export class JevConnector {
     this.state = 'starting'; this.error = ''; this.tools = []; this.buffer = '';
     let child;
     try {
-      child = spawn(cfg.command, cfg.args, { stdio: ['pipe', 'pipe', 'ignore'], env: { ...process.env, PATH: augmentedPath() } });
+      // Base env + augmented PATH, then operator-configured env, then the API key
+      // under its env name (last so it always wins).
+      const childEnv = { ...process.env, PATH: augmentedPath(), ...cfg.env };
+      if (cfg.apiKey) childEnv[cfg.apiKeyEnv] = cfg.apiKey;
+      child = spawn(cfg.command, cfg.args, { stdio: ['pipe', 'pipe', 'ignore'], env: childEnv });
     } catch (e) { this.state = 'error'; this.error = `spawn failed: ${String(e?.message || e).slice(0, 160)}`; return; }
     this.child = child;
     child.on('error', e => this.#fail(`process error: ${String(e?.message || e).slice(0, 160)}`));

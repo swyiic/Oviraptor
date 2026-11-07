@@ -56,3 +56,37 @@ test('config persists in host_settings; disabled exposes nothing; bad command de
   await assert.rejects(c.callTool('jev_Choice', {})); // not ready → rejects, not crash
   await c.stop();
 });
+
+test('api key reaches child env as TYPESAFE_API_KEY, extra env passes, status never leaks the value', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'jev-'));
+  const store = new HostStore(':memory:');
+  try {
+    // Mock echoes selected env vars back through a tools/call result.
+    const mock = join(dir, 'echo-env.mjs');
+    writeFileSync(mock, [
+      "let buf='';process.stdin.setEncoding('utf8');",
+      "process.stdin.on('data',c=>{buf+=c;let i;while((i=buf.indexOf('\\n'))>=0){const line=buf.slice(0,i).trim();buf=buf.slice(i+1);if(!line)continue;let m;try{m=JSON.parse(line);}catch{continue;}if(m.id==null)continue;let result;",
+      "if(m.method==='initialize')result={protocolVersion:'2024-11-05',serverInfo:{name:'echo'}};",
+      "else if(m.method==='tools/list')result={tools:[{name:'Echo',description:'echo',inputSchema:{type:'object'}}]};",
+      "else if(m.method==='tools/call')result={content:[{type:'text',text:JSON.stringify({key:process.env.TYPESAFE_API_KEY||null,extra:process.env.JEV_EXTRA||null})}]};",
+      "else result={};",
+      "process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:m.id,result})+'\\n');}});",
+    ].join('\n'));
+    const c = new JevConnector(store);
+    await c.configure({ enabled: true, command: process.execPath, args: [mock], apiKey: 'sk-secret-123', env: { JEV_EXTRA: 'xyz' } });
+    assert.equal(c.status().state, 'ready');
+    const st = c.status();
+    assert.equal(st.hasApiKey, true);          // presence exposed
+    assert.equal(st.apiKeyEnv, 'TYPESAFE_API_KEY'); // default env name
+    assert.deepEqual(st.envKeys, ['JEV_EXTRA']);
+    assert.ok(!JSON.stringify(st).includes('sk-secret-123')); // value NEVER leaked
+    const r = await c.callTool('jev_Echo', {});
+    const text = r.content[0].text;
+    assert.match(text, /sk-secret-123/); // key actually reached the child env
+    assert.match(text, /xyz/);            // extra env reached the child
+    await c.stop();
+    await c.configure({ apiKey: '' });     // empty clears the key
+    assert.equal(c.status().hasApiKey, false);
+    await c.stop();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
