@@ -7,7 +7,7 @@
 // continue and actually injects the announcement.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { OpenAiCompatibleRuntime, providerToolName, MODEL_TRANSIENT_RETRIES } from '../src/provider.mjs';
+import { OpenAiCompatibleRuntime, providerToolName, MODEL_TRANSIENT_RETRIES, ALL_BLOCKED_PIVOT_BUDGET } from '../src/provider.mjs';
 import {
   finishTurnDecision,
   FORCED_CONTINUE_BUDGET,
@@ -158,7 +158,7 @@ function harness({ tools, script, onCall }) {
       if (method === 'tools/list') return { tools: (typeof tools === 'function' ? tools() : tools).map(toolObj) };
       executed.push(params);
       const value = onCall ? await onCall(params) : { ok: true };
-      return { content: [{ type: 'text', text: JSON.stringify(value ?? { ok: true }) }], structuredContent: value ?? { ok: true } };
+      return { content: [{ type: 'text', text: JSON.stringify(value ?? { ok: true }) }], structuredContent: value ?? { ok: true }, ...(value && value.isError ? { isError: true } : {}) };
     },
   });
   return { runtime, bodies, executed };
@@ -300,5 +300,20 @@ test('retry (b): transient failures beyond the budget surface the error (bounded
   try {
     await assert.rejects(runtime.prompt({ sessionId, prompt: 'hi', userText: 'hi' }));
     assert.equal(calls, 1 + MODEL_TRANSIENT_RETRIES); // initial attempt + the bounded retries, then gives up
+  } finally { await runtime.close(); }
+});
+
+test('pivot: all-blocked repeats get bounded pivot chances before the turn stalls (not an instant quit)', async () => {
+  const { runtime, bodies } = harness({
+    tools: ['workspace_read'],
+    script: () => chatToolCall('workspace_read', { path: 'x' }, 1), // model keeps repeating one failing call
+    onCall: () => ({ isError: true, error: 'boom' }),
+  });
+  const { sessionId } = await runtime.newSession({ mcpServers });
+  try {
+    const result = await runtime.prompt({ sessionId, prompt: AUDIT_GOAL, userText: AUDIT_GOAL });
+    assert.equal(result.stopReason, 'tool_loop_stalled'); // still bounded — eventually stalls
+    // 2 pre-block failing calls + ALL_BLOCKED_PIVOT_BUDGET pivot chances + the final stalling call
+    assert.equal(bodies.length, 2 + ALL_BLOCKED_PIVOT_BUDGET + 1);
   } finally { await runtime.close(); }
 });

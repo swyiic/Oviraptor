@@ -87,6 +87,10 @@ const isXaiOAuthEndpoint = (provider, baseUrl) => provider === 'xai' && String(b
 // error before giving up (only when nothing streamed yet). Smooths "连接不稳定" under the
 // high request volume the autonomy changes produce, without masking a real outage.
 export const MODEL_TRANSIENT_RETRIES = 2;
+// When every tool call a step proposes is an exact twice-failed repeat, give the model this
+// many chances to PIVOT to a different approach (with a strong nudge) before declaring the
+// turn stalled. Stops the agent quitting the instant it first repeats itself; still bounded.
+export const ALL_BLOCKED_PIVOT_BUDGET = 2;
 /** Keep provider, baseUrl and model consistent: a DeepSeek model never rides the xAI endpoint. */
 export function normalizeProviderModel(input = {}) {
   const out = { ...input };
@@ -1486,6 +1490,7 @@ export class OpenAiCompatibleRuntime {
     session.abort = new AbortController();
     session._authRetried = false;
     session._producedText = false;
+    session._allBlockedPivots = 0;
     session.httpAttempts = 0;
     const fullPrompt = typeof prompt === 'string' ? prompt : JSON.stringify(prompt);
     // Goal must be the user's raw question — never the whole turn prompt blob.
@@ -2222,7 +2227,16 @@ export class OpenAiCompatibleRuntime {
         const suppressed = blocked.map(call => ({ id: call.id, name: call.name, ok: false, code: 'host_tool_repeat_blocked', content: JSON.stringify({ error: 'host_tool_repeat_blocked', hint: 'This exact operation failed twice. It was not executed again. Use a different applicable read or explain the gap.' }) }));
         appendResults([...results, ...suppressed]);
         if (blocked.length && !ready.length) {
-          const note = '相同工具和参数已连续失败两次，已停止重复调用。本轮未取得所需结果；请检查工具返回的错误，或改用其他查询条件。';
+          // Don't quit the instant the model first repeats itself. Give it a bounded number
+          // of chances to PIVOT to a genuinely different approach; only stall if it still has
+          // nothing new. The suppressed results above already told it these ops failed twice.
+          session._allBlockedPivots = (session._allBlockedPivots ?? 0) + 1;
+          if (session._allBlockedPivots <= ALL_BLOCKED_PIVOT_BUDGET) {
+            emitInner('hold', '同一条路走不通，换个做法');
+            session.messages.push({ role: 'user', content: 'Host: 你这一步请求的工具+参数全是已经连续失败两次的重复操作，已被拦下、没有执行——别再重复它们。任务还没完成，不要就此停下：换一个真正不同的做法（换工具、换参数/路径、仔细读上面返回的错误再据此改、或改写脚本解决根因）。只有当你确实再没有任何可行的新办法时，才用一句话写清具体卡在哪、还差什么外部条件。' });
+            continue;
+          }
+          const note = '相同工具和参数已连续失败两次，且已给过换方法的机会仍无新进展，已停止重复调用。本轮未取得所需结果；请检查工具返回的错误，或改用其他查询条件。';
           session.messages.push({ role: 'assistant', content: note });
           emitInner('done', '已停止无进展的重复调用');
           return { stopReason: 'tool_loop_stalled', replaceText: true, assistantText: note, harness: session.harness, metrics: { toolSelection, firstTextMs, firstToolMs, totalMs: performance.now() - started, api: apiUsed, suppressedCalls: blocked.length } };
