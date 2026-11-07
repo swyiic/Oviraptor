@@ -162,6 +162,18 @@ pub(crate) fn dispatch(
                 }
             })?
         }
+        "hunter_start" => {
+            // Agent-initiated Hunter within the operator envelope. The gate runs
+            // before prepare/spawn, so a refusal never spent a point: map it
+            // not_started unless it is already a stable hunter_* gate code.
+            hunter_start(manager, p, args).map_err(|e| {
+                if e.starts_with("hunter_") {
+                    e
+                } else {
+                    format!("hunter_not_started: {e}")
+                }
+            })?
+        }
         _ => return Err("discovery_action_invalid".into()),
     };
     value["projectId"] = json!(p);
@@ -198,6 +210,64 @@ fn reprobe(manager: &Manager, p: i64, args: Value) -> Result<Value, String> {
         },
     )?;
     Ok(json!({ "runId": run, "pipeline": "reprobe", "started": true }))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct HunterSeedScope {
+    kind: String,
+    target: String,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct HunterStartRequest {
+    seed_scope: HunterSeedScope,
+    max_points: i64,
+}
+
+/// Start an agent-initiated Hunter expansion strictly inside the operator's
+/// envelope. The hard gate (allow ∧ key ∧ account-match ∧ within-remaining ∧
+/// idle) is evaluated here, before prepare/spawn; a refusal returns a stable
+/// `hunter_*` code and never spends a point. The agent cannot set the envelope,
+/// confirm scope, or widen it.
+fn hunter_start(manager: &Manager, p: i64, args: Value) -> Result<Value, String> {
+    use crate::asset_discovery::{agent_hunter, hunter_expansion};
+    let data = manager
+        .data_dir
+        .as_ref()
+        .ok_or("hunter_executor_unavailable")?;
+    let request: HunterStartRequest =
+        serde_json::from_value(args).map_err(|_| "discovery_arguments_invalid")?;
+    // The agent may only expand a precise confirmed seed, never a broad tree.
+    if !["domain", "cname", "fingerprint"].contains(&request.seed_scope.kind.as_str()) {
+        return Err("hunter_seed_kind_invalid".into());
+    }
+    let c = db::open(&manager.path)?;
+    let (allow, budget, account_hash) = agent_hunter::read_envelope(&c, p)?;
+    let (_, key, _, _) = setting(&c)?;
+    let key_present = !key.is_empty();
+    let account_match =
+        key_present && format!("{:x}", Sha256::digest(key.as_bytes())) == account_hash;
+    let spent = agent_hunter::agent_spent(&c, p)?;
+    let idle = agent_hunter::project_idle(&c, p)?;
+    let cap = agent_hunter::hunter_gate(
+        allow,
+        key_present,
+        account_match,
+        budget,
+        spent,
+        request.max_points,
+        idle,
+    )
+    .map_err(|code| code.to_string())?;
+    drop(c);
+    let input = hunter_expansion::ExpansionInput {
+        project_id: p,
+        kind: request.seed_scope.kind,
+        target: request.seed_scope.target,
+    };
+    let id = hunter_expansion::start_agent_capped(&manager.path, data, &input, cap)?;
+    Ok(json!({ "queryId": id, "cap": cap, "started": true }))
 }
 
 /// Build the native reprobe scope with the project binding forced to the

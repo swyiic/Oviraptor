@@ -288,6 +288,16 @@ export class AppManager {
           &&!grant.permissions.includes('inventory.discovery.run'))throw hostError('host_tool_permission_denied',403,{retryable:false});
         this.#current(id, scope, app.revision, grant.revision, grant.accessPolicyRevision, grant.accessRuntimeIdentity);
       }
+      if(name==='hunter_expansion_start'){
+        // Node-side wall: the agent's Hunter tool stays inert unless the operator
+        // has set the envelope (allow + bound account + remaining budget) and the
+        // request fits the remaining budget. The desktop re-checks this plus the
+        // account-hash and project idleness authoritatively, and caps the run.
+        const current=await this.discoveryAssist.readFull(this.store,scope);
+        const env=current.agentHunter,maxPoints=args?.maxPoints;
+        if(!env||env.allow!==true||env.accountBound!==true||!Number.isSafeInteger(maxPoints)||maxPoints<1||maxPoints>env.remaining)throw hostError('host_tool_permission_denied',403,{retryable:false});
+        this.#current(id, scope, app.revision, grant.revision, grant.accessPolicyRevision, grant.accessRuntimeIdentity);
+      }
       let reprobeBinding;
       if (name === 'reprobe_assets') ({ args, binding: reprobeBinding } = this.#prepareReprobe(app, scope, args));
       const result = await this.discoveryAssist.call(this.store, scope, name, args, operationId);

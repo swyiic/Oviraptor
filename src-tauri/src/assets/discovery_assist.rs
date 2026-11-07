@@ -773,7 +773,7 @@ fn assist_status(c: &Connection, p: i64) -> Result<Value, String> {
         view_run_on(c, p, Some(&id), "conflict", 1, "")?
     };
     Ok(
-        json!({"phase":phase,"enabled":enabled,"reason":reason,"runId":if id.is_empty(){Value::Null}else{json!(id)},"hasLocalAssets":local,"organization":organization,"includeIsolated":include_isolated,"readOnly":read_only,"readiness":{"hunter":{"keyConfigured":!hunter_key.trim().is_empty(),"contractVerified":HUNTER_CONTRACT_VERIFIED}},"review":review,"proposal":serde_json::from_str::<Value>(&proposal).unwrap_or(Value::Null),"enrichmentError":enrichment_error,"pipeline":pipeline::status(c,p)?}),
+        json!({"phase":phase,"enabled":enabled,"reason":reason,"runId":if id.is_empty(){Value::Null}else{json!(id)},"hasLocalAssets":local,"organization":organization,"includeIsolated":include_isolated,"readOnly":read_only,"readiness":{"hunter":{"keyConfigured":!hunter_key.trim().is_empty(),"contractVerified":HUNTER_CONTRACT_VERIFIED}},"agentHunter":crate::asset_discovery::agent_hunter::envelope_status(c,p)?,"review":review,"proposal":serde_json::from_str::<Value>(&proposal).unwrap_or(Value::Null),"enrichmentError":enrichment_error,"pipeline":pipeline::status(c,p)?}),
     )
 }
 #[derive(Deserialize)]

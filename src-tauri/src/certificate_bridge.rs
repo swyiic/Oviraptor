@@ -142,7 +142,11 @@ fn rejection_receipt(error: &str) -> Value {
         | "exposure_agent_run_unavailable" | "exposure_agent_action_invalid"
         | "exposure_agent_operation_invalid" | "exposure_agent_operation_conflict"
         | "reprobe_executor_unavailable"
-    ) || error.starts_with("reprobe_not_started");
+        | "hunter_executor_unavailable" | "hunter_seed_kind_invalid"
+        | "hunter_not_authorized" | "hunter_key_missing" | "hunter_account_changed"
+        | "hunter_budget_unset" | "hunter_budget_exhausted" | "hunter_points_invalid"
+        | "hunter_points_over_budget" | "hunter_project_busy"
+    ) || error.starts_with("reprobe_not_started") || error.starts_with("hunter_not_started");
     json!({"ok":false,"error":error,"phase":if not_started {"not_started"} else {"unknown"},"outcomeUnknown":!not_started})
 }
 /// Desktop scan state for a bridge without an application handle: actions that
