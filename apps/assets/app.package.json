@@ -2,7 +2,7 @@
   "manifest": {
     "schemaVersion": 1,
     "id": "org.oviraptor.assets",
-    "version": "1.2.17",
+    "version": "1.2.18",
     "hostApi": "^1.0.0",
     "entry": "worker.mjs",
     "dataSchemaVersion": 2,
@@ -812,6 +812,68 @@
           },
           "required": [
             "seedId"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "reprobe_assets",
+        "description": "对当前项目已有资产发起二次存活复测（后台任务），把最新存活状态回写入库，不新增目标、不扩大范围、不消耗积分。scope.kind=selection 时传 assetIds(来自 inventory_query/search 的行 id 或 source=desktop-assets 的 externalId，用 assetIdNamespace 指明是 inventory 还是 desktop)；scope.kind=query 时用 query.search 过滤当前项目资产，省略 query 表示全项目资产。expectedCount 必填，须等于当前匹配数量——先用 inventory_stats/query 读准数量再调用；数量已变会被拒绝，刷新后重试。同一项目同时只允许一个任务，有任务在跑会拒绝；调用成功返回 runId，随后读 scan/assets 状态或任务进度验收，不要循环轮询。",
+        "permission": "inventory.write",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "scope": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "query",
+                    "selection"
+                  ]
+                },
+                "assetIds": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "minItems": 1,
+                  "maxItems": 128
+                },
+                "assetIdNamespace": {
+                  "type": "string",
+                  "enum": [
+                    "inventory",
+                    "desktop"
+                  ]
+                },
+                "query": {
+                  "type": "object",
+                  "properties": {
+                    "search": {
+                      "type": "string",
+                      "maxLength": 240
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "expectedCount": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100000
+                }
+              },
+              "required": [
+                "kind",
+                "expectedCount"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "scope"
           ],
           "additionalProperties": false
         }
