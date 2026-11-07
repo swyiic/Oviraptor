@@ -3,7 +3,10 @@ import { providerDisplayName, resolveProviderForModel } from "./providerPresets"
 import type { DiscoveryView, DiscoveryWitness } from './discoveryTypes';
 
 export type AgentModelUsage = { requests: number; reportedRequests: number; unknownRequests: number; inputTokens: number | null; outputTokens: number | null; cachedInputTokens?: number | null; reasoningTokens?: number | null };
-export type AgentHostMessage = { id: string; role: "user" | "assistant"; content: string; status: string; runId?: string | null; createdAt: string; failureCode?: string; stopReason?: string; usage?: AgentModelUsage };
+/** Structured "what next" option on a reply whose task is truly done. `prompt`, when given, is what
+ *  clicking `continue_current` sends verbatim; with no `prompt` the UI falls back to a generic nudge. */
+export type AgentSuggestedNext = { id: "continue_current" | "end_topic"; prompt?: string };
+export type AgentHostMessage = { id: string; role: "user" | "assistant"; content: string; status: string; runId?: string | null; createdAt: string; failureCode?: string; stopReason?: string; usage?: AgentModelUsage; suggestedNext?: AgentSuggestedNext[] };
 export type AgentHostConversation = { id: string; projectId: number; title: string; metadataRevision?: number; createdAt: string; lastActivityAt?: string; updatedAt?: string; pinned?: boolean; titleManuallySet?: boolean };
 export type AgentProjectMemoryEntry = { entryId: string; note: string; kind: string; tags: string[]; sourceConversationId: string | null; createdAt: string; updatedAt: string };
 export type AgentConversationWorkspace = { projectId: number; conversationId: string; path: string; exists: boolean; shared: true; description: string };

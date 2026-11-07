@@ -16,6 +16,11 @@ import {
   producedDeliverable,
   looksLikeQuestionToUser,
   toolSetAnnouncement,
+  deliverableSelfCheckDecision,
+  latestDeliverableWritePath,
+  buildSuggestedNext,
+  emptyAgentState,
+  setGoal,
 } from '../src/agent-state.mjs';
 
 // ---------------------------------------------------------------------------
@@ -131,6 +136,64 @@ test('deliverable/analysis/question/announcement helpers', () => {
   assert.equal(excluded, null);
 });
 
+test('latestDeliverableWritePath: finds a report-like write, ignores a non-report write and record_finding', () => {
+  assert.equal(latestDeliverableWritePath([{ name: 'workspace_write', ok: true, arguments: { path: 'reports/findings.md' } }]), 'reports/findings.md');
+  assert.equal(latestDeliverableWritePath([{ name: 'workspace_write', ok: true, arguments: { path: 'src/x.mjs' } }]), '');
+  assert.equal(latestDeliverableWritePath([{ name: 'org.app::record_finding', ok: true, arguments: { title: 'x' } }]), '');
+  // Picks the LAST matching write, not the first.
+  const path = latestDeliverableWritePath([
+    { name: 'workspace_write', ok: true, arguments: { path: 'burp_out/decrypted_report.md' } },
+    { name: 'workspace_read', ok: true, arguments: { path: 'a.mjs' } },
+    { name: 'workspace_edit', ok: true, arguments: { path: 'burp_out/decrypted_report_v2.md' } },
+  ]);
+  assert.equal(path, 'burp_out/decrypted_report_v2.md');
+});
+
+test('deliverableSelfCheckDecision: a freshly written report forces exactly one self-check pass naming the path', () => {
+  const decision = deliverableSelfCheckDecision({
+    toolResultsThisPrompt: [{ name: 'workspace_write', ok: true, arguments: { path: 'burp_out/decrypted_report.md' } }],
+    assistantText: '报告已写好。',
+  });
+  assert.equal(decision.continue, true);
+  assert.equal(decision.reason, 'self_check_fresh_deliverable');
+  assert.equal(decision.path, 'burp_out/decrypted_report.md');
+  assert.ok(decision.hint.includes('burp_out/decrypted_report.md'));
+  assert.ok(decision.hint.includes('workspace_edit'));
+});
+
+test('deliverableSelfCheckDecision: a correction-sounding reply with an earlier deliverable path forces a check against THAT file', () => {
+  const decision = deliverableSelfCheckDecision({
+    toolResultsThisPrompt: [], // no write this turn — this is a later, separate turn
+    assistantText: '口径修正：queryKey 实际返回的是 128 字节二进制块，key/iv 是从前端逻辑反推出来的。',
+    lastDeliverablePath: 'burp_out/decrypted_report.md',
+  });
+  assert.equal(decision.continue, true);
+  assert.equal(decision.reason, 'self_check_correction_signal');
+  assert.equal(decision.path, 'burp_out/decrypted_report.md');
+});
+
+test('deliverableSelfCheckDecision: no deliverable and no correction signal → no check needed', () => {
+  assert.equal(deliverableSelfCheckDecision({ toolResultsThisPrompt: [], assistantText: '好的，我继续。' }).reason, 'no_check_needed');
+  // A correction-sounding reply with nothing to check it against is also a no-op.
+  assert.equal(deliverableSelfCheckDecision({ toolResultsThisPrompt: [], assistantText: '口径修正：其实是这样的。', lastDeliverablePath: '' }).reason, 'no_check_needed');
+});
+
+test('deliverableSelfCheckDecision: budget exhaustion, already-checked, non-quality mode and cancellation each decline', () => {
+  const fresh = { toolResultsThisPrompt: [{ name: 'workspace_write', ok: true, arguments: { path: 'r.md' } }], assistantText: 'x' };
+  assert.equal(deliverableSelfCheckDecision({ ...fresh, forcedContinuesUsed: FORCED_CONTINUE_BUDGET }).reason, 'budget_exhausted');
+  assert.equal(deliverableSelfCheckDecision({ ...fresh, selfCheckDone: true }).reason, 'already_checked');
+  assert.equal(deliverableSelfCheckDecision({ ...fresh, answerMode: 'fast' }).reason, 'not_quality_mode');
+  assert.equal(deliverableSelfCheckDecision({ ...fresh, cancelled: true }).reason, 'cancelled');
+});
+
+test('buildSuggestedNext: exactly two options, continue carries the next open intent as a concrete prompt', () => {
+  const plain = buildSuggestedNext(emptyAgentState());
+  assert.deepEqual(plain.map(item => item.id), ['continue_current', 'end_topic']);
+  assert.equal(plain[0].prompt, undefined);
+  const withIntent = buildSuggestedNext(setGoal(emptyAgentState(), '有多少资产'));
+  assert.ok(withIntent[0].prompt?.includes('需工具核实'));
+});
+
 // ---------------------------------------------------------------------------
 // Part 2 — real provider turn-loop integration (stubbed model + Host)
 // ---------------------------------------------------------------------------
@@ -200,7 +263,7 @@ test('loop (b): a turn that ends by asking the user a question is NOT force-cont
   } finally { await runtime.close(); }
 });
 
-test('loop (b2): producing a deliverable (record_finding) ends the turn without forcing', async () => {
+test('loop (b2): producing a deliverable (record_finding) ends the turn without forcing, and carries suggestedNext', async () => {
   const { runtime, bodies, executed } = harness({
     tools: ['workspace_read', 'record_finding'],
     script: steps => (steps.length === 1
@@ -210,9 +273,35 @@ test('loop (b2): producing a deliverable (record_finding) ends the turn without 
   const { sessionId } = await runtime.newSession({ mcpServers });
   try {
     const result = await runtime.prompt({ sessionId, prompt: AUDIT_GOAL, userText: AUDIT_GOAL });
+    // record_finding has no report file to self-check against, so this is unchanged.
     assert.equal(bodies.length, 2);
     assert.equal(executed[0].name, 'record_finding');
     assert.equal(result.metrics.forcedContinues, 0);
+    assert.ok(Array.isArray(result.suggestedNext) && result.suggestedNext.length === 2, 'a truly-finished deliverable turn carries suggestedNext');
+    assert.deepEqual(result.suggestedNext.map(item => item.id), ['continue_current', 'end_topic']);
+  } finally { await runtime.close(); }
+});
+
+test('loop (b3): writing a report file forces one self-check pass before the turn ends, then still carries suggestedNext', async () => {
+  const { runtime, bodies, executed } = harness({
+    tools: ['workspace_write', 'record_finding'],
+    script: steps => {
+      if (steps.length === 1) return chatToolCall('workspace_write', { path: 'reports/findings.md', content: 'queryKey returns the AES key/iv directly.' }, 1);
+      return chatText('报告已写好，分析完成。'); // self-check pass: no tool call, no correction — clean end next.
+    },
+  });
+  const { sessionId } = await runtime.newSession({ mcpServers });
+  try {
+    const result = await runtime.prompt({ sessionId, prompt: AUDIT_GOAL, userText: AUDIT_GOAL });
+    // write + 1 forced self-check pass + the final clean end = 3 model requests.
+    assert.equal(bodies.length, 3);
+    assert.equal(executed[0].name, 'workspace_write');
+    assert.equal(result.metrics.forcedContinues, 1);
+    assert.equal(result.metrics.forcedContinueReason, 'self_check_fresh_deliverable');
+    // The self-check hint must reference the written path so the model knows what to re-open.
+    const secondRequestText = JSON.stringify(bodies[1].messages);
+    assert.ok(secondRequestText.includes('reports/findings.md'));
+    assert.ok(Array.isArray(result.suggestedNext) && result.suggestedNext.length === 2);
   } finally { await runtime.close(); }
 });
 

@@ -1284,6 +1284,7 @@ export class AgentHost {
       const result = await this.runtime.prompt({ sessionId: run.sessionId, prompt, userText: text, taskContext: { id: taskContext.id, goal: taskContext.goal }, turnId: run.id, answerMode, ...(authorizationContext ? { authorizationContext } : {}) });
       if (result?.replaceText && typeof result.assistantText === 'string') run.text = result.assistantText;
       skills.validate(conversation.id, run.skillScope);
+      if (Array.isArray(result?.suggestedNext) && result.suggestedNext.length) run.suggestedNext = result.suggestedNext;
       run.metrics = result.metrics;
       run.stopReason = result.stopReason; run.outcomeUnknown = false;
       const stopped = ['max_turn_requests', 'paused_budget', 'tool_loop_stalled'].includes(result.stopReason)
@@ -1323,7 +1324,8 @@ export class AgentHost {
       this.#cancelAuthorizations(conversation.id, run.id);
       await this.subagents.cancelTree(run.id);
       const disposition = { outcomeUnknown: Boolean(run.outcomeUnknown), failureCode: run.failureCode ?? '', stopReason: run.stopReason ?? '', cancelRequested: Boolean(run.cancelled),
-        ...(run.authenticationRequired ? { authenticationRequired: true } : {}) };
+        ...(run.authenticationRequired ? { authenticationRequired: true } : {}),
+        ...(Array.isArray(run.suggestedNext) && run.suggestedNext.length ? { suggestedNext: run.suggestedNext } : {}) };
       // One scrub of the finished assistant text. An empty scrub is stored as empty, not the original.
       const assistantText = scrubbedModelText(run.text);
       this.store.finishMessage(run.message.id, assistantText, status, disposition);

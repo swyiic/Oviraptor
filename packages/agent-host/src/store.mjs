@@ -46,6 +46,10 @@ export function deriveConversationTitle(text, maxChars = 48) {
   return `${joined}…`;
 }
 const stamp = () => new Date().toISOString();
+function parseSuggestedNext(raw) {
+  if (!raw) return [];
+  try { const parsed = JSON.parse(raw); return Array.isArray(parsed) ? parsed : []; } catch { return []; }
+}
 
 /** Core storage contains no application business tables or implicit legacy DB. */
 export class HostStore {
@@ -99,7 +103,7 @@ export class HostStore {
     }
     const columns = table => new Set(this.db.prepare(`PRAGMA table_info(${table})`).all().map(row => row.name));
     const messageColumns = columns('messages');
-    for (const [name, declaration] of [['outcome_unknown', 'INTEGER NOT NULL DEFAULT 0'], ['failure_code', "TEXT NOT NULL DEFAULT ''"], ['stop_reason', "TEXT NOT NULL DEFAULT ''"], ['cancel_requested', 'INTEGER NOT NULL DEFAULT 0']]) {
+    for (const [name, declaration] of [['outcome_unknown', 'INTEGER NOT NULL DEFAULT 0'], ['failure_code', "TEXT NOT NULL DEFAULT ''"], ['stop_reason', "TEXT NOT NULL DEFAULT ''"], ['cancel_requested', 'INTEGER NOT NULL DEFAULT 0'], ['suggested_next', "TEXT NOT NULL DEFAULT ''"]]) {
       if (!messageColumns.has(name)) this.db.exec(`ALTER TABLE messages ADD COLUMN ${name} ${declaration}`);
     }
     this.db.exec("UPDATE messages SET status='interrupted',outcome_unknown=1,failure_code='host_interrupted_restart',stop_reason='' WHERE status='running' OR (status='interrupted' AND failure_code='')");
@@ -396,9 +400,9 @@ export class HostStore {
   session(id, sessionId) { this.conversation(id); this.db.prepare('UPDATE conversations SET session_id=? WHERE id=?').run(sessionId, id); }
   messages(id, projectId) {
     this.conversation(id, projectId);
-    return this.db.prepare('SELECT m.id,m.role,m.content,m.status,m.run_id AS runId,m.created_at AS createdAt,m.outcome_unknown AS outcomeUnknown,m.failure_code AS failureCode,m.stop_reason AS stopReason,m.cancel_requested AS cancelRequested,rm.metrics AS runtimeMetrics FROM messages m LEFT JOIN runtime_metrics rm ON rm.run_id=m.run_id WHERE m.conversation_id=? ORDER BY m.rowid').all(id).map(({ runtimeMetrics, ...row }) => {
+    return this.db.prepare('SELECT m.id,m.role,m.content,m.status,m.run_id AS runId,m.created_at AS createdAt,m.outcome_unknown AS outcomeUnknown,m.failure_code AS failureCode,m.stop_reason AS stopReason,m.cancel_requested AS cancelRequested,m.suggested_next AS suggestedNext,rm.metrics AS runtimeMetrics FROM messages m LEFT JOIN runtime_metrics rm ON rm.run_id=m.run_id WHERE m.conversation_id=? ORDER BY m.rowid').all(id).map(({ runtimeMetrics, ...row }) => {
       let usage; try { usage = JSON.parse(runtimeMetrics ?? '{}').usage; } catch { /* older metrics */ }
-      return { ...row, outcomeUnknown: Boolean(row.outcomeUnknown), cancelRequested: Boolean(row.cancelRequested), ...(usage?.requests > 0 ? { usage } : {}) };
+      return { ...row, outcomeUnknown: Boolean(row.outcomeUnknown), cancelRequested: Boolean(row.cancelRequested), suggestedNext: parseSuggestedNext(row.suggestedNext), ...(usage?.requests > 0 ? { usage } : {}) };
     });
   }
   messagesPage(id, projectId, { limit = 50, before } = {}) {
@@ -409,8 +413,8 @@ export class HostStore {
       const row = this.db.prepare('SELECT rowid FROM messages WHERE id=? AND conversation_id=?').get(String(before), id);
       if (!row) throw hostError('host_message_cursor_invalid'); rowid = row.rowid;
     }
-    const rows = this.db.prepare(`SELECT id,role,content,status,run_id AS runId,created_at AS createdAt,outcome_unknown AS outcomeUnknown,failure_code AS failureCode,stop_reason AS stopReason,cancel_requested AS cancelRequested FROM messages WHERE conversation_id=? AND rowid<? ORDER BY rowid DESC LIMIT ?`).all(id, rowid, Number(limit)+1);
-    const hasMore = rows.length > Number(limit), items = rows.slice(0,Number(limit)).reverse().map(row => ({...row,outcomeUnknown:Boolean(row.outcomeUnknown),cancelRequested:Boolean(row.cancelRequested)}));
+    const rows = this.db.prepare(`SELECT id,role,content,status,run_id AS runId,created_at AS createdAt,outcome_unknown AS outcomeUnknown,failure_code AS failureCode,stop_reason AS stopReason,cancel_requested AS cancelRequested,suggested_next AS suggestedNext FROM messages WHERE conversation_id=? AND rowid<? ORDER BY rowid DESC LIMIT ?`).all(id, rowid, Number(limit)+1);
+    const hasMore = rows.length > Number(limit), items = rows.slice(0,Number(limit)).reverse().map(row => ({...row,outcomeUnknown:Boolean(row.outcomeUnknown),cancelRequested:Boolean(row.cancelRequested),suggestedNext:parseSuggestedNext(row.suggestedNext)}));
     for (const item of items) if(item.role==='assistant'&&item.runId){const raw=this.db.prepare('SELECT metrics FROM runtime_metrics WHERE run_id=?').get(item.runId);try{const usage=JSON.parse(raw?.metrics??'{}').usage;if(usage?.requests>0)item.usage=usage;}catch{}}
     return { items, hasMore, nextCursor: hasMore ? items[0].id : null };
   }
@@ -447,7 +451,7 @@ export class HostStore {
   pendingSteers(conversationId) {
     return this.db.prepare("SELECT id,content FROM messages WHERE conversation_id=? AND role='user' AND stop_reason='steer_interrupted' ORDER BY rowid").all(String(conversationId));
   }
-  finishMessage(id, content, status, details = {}) { this.db.prepare('UPDATE messages SET content=?,status=?,outcome_unknown=?,failure_code=?,stop_reason=?,cancel_requested=? WHERE id=?').run(content, status, Number(Boolean(details.outcomeUnknown)), details.failureCode ?? '', details.stopReason ?? '', Number(Boolean(details.cancelRequested)), id); }
+  finishMessage(id, content, status, details = {}) { this.db.prepare('UPDATE messages SET content=?,status=?,outcome_unknown=?,failure_code=?,stop_reason=?,cancel_requested=?,suggested_next=? WHERE id=?').run(content, status, Number(Boolean(details.outcomeUnknown)), details.failureCode ?? '', details.stopReason ?? '', Number(Boolean(details.cancelRequested)), Array.isArray(details.suggestedNext) && details.suggestedNext.length ? JSON.stringify(details.suggestedNext) : '', id); }
   metrics(runId, conversationId, metrics) { this.db.prepare('INSERT OR REPLACE INTO runtime_metrics VALUES(?,?,?,?)').run(runId, conversationId, JSON.stringify(metrics), stamp()); }
   beginProviderRequest({ requestId, conversationId, runId, api, model }) {
     const conversation = this.conversation(conversationId);

@@ -55,6 +55,11 @@ import {
   finishTurnDecision,
   FORCED_CONTINUE_BUDGET,
   toolSetAnnouncement,
+  deliverableSelfCheckDecision,
+  latestDeliverableWritePath,
+  producedDeliverable,
+  looksLikeQuestionToUser,
+  buildSuggestedNext,
 } from './agent-state.mjs';
 import { admitContext, resolveModelCapability } from './workflow-guard.mjs';
 import { compressSessionMessages } from './memory.mjs';
@@ -1601,6 +1606,7 @@ export class OpenAiCompatibleRuntime {
     let forcedEmptyBlock = false;
     let lengthContinued = false;
     let forcedVerifier = false;
+    let forcedSelfCheck = false;
     let injectedReview = false;
     let countAnswerHint = false;
     let certificateStatusHint = false;
@@ -2013,6 +2019,38 @@ export class OpenAiCompatibleRuntime {
               harness: session.harness,
             };
           }
+          // Deliverable self-check: a deliverable already exists (just written
+          // this turn, or an earlier turn's path plus a correction-sounding
+          // reply now) → one bounded pass to have the model re-open it and fix
+          // it itself (workspace_edit) before the turn is allowed to end clean.
+          // Shares forcedContinues' budget; never a second unbounded loop.
+          if (!session.abort.signal.aborted && !forcedSelfCheck) {
+            const selfCheck = deliverableSelfCheckDecision({
+              answerMode: options.answerMode,
+              toolResultsThisPrompt,
+              assistantText: turn.text || '',
+              lastDeliverablePath: session.lastDeliverablePath || '',
+              forcedContinuesUsed: forcedContinues,
+              budget: FORCED_CONTINUE_BUDGET,
+              cancelled: session.abort.signal.aborted,
+            });
+            if (selfCheck.continue) {
+              forcedSelfCheck = true;
+              forcedContinues += 1;
+              forcedContinueReason = selfCheck.reason;
+              session.lastDeliverablePath = selfCheck.path;
+              stepLimit = Math.max(stepLimit, step + 2);
+              emitInner('hold', '交付物已产出，收尾前先自检一致性');
+              emit({ type: 'tool_call', toolCallId: `selfcheck-${step}`, title: '交付物自检', status: 'in_progress' });
+              emit({ type: 'tool_update', toolCallId: `selfcheck-${step}`, title: '交付物自检', status: 'completed', summary: selfCheck.reason });
+              session.messages.push({ role: 'user', content: selfCheck.hint });
+              continue;
+            }
+          }
+          {
+            const freshPath = latestDeliverableWritePath(toolResultsThisPrompt);
+            if (freshPath) session.lastDeliverablePath = freshPath;
+          }
           // Task 1: finishTurn completion policy. On a clean end-of-turn, force
           // one more model request (bounded by FORCED_CONTINUE_BUDGET) when an
           // in-scope autonomous analysis task did real work but produced no
@@ -2044,6 +2082,14 @@ export class OpenAiCompatibleRuntime {
             }
           }
           emitInner('done');
+          // Structured "what next": only once the task is truly done — a
+          // deliverable exists, nothing was left for the user to decide (no
+          // scope/authorization gap, no question asked this turn). Exactly
+          // two options; never a third new concept for the operator to learn.
+          const taskTrulyDone = !session.abort.signal.aborted
+            && producedDeliverable(toolResultsThisPrompt)
+            && unavailableThisTurn.size === 0 && authorizationAttempted.size === 0
+            && !looksLikeQuestionToUser(turn.text || '');
           return {
             stopReason: turn.finishReason === 'length' ? 'max_tokens' : turn.finishReason === 'content_filter' ? 'refusal' : 'end_turn',
             // Tool-wave progress was streamed, but the completed message is
@@ -2051,6 +2097,7 @@ export class OpenAiCompatibleRuntime {
             ...((cleanupTurn&&unresolvedCleanupControlNote(toolResultsThisPrompt))||(exposureTurn&&unresolvedExposureControlNote(toolResultsThisPrompt))
               ? {replaceText:true,assistantText:cleanupTurn?unresolvedCleanupControlNote(toolResultsThisPrompt):unresolvedExposureControlNote(toolResultsThisPrompt)}
               : turn.text?.trim() ? { replaceText: true, assistantText: turn.text } : {}),
+            ...(taskTrulyDone ? { suggestedNext: buildSuggestedNext(session.harness) } : {}),
             metrics: {
               toolSelection, firstTextMs, firstToolMs, totalMs: performance.now() - started,
               forcedToolHint, forcedEmptyBlock, forcedVerifier,

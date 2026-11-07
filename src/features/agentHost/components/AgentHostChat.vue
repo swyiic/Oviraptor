@@ -8,7 +8,7 @@ import { directoryConnections, type ModelDirectoryConnection } from "../../confi
 import { useI18n } from "../../../i18n";
 import type { AgentAccessPolicy, AgentHostSettings, AgentTask } from "../types";
 import { describeAgentHostError } from "../errors";
-import { agentRuntimeHeader, type AgentHostChatClient, type AgentHostConversation, type AgentHostMessage, type AgentModelUsage, type ModelConnectionTest } from "../chatClient";
+import { agentRuntimeHeader, type AgentHostChatClient, type AgentHostConversation, type AgentHostMessage, type AgentModelUsage, type AgentSuggestedNext, type ModelConnectionTest } from "../chatClient";
 import ConversationMessage from "../../conversations/ConversationMessage.vue";
 import { messageTimestamp } from "../../conversations/messageTime";
 import AgentPermissionMode from "./AgentPermissionMode.vue";
@@ -599,6 +599,13 @@ async function confirmIntent() {
     pendingApproval.value = null;
   } catch (e) { error.value = String((e as Error).message || e); }
 }
+/** The two "what next" options on a reply whose task is truly done — never a third concept. */
+async function chooseSuggestedNext(option: AgentSuggestedNext) {
+  if (option.id === "end_topic") { await newConversation(); return; }
+  if (running.value || continuingTask.value || hostProjectId.value === undefined) return;
+  draft.value = option.prompt || tr("继续当前任务的下一步", "Continue with the next step");
+  await send();
+}
 async function send() {
   const text = draft.value.trim();
   if (!text || loadingProject.value || continuingTask.value || hostProjectId.value === undefined) return;
@@ -840,6 +847,11 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
           <button type="button" @click="chooseIntent('prepare_authorized_scan', message)">{{ tr('准备授权扫描', 'Prepare an authorized scan') }}</button>
           <button v-if="pendingApproval" type="button" data-testid="agent-host-confirm-intent" @click="confirmIntent">{{ tr('确认这个选择', 'Confirm this choice') }}</button>
         </div>
+        <div v-if="message.role === 'assistant' && message.status === 'completed' && message.suggestedNext?.length && message.id === messages[messages.length - 1]?.id" class="ahc-suggested-next" data-testid="agent-host-suggested-next">
+          <button v-for="option in message.suggestedNext" :key="option.id" type="button" :disabled="running || continuingTask" @click="chooseSuggestedNext(option)">
+            {{ option.id === 'end_topic' ? tr('结束，等新的话题', 'End here, wait for a new topic') : tr('继续当前任务的下一步', 'Continue with the next step') }}
+          </button>
+        </div>
         <div v-if="message.status === 'failed'" class="agent-host-chat-failure" role="note">
           <strong>{{ tr(...failure(message.failureCode).title) }}</strong>
           <span>{{ tr(...failure(message.failureCode).hint) }}</span>
@@ -986,6 +998,9 @@ watch(()=>props.historySearchRequest,value=>{if(value)finderOpen.value=true;},{i
 .ahc-refusal { margin: 6px 0 0; color: var(--app-muted, #72746f); font-size: 12px; line-height: 1.5; }
 .ahc-intent { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .ahc-intent button { border: 1px solid var(--line, #e5e6e1); border-radius: 999px; background: transparent; color: var(--app-ink, #252624); font: inherit; font-size: 12px; padding: 4px 10px; cursor: pointer; }
+.ahc-suggested-next { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.ahc-suggested-next button { border: 1px solid var(--line, #e5e6e1); border-radius: 999px; background: transparent; color: var(--app-ink, #252624); font: inherit; font-size: 12px; padding: 4px 10px; cursor: pointer; }
+.ahc-suggested-next button:disabled { opacity: 0.5; cursor: default; }
 .agent-host-chat-alert { margin: 0 16px; padding: 8px 12px; border-radius: 8px; font-size: 12px; background: color-mix(in srgb, #d14343 9%, transparent); }
 .ahc-select-wrap { position: relative; display: inline-flex; align-items: center; }
 .ahc-select { appearance: none; -webkit-appearance: none; height: 30px; max-width: 180px; padding: 0 26px 0 10px; font: inherit; font-size: 12px; color: inherit; border: 1px solid color-mix(in srgb, var(--app-ink, #172033) 14%, transparent); border-radius: 8px; background: var(--app-surface, #fff); box-shadow: none !important; cursor: pointer; text-overflow: ellipsis; }
