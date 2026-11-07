@@ -1239,6 +1239,11 @@ export class AgentHost {
         if (cited.note) text += `\n${cited.note}`;
         for (const hop of fileHops([...(cited.imported || []), ...(cited.external || [])])) this.#recordHop(conversation.id, hop);
         for (const file of cited.external || []) run.materialRoots.push(dirname(file.source));
+        // Persist this turn's external-file roots and reload every root the user has
+        // ever cited in this conversation, so a later "继续" turn (no re-pasted path)
+        // can still read the big file via workspace_run. Returns roots NOT re-cited now.
+        const carriedRoots = this.#persistAndLoadCitedRoots(conversation.id, run);
+        if (carriedRoots.length) text += `\nHost: 本对话此前已放行、现在仍可读的文件/目录：${carriedRoots.join('、')}。继续解密/分析时，大文件直接写脚本用 workspace_run 从这些目录读取原文件并解析，不要说“沙箱打不开原路径”或“读不到”——读取根已经在位。`;
         const pages = await importCitedPages(text, workspace, { fetchImpl: this.providerFetch });
         if (pages.note) text += `\n${pages.note}`;
         run.citedHosts = citedHosts(text);
@@ -1434,6 +1439,26 @@ export class AgentHost {
       for (const kind of kinds) save.run(conversationId, identity, kind);
     } catch { /* best effort — the in-memory grant below still lets this run proceed */ }
     if (run) { if (!run.workspaceAllow) run.workspaceAllow = new Set(); for (const kind of kinds) run.workspaceAllow.add(kind); }
+  }
+  /**
+   * Persist this run's cited external-file roots (already pushed onto run.materialRoots)
+   * and merge back EVERY root the user has cited in this conversation, so a follow-up
+   * "继续" turn — which does not re-paste the path — still has the read-root and can read
+   * the file via workspace_run. Returns the roots that were carried over (not re-cited now),
+   * for a Host note. Best-effort: a DB hiccup never blocks the run.
+   */
+  #persistAndLoadCitedRoots(conversationId, run) {
+    try {
+      const now = new Date().toISOString();
+      const save = this.store.db.prepare('INSERT OR IGNORE INTO conversation_cited_roots(conversation_id,root,created_at) VALUES(?,?,?)');
+      for (const root of run.materialRoots) if (root && root !== run.materialRoot) save.run(conversationId, root, now);
+      const have = new Set(run.materialRoots);
+      const carried = [];
+      for (const { root } of this.store.db.prepare('SELECT root FROM conversation_cited_roots WHERE conversation_id=? ORDER BY created_at').all(conversationId)) {
+        if (root && !have.has(root)) { run.materialRoots.push(root); have.add(root); carried.push(root); }
+      }
+      return carried;
+    } catch { return []; }
   }
   async #authorizeWorkspace(conversation, run, toolName) {
     const kind = workspacePermission(toolName);
